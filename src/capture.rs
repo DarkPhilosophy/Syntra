@@ -287,8 +287,11 @@ impl CaptureTask {
     async fn sync_captures(&mut self, capture: &mut InputCapture) -> Result<(), CaptureError> {
         let captures = self.captures.clone();
         for (handle, pos, capture_type) in captures {
-            let should_exist =
-                capture_type == CaptureType::EnterOnly || self.conn.remote_ready(handle);
+            // Keep configured barriers stable for the lifetime of the portal
+            // session. GNOME requires a new approval whenever barriers are
+            // removed and recreated. Readiness is enforced on Begin below:
+            // an unavailable destination is released locally without sending.
+            let should_exist = true;
             log::debug!(
                 "peer gate handle={handle} type={capture_type:?} ready={} barrier={} active={}",
                 self.conn.remote_ready(handle),
@@ -301,12 +304,18 @@ impl CaptureTask {
                     return Err(error);
                 }
                 log::info!("peer gate opened handle={handle}; capture barrier created");
-            } else if !should_exist && self.enabled_captures.remove(&handle) {
-                capture.destroy(handle).await?;
-                log::info!("peer gate closed handle={handle}; capture barrier destroyed");
+            } else if !should_exist && self.enabled_captures.contains(&handle) {
+                // Release while the active barrier still exists. Destroying it
+                // first can leave the compositor capture session without a
+                // valid activation to release, trapping the pointer in limbo.
                 if self.active_client == Some(handle) {
                     self.release_capture(capture).await?;
                 }
+                self.enabled_captures.remove(&handle);
+                capture.destroy(handle).await?;
+                log::info!(
+                    "peer gate closed handle={handle}; capture released and barrier destroyed"
+                );
             }
         }
         Ok(())
@@ -361,7 +370,11 @@ impl CaptureTask {
                     }
                     CaptureRequest::Destroy(h) => {
                         self.remove_capture(h);
-                        if self.enabled_captures.remove(&h) {
+                        if self.enabled_captures.contains(&h) {
+                            if self.active_client == Some(h) {
+                                self.release_capture(capture).await?;
+                            }
+                            self.enabled_captures.remove(&h);
                             capture.destroy(h).await?;
                         }
                     }
@@ -492,7 +505,7 @@ impl CaptureTask {
         if let Err(e) = self.conn.send(event, handle).await {
             const DUR: Duration = Duration::from_millis(500);
             debounce!(PREV_LOG, DUR, log::warn!("releasing capture: {e}"));
-            capture.release().await?;
+            self.release_capture(capture).await?;
         }
         Ok(())
     }

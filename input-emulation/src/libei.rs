@@ -100,10 +100,28 @@ async fn get_ei_fd() -> Result<(RemoteDesktop, Session<RemoteDesktop>, OwnedFd),
     remote_desktop.select_devices(&session, options).await?;
 
     log::info!("requesting permission for input emulation");
-    let start_response = remote_desktop
+    let start_response = match remote_desktop
         .start(&session, None, Default::default())
-        .await?
-        .response()?;
+        .await
+    {
+        Ok(request) => request.response(),
+        Err(error) => Err(error),
+    };
+    let start_response = match start_response {
+        Ok(response) => response,
+        Err(error) => {
+            if restore_token.is_some() {
+                if let Err(remove_error) = fs::remove_file(get_token_file_path()) {
+                    if remove_error.kind() != io::ErrorKind::NotFound {
+                        log::warn!(
+                            "failed to discard unusable RemoteDesktop token: {remove_error}"
+                        );
+                    }
+                }
+            }
+            return Err(error);
+        }
+    };
 
     // The restore token is only valid once, we need to re-save it each time
     if let Some(token_str) = start_response.restore_token() {
@@ -161,6 +179,10 @@ impl Drop for LibeiEmulation {
 
 #[async_trait]
 impl Emulation for LibeiEmulation {
+    fn healthy(&self) -> bool {
+        !self.libei_error.load(Ordering::SeqCst)
+    }
+
     async fn consume(
         &mut self,
         event: Event,

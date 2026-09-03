@@ -136,6 +136,11 @@ impl InputEmulation {
         Err(EmulationCreationError::NoAvailableBackend)
     }
 
+    /// Whether the backend transport is still able to consume input.
+    pub fn healthy(&self) -> bool {
+        self.emulation.healthy()
+    }
+
     pub async fn consume(
         &mut self,
         event: Event,
@@ -229,6 +234,10 @@ impl InputEmulation {
 
 #[async_trait]
 trait Emulation: Send {
+    fn healthy(&self) -> bool {
+        true
+    }
+
     async fn consume(
         &mut self,
         event: Event,

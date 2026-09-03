@@ -334,6 +334,12 @@ async fn receive_loop(
             Err(e) => log::debug!("ignoring undecodable event from {addr}: {e}"),
         }
     }
+    // Wake the capture state machine immediately when the transport dies.
+    // Otherwise its last `remote_ready=true` could survive until another
+    // unrelated event and leave a stale barrier active.
+    client_manager.set_remote_ready(handle, false);
+    tx.send((handle, ProtoEvent::Pong(false)))
+        .expect("channel closed");
     log::warn!("recv error");
     disconnect(&client_manager, handle, addr, &conns).await;
 }

@@ -509,6 +509,9 @@ impl EmulationTask {
         &mut self,
         emulation: &mut InputEmulation,
     ) -> Result<(), InputEmulationError> {
+        let mut health_check = tokio::time::interval(Duration::from_millis(100));
+        health_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
         loop {
             tokio::select! {
                 e = self.request_rx.recv() => match e.expect("channel closed") {
@@ -532,6 +535,12 @@ impl EmulationTask {
                     }
                     ProxyRequest::Terminate => break Ok(()),
                     ProxyRequest::Reenable => continue,
+                },
+                _ = health_check.tick() => {
+                    if !emulation.healthy() {
+                        log::warn!("input emulation backend transport was lost");
+                        break Err(input_emulation::EmulationError::EndOfStream.into());
+                    }
                 },
             }
         }

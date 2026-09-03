@@ -24,7 +24,10 @@ use std::{
     path::PathBuf,
     pin::Pin,
     rc::Rc,
-    sync::{Arc, LazyLock},
+    sync::{
+        Arc, LazyLock,
+        atomic::{AtomicBool, Ordering},
+    },
     task::{Context, Poll},
 };
 use tokio::{
@@ -84,6 +87,8 @@ pub struct LibeiInputCapture {
     event_rx: Receiver<(Position, CaptureEvent)>,
     notify_capture: Sender<LibeiNotifyEvent>,
     notify_release: Arc<Notify>,
+    capturing: Arc<AtomicBool>,
+    release_complete: Arc<Notify>,
     cancellation_token: CancellationToken,
     terminated: bool,
 }
@@ -284,6 +289,8 @@ impl LibeiInputCapture {
         let (event_tx, event_rx) = mpsc::channel(1);
         let (notify_capture, notify_rx) = mpsc::channel(1);
         let notify_release = Arc::new(Notify::new());
+        let capturing = Arc::new(AtomicBool::new(false));
+        let release_complete = Arc::new(Notify::new());
 
         let cancellation_token = CancellationToken::new();
 
@@ -291,6 +298,8 @@ impl LibeiInputCapture {
             input_capture_ptr,
             notify_rx,
             notify_release.clone(),
+            capturing.clone(),
+            release_complete.clone(),
             first_session,
             event_tx,
             cancellation_token.clone(),
@@ -303,6 +312,8 @@ impl LibeiInputCapture {
             capture_task,
             notify_capture,
             notify_release,
+            capturing,
+            release_complete,
             cancellation_token,
             terminated: false,
         };
@@ -315,6 +326,8 @@ async fn do_capture(
     input_capture: *const InputCapture,
     mut capture_event: Receiver<LibeiNotifyEvent>,
     notify_release: Arc<Notify>,
+    capturing: Arc<AtomicBool>,
+    release_complete: Arc<Notify>,
     session: Option<(Session<InputCapture>, BitFlags<Capabilities>)>,
     event_tx: Sender<(Position, CaptureEvent)>,
     cancellation_token: CancellationToken,
@@ -373,6 +386,8 @@ async fn do_capture(
                 &active_clients,
                 &mut next_barrier_id,
                 &notify_release,
+                &capturing,
+                &release_complete,
                 (cancel_session.clone(), cancel_update.clone()),
             );
 
@@ -416,6 +431,8 @@ async fn do_capture_session(
     active_clients: &[Position],
     next_barrier_id: &mut NonZeroU32,
     notify_release: &Notify,
+    capturing: &AtomicBool,
+    release_complete: &Notify,
     cancel: (CancellationToken, CancellationToken),
 ) -> Result<(), CaptureError> {
     let (cancel_session, cancel_update) = cancel;
@@ -487,6 +504,7 @@ async fn do_capture_session(
                         },
                     };
                     current_pos.replace(Some(pos));
+                    capturing.store(true, Ordering::SeqCst);
 
                     // client entered => send event
                     event_tx.send((pos, CaptureEvent::Begin)).await.expect("no channel");
@@ -505,7 +523,11 @@ async fn do_capture_session(
                         },
                     }
 
-                    release_capture(input_capture, session, activated, pos).await?;
+                    let release_result =
+                        release_capture(input_capture, session, activated, pos).await;
+                    capturing.store(false, Ordering::SeqCst);
+                    release_complete.notify_one();
+                    release_result?;
 
                 }
                 _ = notify_release.notified() => { /* capture release -> we are not capturing anyway, so ignore */
@@ -536,6 +558,10 @@ async fn do_capture_session(
     let (a, b) = tokio::join!(ei_task, capture_session_task);
 
     cancel_update.cancel();
+    // Unblock a concurrent release even if the portal/EIS session died
+    // before it could process the explicit release request.
+    capturing.store(false, Ordering::SeqCst);
+    release_complete.notify_one();
 
     log::debug!("both session and ei task finished!");
     a?;
@@ -671,7 +697,19 @@ impl LanMouseInputCapture for LibeiInputCapture {
     }
 
     async fn release(&mut self) -> Result<(), CaptureError> {
+        let completed = self.release_complete.notified();
+        if !self.capturing.load(Ordering::SeqCst) {
+            return Ok(());
+        }
         self.notify_release.notify_waiters();
+        if tokio::time::timeout(std::time::Duration::from_secs(1), completed)
+            .await
+            .is_err()
+        {
+            log::error!("input capture release timed out; terminating portal session");
+            self.capturing.store(false, Ordering::SeqCst);
+            self.cancellation_token.cancel();
+        }
         Ok(())
     }
 
