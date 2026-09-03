@@ -473,6 +473,13 @@ impl Config {
             .or(self.config_toml.as_ref().and_then(|c| c.port))
             .unwrap_or(DEFAULT_PORT)
     }
+    /// persist the listen port selected by a frontend
+    pub fn set_port(&mut self, port: u16) {
+        if self.config_toml.is_none() {
+            self.config_toml = Some(Default::default());
+        }
+        self.config_toml.as_mut().expect("config").port = Some(port);
+    }
 
     /// list of configured clients
     pub fn clients(&self) -> Vec<ConfigClient> {

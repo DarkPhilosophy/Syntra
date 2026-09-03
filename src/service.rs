@@ -1,6 +1,7 @@
 use crate::{
     capture::{Capture, CaptureType, ICaptureEvent},
     client::ClientManager,
+    clipboard::{Clipboard, ClipboardContent},
     config::{Config, ConfigClient},
     connect::LanMouseConnection,
     crypto,
@@ -66,6 +67,8 @@ pub struct Service {
     incoming_conns: HashSet<SocketAddr>,
     /// map from capture handle to connection info
     incoming_conn_info: HashMap<ClientHandle, Incoming>,
+    clipboard: Clipboard,
+    next_clipboard_transfer: u64,
     next_trigger_handle: u64,
 }
 
@@ -101,6 +104,7 @@ impl Service {
         let capture = Capture::new(capture_backend, conn, config.release_bind());
         let emulation_backend = config.emulation_backend().map(|b| b.into());
         let emulation = Emulation::new(emulation_backend, listener);
+        let clipboard = Clipboard::new();
 
         // create dns resolver
         let resolver = DnsResolver::new()?;
@@ -122,6 +126,8 @@ impl Service {
             emulation_status: Default::default(),
             incoming_conn_info: Default::default(),
             incoming_conns: Default::default(),
+            clipboard,
+            next_clipboard_transfer: 0,
             next_trigger_handle: 0,
         };
         Ok(service)
@@ -146,6 +152,34 @@ impl Service {
                 _ = self.frontend_event_pending.notified() => self.handle_frontend_pending().await,
                 event = self.emulation.event() => self.handle_emulation_event(event),
                 event = self.capture.event() => self.handle_capture_event(event),
+                result = self.clipboard.next_read() => {
+                    match result {
+                        Ok(ClipboardContent::Text(text)) => {
+                            for handle in self.client_manager.active_clients() {
+                                self.next_clipboard_transfer = self.next_clipboard_transfer.wrapping_add(1);
+                                self.capture.send_clipboard(
+                                    handle,
+                                    self.next_clipboard_transfer,
+                                    text.as_bytes().to_vec(),
+                                    None,
+                                );
+                            }
+                        }
+                        Ok(ClipboardContent::Image { width, height, rgba }) => {
+                            for handle in self.client_manager.active_clients() {
+                                self.next_clipboard_transfer = self.next_clipboard_transfer.wrapping_add(1);
+                                self.capture.send_clipboard(
+                                    handle,
+                                    self.next_clipboard_transfer,
+                                    rgba.clone(),
+                                    Some((width, height)),
+                                );
+                            }
+                        }
+                        Err(arboard::Error::ContentNotAvailable) => {}
+                        Err(e) => log::warn!("failed to read clipboard: {e}"),
+                    }
+                },
                 event = self.resolver.event() => self.handle_resolver_event(event),
                 _ = self.config.changed() => self.handle_config_change(),
                 r = signal::ctrl_c() => break r.expect("failed to wait for CTRL+C"),
@@ -299,6 +333,8 @@ impl Service {
             EmulationEvent::PortChanged(port) => match port {
                 Ok(port) => {
                     self.port = port;
+                    self.config.set_port(port);
+                    self.save_config();
                     self.notify_frontend(FrontendEvent::PortChanged(port, None));
                 }
                 Err(e) => self
@@ -327,6 +363,7 @@ impl Service {
                     self.broadcast_client(handle);
                 }
             }
+            EmulationEvent::Clipboard(content) => self.clipboard.write(content),
         }
     }
 
@@ -342,14 +379,17 @@ impl Service {
             ICaptureEvent::CaptureDisabled => {
                 self.capture_status = Status::Disabled;
                 self.notify_frontend(FrontendEvent::CaptureStatus(self.capture_status));
+                self.emulation.set_capture_ready(false);
             }
             ICaptureEvent::CaptureEnabled => {
                 self.capture_status = Status::Enabled;
                 self.notify_frontend(FrontendEvent::CaptureStatus(self.capture_status));
+                self.emulation.set_capture_ready(true);
             }
             ICaptureEvent::ClientEntered(handle) => {
                 log::info!("entering client {handle} ...");
                 self.spawn_hook_command(handle);
+                self.clipboard.read_once();
             }
         }
     }

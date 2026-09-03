@@ -3,10 +3,16 @@
   <requires lib="gtk" version="4.0"/>
   <requires lib="libadwaita" version="1.0"/>
   <menu id="main-menu">
-    <item>
-      <attribute name="label" translatable="yes">_Close window</attribute>
-      <attribute name="action">window.close</attribute>
-    </item>
+    <section>
+      <item>
+        <attribute name="label" translatable="yes">_Close window and keep running</attribute>
+        <attribute name="action">window.close</attribute>
+      </item>
+      <item>
+        <attribute name="label" translatable="yes">_Quit</attribute>
+        <attribute name="action">app.quit</attribute>
+      </item>
+    </section>
   </menu>
   <template class="LanMouseWindow" parent="AdwApplicationWindow">
     <property name="width-request">600</property>

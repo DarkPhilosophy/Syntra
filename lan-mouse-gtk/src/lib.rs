@@ -4,6 +4,8 @@ mod client_row;
 mod fingerprint_window;
 mod key_object;
 mod key_row;
+#[cfg(target_os = "linux")]
+mod linux_tray;
 #[cfg(target_os = "macos")]
 mod macos_privacy;
 #[cfg(target_os = "macos")]
@@ -90,8 +92,16 @@ fn gtk_main() -> glib::ExitCode {
         load_icons();
         setup_actions(app);
         setup_menu(app);
+        #[cfg(target_os = "linux")]
+        linux_tray::setup(app);
     });
-    app.connect_activate(build_ui);
+    app.connect_activate(|app| {
+        if let Some(window) = app.active_window() {
+            window.present();
+        } else {
+            build_ui(app);
+        }
+    });
 
     let args: Vec<&'static str> = vec![];
     app.run_with_args(&args)
@@ -222,8 +232,24 @@ fn build_ui(app: &Application) {
             }
         }
     });
-
     let window = Window::new(app, frontend_tx);
+
+    #[cfg(target_os = "linux")]
+    let app_hold = app.hold();
+
+    #[cfg(target_os = "linux")]
+    {
+        let app_weak = app.downgrade();
+        window.connect_close_request(move |window| {
+            let _app_hold = &app_hold;
+            if let Some(app) = app_weak.upgrade() {
+                hide_in_background(&app, window);
+                glib::Propagation::Stop
+            } else {
+                glib::Propagation::Proceed
+            }
+        });
+    }
     #[cfg(target_os = "macos")]
     {
         window.connect_close_request(|window| {
@@ -310,15 +336,21 @@ fn build_ui(app: &Application) {
     #[cfg(not(target_os = "macos"))]
     window.present();
 
-    // On macOS, default to presenting the main window on every launch
-    // so the user gets a visible confirmation that the app is running
-    // — including the post-grant relaunch and normal Dock/Finder/`open`
-    // launches. Opt out by setting `LAN_MOUSE_HIDDEN=1` in the
-    // environment (useful for a LaunchAgent / login-item configuration
-    // where the user wants the app to come up quietly into the menu
-    // bar only, with no window on boot).
     #[cfg(target_os = "macos")]
     if env::var_os("LAN_MOUSE_HIDDEN").is_none() {
         window.present();
     }
+}
+
+#[cfg(target_os = "linux")]
+fn hide_in_background(app: &Application, window: &Window) {
+    if !window.is_visible() {
+        return;
+    }
+    window.set_visible(false);
+    let notification = gio::Notification::new("Lan Mouse is running in the background");
+    notification.set_body(Some(
+        "Open Lan Mouse again to restore the window, or choose Quit from its menu to stop it.",
+    ));
+    app.send_notification(Some("running-in-background"), &notification);
 }

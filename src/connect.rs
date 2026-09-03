@@ -1,7 +1,7 @@
 use crate::client::ClientManager;
 use crate::config::local_commit;
 use lan_mouse_ipc::{ClientHandle, DEFAULT_PORT};
-use lan_mouse_proto::{MAX_EVENT_SIZE, ProtoEvent};
+use lan_mouse_proto::{MAX_DATAGRAM_SIZE, ProtoEvent};
 use local_channel::mpsc::{Receiver, Sender, channel};
 use std::{
     cell::RefCell,
@@ -32,7 +32,7 @@ pub(crate) enum LanMouseConnectionError {
     #[error(transparent)]
     Dtls(#[from] webrtc_dtls::Error),
     #[error(transparent)]
-    Webrtc(#[from] webrtc_util::Error),
+    Protocol(#[from] lan_mouse_proto::ProtocolError),
     #[error("not connected")]
     NotConnected,
     #[error("emulation is disabled on the target device")]
@@ -120,39 +120,17 @@ impl LanMouseConnection {
         self.recv_rx.recv().await.expect("channel closed")
     }
 
-    pub(crate) async fn send(
-        &self,
-        event: ProtoEvent,
-        handle: ClientHandle,
-    ) -> Result<(), LanMouseConnectionError> {
-        let (buf, len): ([u8; MAX_EVENT_SIZE], usize) = event.into();
-        let buf = &buf[..len];
-        if let Some(addr) = self.client_manager.active_addr(handle) {
-            let conn = {
-                let conns = self.conns.lock().await;
-                conns.get(&addr).cloned()
-            };
-            if let Some(conn) = conn {
-                if !self.client_manager.alive(handle) {
-                    return Err(LanMouseConnectionError::TargetEmulationDisabled);
-                }
-                match conn.send(buf).await {
-                    Ok(_) => {}
-                    Err(e) => {
-                        log::warn!("client {handle} failed to send: {e}");
-                        disconnect(&self.client_manager, handle, addr, &self.conns).await;
-                    }
-                }
-                log::trace!("{event} >->->->->- {addr}");
-                return Ok(());
-            }
+    /// Start establishing a connection before the first input event.
+    ///
+    /// This makes pairing and peer-version discovery independent of reaching
+    /// an input-capture barrier.
+    pub(crate) async fn connect(&self, handle: ClientHandle) {
+        if self.client_manager.active_addr(handle).is_some() {
+            return;
         }
 
-        // check if we are already trying to connect
         let mut connecting = self.connecting.lock().await;
-        if !connecting.contains(&handle) {
-            connecting.insert(handle);
-            // connect in the background
+        if connecting.insert(handle) {
             spawn_local(connect_to_handle(
                 self.client_manager.clone(),
                 self.cert.clone(),
@@ -163,6 +141,57 @@ impl LanMouseConnection {
                 self.ping_response.clone(),
             ));
         }
+    }
+
+    /// The peer has an authenticated transport, independently of whether
+    /// either portal currently allows remote input.
+    pub(crate) fn peer_connected(&self, handle: ClientHandle) -> bool {
+        self.client_manager.active_addr(handle).is_some()
+    }
+
+    /// The destination explicitly confirmed that both receiving input and
+    /// returning control are currently available.
+    pub(crate) fn remote_ready(&self, handle: ClientHandle) -> bool {
+        self.peer_connected(handle) && self.client_manager.remote_ready(handle)
+    }
+
+    pub(crate) async fn send(
+        &self,
+        event: ProtoEvent,
+        handle: ClientHandle,
+    ) -> Result<(), LanMouseConnectionError> {
+        log::trace!("{event} >->->->->-");
+        let requires_remote_ready = matches!(
+            &event,
+            ProtoEvent::Input(_)
+                | ProtoEvent::Enter(_)
+                | ProtoEvent::ClipboardStart { .. }
+                | ProtoEvent::ClipboardImageStart { .. }
+                | ProtoEvent::ClipboardChunk { .. }
+        );
+        let buf = event.encode()?;
+        if let Some(addr) = self.client_manager.active_addr(handle) {
+            let conn = {
+                let conns = self.conns.lock().await;
+                conns.get(&addr).cloned()
+            };
+            if let Some(conn) = conn {
+                if requires_remote_ready && !self.remote_ready(handle) {
+                    return Err(LanMouseConnectionError::TargetEmulationDisabled);
+                }
+                match conn.send(&buf).await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        log::warn!("client {handle} failed to send: {e}");
+                        disconnect(&self.client_manager, handle, addr, &self.conns).await;
+                    }
+                }
+                log::trace!("sent event to {addr}");
+                return Ok(());
+            }
+        }
+
+        self.connect(handle).await;
         Err(LanMouseConnectionError::NotConnected)
     }
 }
@@ -203,11 +232,11 @@ async fn connect_to_handle(
         // mirrors a Hello back so the receive loop can populate
         // `peer_commit`. Old peers will silently skip this event
         // per the forward-compat handler in [`receive_loop`].
-        let (buf, len) = ProtoEvent::Hello {
+        let buf = ProtoEvent::Hello {
             commit: local_commit(),
         }
-        .into();
-        if let Err(e) = conn.send(&buf[..len]).await {
+        .encode()?;
+        if let Err(e) = conn.send(&buf).await {
             log::debug!("hello send to {addr} failed: {e}");
         }
 
@@ -236,11 +265,11 @@ async fn ping_pong(
     ping_response: Rc<RefCell<HashSet<SocketAddr>>>,
 ) {
     loop {
-        let (buf, len) = ProtoEvent::Ping.into();
+        let buf = ProtoEvent::Ping.encode().expect("Ping always encodes");
 
         // send 4 pings, at least one must be answered
         for _ in 0..4 {
-            if let Err(e) = conn.send(&buf[..len]).await {
+            if let Err(e) = conn.send(&buf).await {
                 log::warn!("{addr}: send error `{e}`, closing connection");
                 let _ = conn.close().await;
                 break;
@@ -267,19 +296,33 @@ async fn receive_loop(
     tx: Sender<(ClientHandle, ProtoEvent)>,
     ping_response: Rc<RefCell<HashSet<SocketAddr>>>,
 ) {
-    let mut buf = [0u8; MAX_EVENT_SIZE];
-    while conn.recv(&mut buf).await.is_ok() {
-        match buf.try_into() {
+    let mut buf = [0u8; MAX_DATAGRAM_SIZE];
+    while let Ok(len) = conn.recv(&mut buf).await {
+        match ProtoEvent::decode(&buf[..len]) {
             Ok(event) => {
                 log::trace!("{addr} <==<==<== {event}");
                 match event {
-                    ProtoEvent::Pong(b) => {
+                    ProtoEvent::Pong(remote_ready) => {
                         client_manager.set_active_addr(handle, Some(addr));
-                        client_manager.set_alive(handle, b);
+                        client_manager.set_alive(handle, true);
+                        client_manager.set_remote_ready(handle, remote_ready);
                         ping_response.borrow_mut().insert(addr);
+                        log::info!(
+                            "peer state handle={handle} connected=true remote_ready={remote_ready} version_known={}",
+                            client_manager.peer_commit(handle).is_some()
+                        );
+                        tx.send((handle, ProtoEvent::Pong(remote_ready)))
+                            .expect("channel closed");
                     }
                     ProtoEvent::Hello { commit } => {
                         client_manager.set_peer_commit(handle, Some(commit));
+                        log::info!(
+                            "peer state handle={handle} connected={} remote_ready={} version_known=true",
+                            client_manager.alive(handle),
+                            client_manager.remote_ready(handle)
+                        );
+                        tx.send((handle, ProtoEvent::Hello { commit }))
+                            .expect("channel closed");
                     }
                     event => tx.send((handle, event)).expect("channel closed"),
                 }
@@ -304,6 +347,8 @@ async fn disconnect(
     log::warn!("client ({handle}) @ {addr} connection closed");
     conns.lock().await.remove(&addr);
     client_manager.set_active_addr(handle, None);
+    client_manager.set_alive(handle, false);
+    client_manager.set_remote_ready(handle, false);
     client_manager.set_peer_commit(handle, None);
     let active: Vec<SocketAddr> = conns.lock().await.keys().copied().collect();
     log::info!("active connections: {active:?}");

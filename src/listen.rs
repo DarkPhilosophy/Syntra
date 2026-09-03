@@ -1,5 +1,5 @@
 use futures::{Stream, StreamExt};
-use lan_mouse_proto::{MAX_EVENT_SIZE, ProtoEvent};
+use lan_mouse_proto::{MAX_DATAGRAM_SIZE, ProtoEvent};
 use local_channel::mpsc::{Receiver, Sender, channel};
 use rustls::pki_types::CertificateDer;
 use std::{
@@ -205,12 +205,16 @@ impl LanMouseListener {
 
     pub(crate) async fn reply(&self, addr: SocketAddr, event: ProtoEvent) {
         log::trace!("reply {event} >=>=>=>=>=> {addr}");
-        let (buf, len): ([u8; MAX_EVENT_SIZE], usize) = event.into();
-        let conns = self.conns.lock().await;
-        for (a, conn) in conns.iter() {
-            if *a == addr {
-                let _ = conn.send(&buf[..len]).await;
+        match event.encode() {
+            Ok(buf) => {
+                let conns = self.conns.lock().await;
+                for (a, conn) in conns.iter() {
+                    if *a == addr {
+                        let _ = conn.send(&buf).await;
+                    }
+                }
             }
+            Err(e) => log::warn!("failed to encode reply for {addr}: {e}"),
         }
     }
 
@@ -251,10 +255,10 @@ async fn read_loop(
     conn: ArcConn,
     dtls_tx: Sender<ListenEvent>,
 ) -> Result<(), Error> {
-    let mut b = [0u8; MAX_EVENT_SIZE];
+    let mut b = [0u8; MAX_DATAGRAM_SIZE];
 
-    while conn.recv(&mut b).await.is_ok() {
-        match b.try_into() {
+    while let Ok(len) = conn.recv(&mut b).await {
+        match ProtoEvent::decode(&b[..len]) {
             Ok(event) => dtls_tx
                 .send(ListenEvent::Msg { event, addr })
                 .expect("channel closed"),

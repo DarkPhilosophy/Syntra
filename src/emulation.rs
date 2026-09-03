@@ -1,9 +1,10 @@
+use crate::clipboard::ClipboardContent;
 use crate::config::local_commit;
 use crate::listen::{LanMouseListener, ListenEvent, ListenerCreationError};
 use futures::StreamExt;
 use input_emulation::{EmulationHandle, InputEmulation, InputEmulationError};
 use input_event::Event;
-use lan_mouse_proto::{Position, ProtoEvent};
+use lan_mouse_proto::{MAX_CLIPBOARD_CHUNK_SIZE, Position, ProtoEvent};
 use local_channel::mpsc::{Receiver, Sender, channel};
 use std::{
     cell::Cell,
@@ -64,12 +65,14 @@ pub(crate) enum EmulationEvent {
         addr: SocketAddr,
         commit: [u8; 8],
     },
+    Clipboard(ClipboardContent),
 }
 
 enum EmulationRequest {
     Reenable,
     Release(SocketAddr),
     ChangePort(u16),
+    CaptureReady(bool),
     Terminate,
 }
 
@@ -86,6 +89,7 @@ impl Emulation {
             emulation_proxy,
             request_rx,
             event_tx,
+            capture_ready: false,
         };
         let task = spawn_local(emulation_task.run());
         Self {
@@ -113,6 +117,12 @@ impl Emulation {
             .expect("channel closed")
     }
 
+    pub(crate) fn set_capture_ready(&self, ready: bool) {
+        self.request_tx
+            .send(EmulationRequest::CaptureReady(ready))
+            .expect("channel closed");
+    }
+
     pub(crate) async fn event(&mut self) -> EmulationEvent {
         self.event_rx.recv().await.expect("channel closed")
     }
@@ -134,12 +144,29 @@ struct ListenTask {
     emulation_proxy: EmulationProxy,
     request_rx: Receiver<EmulationRequest>,
     event_tx: Sender<EmulationEvent>,
+    capture_ready: bool,
+}
+
+#[derive(Debug)]
+enum ClipboardTransferKind {
+    Text,
+    Image { width: u32, height: u32 },
+}
+
+#[derive(Debug)]
+struct ClipboardTransfer {
+    kind: ClipboardTransferKind,
+    next: u32,
+    chunks: u32,
+    total_len: usize,
+    bytes: Vec<u8>,
 }
 
 impl ListenTask {
     async fn run(mut self) {
         let mut interval = tokio::time::interval(Duration::from_secs(5));
         let mut last_response = HashMap::new();
+        let mut clipboard_transfers: HashMap<(SocketAddr, u64), ClipboardTransfer> = HashMap::new();
         let mut rejected_connections = HashMap::new();
         loop {
             select! {
@@ -149,11 +176,33 @@ impl ListenTask {
                         last_response.insert(addr, Instant::now());
                         match event {
                             ProtoEvent::Enter(pos) => {
-                                if let Some(fingerprint) = self.listener.get_certificate_fingerprint(addr).await {
-                                    log::info!("releasing capture: {addr} entered this device");
-                                    self.event_tx.send(EmulationEvent::ReleaseNotify).expect("channel closed");
+                                if !self.emulation_proxy.emulation_ready.get()
+                                    || !self.capture_ready
+                                {
+                                    log::warn!(
+                                        "rejecting entry from {addr}: remote input is unavailable"
+                                    );
+                                    self.emulation_proxy.remove(addr);
+                                    self.listener.reply(addr, ProtoEvent::Leave(0)).await;
+                                    continue;
+                                }
+                                if let Some(fingerprint) =
+                                    self.listener.get_certificate_fingerprint(addr).await
+                                {
+                                    log::info!("accepting entry from {addr}");
+                                    self.event_tx
+                                        .send(EmulationEvent::ReleaseNotify)
+                                        .expect("channel closed");
                                     self.listener.reply(addr, ProtoEvent::Ack(0)).await;
-                                    self.event_tx.send(EmulationEvent::Entered{addr, pos: to_ipc_pos(pos), fingerprint}).expect("channel closed");
+                                    self.event_tx
+                                        .send(EmulationEvent::Entered {
+                                            addr,
+                                            pos: to_ipc_pos(pos),
+                                            fingerprint,
+                                        })
+                                        .expect("channel closed");
+                                } else {
+                                    self.listener.reply(addr, ProtoEvent::Leave(0)).await;
                                 }
                             }
                             ProtoEvent::Leave(_) => {
@@ -161,7 +210,17 @@ impl ListenTask {
                                 self.listener.reply(addr, ProtoEvent::Ack(0)).await;
                             }
                             ProtoEvent::Input(event) => self.emulation_proxy.consume(event, addr),
-                            ProtoEvent::Ping => self.listener.reply(addr, ProtoEvent::Pong(self.emulation_proxy.emulation_active.get())).await,
+                            ProtoEvent::Ping => {
+                                self.listener
+                                    .reply(
+                                        addr,
+                                        ProtoEvent::Pong(
+                                            self.emulation_proxy.emulation_ready.get()
+                                                && self.capture_ready,
+                                        ),
+                                    )
+                                    .await
+                            }
                             // Peer's version handshake. Echo our own
                             // commit back so the peer's connect-side
                             // receive_loop populates its `peer_commit`,
@@ -176,6 +235,69 @@ impl ListenTask {
                             ProtoEvent::Hello { commit } => {
                                 self.listener.reply(addr, ProtoEvent::Hello { commit: local_commit() }).await;
                                 self.event_tx.send(EmulationEvent::PeerHello { addr, commit }).expect("channel closed");
+                            }
+                            ProtoEvent::ClipboardStart { transfer_id, total_len, chunks } => {
+                                clipboard_transfers.insert(
+                                    (addr, transfer_id),
+                                    ClipboardTransfer {
+                                        kind: ClipboardTransferKind::Text,
+                                        next: 0,
+                                        chunks,
+                                        total_len: total_len as usize,
+                                        bytes: Vec::with_capacity(total_len as usize),
+                                    },
+                                );
+                            }
+                            ProtoEvent::ClipboardImageStart { transfer_id, width, height, total_len, chunks } => {
+                                clipboard_transfers.insert(
+                                    (addr, transfer_id),
+                                    ClipboardTransfer {
+                                        kind: ClipboardTransferKind::Image { width, height },
+                                        next: 0,
+                                        chunks,
+                                        total_len: total_len as usize,
+                                        bytes: Vec::with_capacity(total_len as usize),
+                                    },
+                                );
+                            }
+                            ProtoEvent::ClipboardChunk { transfer_id, index, data } => {
+                                let key = (addr, transfer_id);
+                                let mut complete = false;
+                                if let Some(transfer) = clipboard_transfers.get_mut(&key) {
+                                    if index == transfer.next
+                                        && data.len() <= MAX_CLIPBOARD_CHUNK_SIZE
+                                        && transfer.bytes.len() + data.len() <= transfer.total_len
+                                    {
+                                        transfer.bytes.extend_from_slice(&data);
+                                        transfer.next += 1;
+                                        complete = transfer.next == transfer.chunks
+                                            && transfer.bytes.len() == transfer.total_len;
+                                        if transfer.next == transfer.chunks && !complete {
+                                            clipboard_transfers.remove(&key);
+                                        }
+                                    } else {
+                                        clipboard_transfers.remove(&key);
+                                    }
+                                }
+                                if complete {
+                                    if let Some(transfer) = clipboard_transfers.remove(&key) {
+                                        let content = match transfer.kind {
+                                            ClipboardTransferKind::Text => match String::from_utf8(transfer.bytes) {
+                                                Ok(text) => Some(ClipboardContent::Text(text)),
+                                                Err(e) => {
+                                                    log::warn!("ignoring invalid UTF-8 clipboard text: {e}");
+                                                    None
+                                                }
+                                            },
+                                            ClipboardTransferKind::Image { width, height } => {
+                                                Some(ClipboardContent::Image { width, height, rgba: transfer.bytes })
+                                            }
+                                        };
+                                        if let Some(content) = content {
+                                            self.event_tx.send(EmulationEvent::Clipboard(content)).expect("channel closed");
+                                        }
+                                    }
+                                }
                             }
                             _ => {}
                         }
@@ -204,6 +326,9 @@ impl ListenTask {
                         let result = self.listener.port_changed().await;
                         self.event_tx.send(EmulationEvent::PortChanged(result)).expect("channel closed");
                     }
+                    EmulationRequest::CaptureReady(ready) => {
+                        self.capture_ready = ready;
+                    }
                     EmulationRequest::Terminate => break,
                 },
                 _ = interval.tick() => {
@@ -229,6 +354,7 @@ impl ListenTask {
 /// discarding events when it is disabled
 pub(crate) struct EmulationProxy {
     emulation_active: Rc<Cell<bool>>,
+    emulation_ready: Rc<Cell<bool>>,
     exit_requested: Rc<Cell<bool>>,
     request_tx: Sender<ProxyRequest>,
     event_rx: Receiver<EmulationEvent>,
@@ -247,9 +373,11 @@ impl EmulationProxy {
         let (request_tx, request_rx) = channel();
         let (event_tx, event_rx) = channel();
         let emulation_active = Rc::new(Cell::new(false));
+        let emulation_ready = Rc::new(Cell::new(false));
         let exit_requested = Rc::new(Cell::new(false));
         let emulation_task = EmulationTask {
             backend,
+            emulation_ready: emulation_ready.clone(),
             exit_requested: exit_requested.clone(),
             request_rx,
             event_tx,
@@ -259,6 +387,7 @@ impl EmulationProxy {
         let task = spawn_local(emulation_task.run());
         Self {
             emulation_active,
+            emulation_ready,
             exit_requested,
             request_tx,
             task,
@@ -309,6 +438,7 @@ impl EmulationProxy {
 
 struct EmulationTask {
     backend: Option<input_emulation::Backend>,
+    emulation_ready: Rc<Cell<bool>>,
     exit_requested: Rc<Cell<bool>>,
     request_rx: Receiver<ProxyRequest>,
     event_tx: Sender<EmulationEvent>,
@@ -345,12 +475,10 @@ impl EmulationTask {
             _ = wait_for_termination(&mut self.request_rx) => return Ok(()),
         };
 
-        // used to send enabled and disabled events
-        let _emulation_guard = DropGuard::new(
-            self.event_tx.clone(),
-            EmulationEvent::EmulationEnabled,
-            EmulationEvent::EmulationDisabled,
-        );
+        // The portal being approved is not enough: only advertise readiness
+        // after the backend has completed initialization and can consume input.
+        self.emulation_ready.set(true);
+        let _emulation_guard = ReadyGuard::new(self.emulation_ready.clone(), self.event_tx.clone());
 
         // create active handles
         if let Err(e) = self.create_clients(&mut emulation).await {
@@ -430,23 +558,25 @@ async fn wait_for_termination(rx: &mut Receiver<ProxyRequest>) {
     }
 }
 
-struct DropGuard<T> {
-    tx: Sender<T>,
-    on_drop: Option<T>,
+struct ReadyGuard {
+    ready: Rc<Cell<bool>>,
+    event_tx: Sender<EmulationEvent>,
 }
 
-impl<T> DropGuard<T> {
-    fn new(tx: Sender<T>, on_new: T, on_drop: T) -> Self {
-        tx.send(on_new).expect("channel closed");
-        let on_drop = Some(on_drop);
-        Self { tx, on_drop }
+impl ReadyGuard {
+    fn new(ready: Rc<Cell<bool>>, event_tx: Sender<EmulationEvent>) -> Self {
+        event_tx
+            .send(EmulationEvent::EmulationEnabled)
+            .expect("channel closed");
+        Self { ready, event_tx }
     }
 }
 
-impl<T> Drop for DropGuard<T> {
+impl Drop for ReadyGuard {
     fn drop(&mut self) {
-        self.tx
-            .send(self.on_drop.take().expect("item"))
+        self.ready.set(false);
+        self.event_tx
+            .send(EmulationEvent::EmulationDisabled)
             .expect("channel closed");
     }
 }

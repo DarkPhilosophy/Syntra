@@ -1,5 +1,6 @@
 use std::{
     cell::{Cell, RefCell},
+    collections::HashSet,
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -9,7 +10,7 @@ use input_capture::{
     CaptureError, CaptureEvent, CaptureHandle, InputCapture, InputCaptureError, Position,
 };
 use input_event::{Event, KeyboardEvent, scancode};
-use lan_mouse_proto::ProtoEvent;
+use lan_mouse_proto::{MAX_CLIPBOARD_CHUNK_SIZE, ProtoEvent};
 use local_channel::mpsc::{Receiver, Sender, channel};
 use tokio::task::{JoinHandle, spawn_local};
 use tokio_util::sync::CancellationToken;
@@ -49,7 +50,7 @@ pub(crate) enum CaptureType {
     EnterOnly,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 enum CaptureRequest {
     /// capture must release the mouse
     Release,
@@ -61,6 +62,12 @@ enum CaptureRequest {
     Reenable,
     /// set release bind
     SetReleaseBind(Vec<scancode::Linux>),
+    SendClipboard {
+        handle: CaptureHandle,
+        transfer_id: u64,
+        data: Vec<u8>,
+        image_dimensions: Option<(u32, u32)>,
+    },
 }
 
 impl Capture {
@@ -74,8 +81,10 @@ impl Capture {
         let cancellation_token = CancellationToken::new();
         let capture_task = CaptureTask {
             active_client: None,
+            ack_deadline: None,
             backend,
             cancellation_token: cancellation_token.clone(),
+            enabled_captures: Default::default(),
             captures: Default::default(),
             conn,
             event_tx,
@@ -137,6 +146,23 @@ impl Capture {
     pub(crate) fn set_release_bind(&mut self, bind: Vec<scancode::Linux>) {
         let _ = self.request_tx.send(CaptureRequest::SetReleaseBind(bind));
     }
+
+    pub(crate) fn send_clipboard(
+        &self,
+        handle: CaptureHandle,
+        transfer_id: u64,
+        data: Vec<u8>,
+        image_dimensions: Option<(u32, u32)>,
+    ) {
+        self.request_tx
+            .send(CaptureRequest::SendClipboard {
+                handle,
+                transfer_id,
+                data,
+                image_dimensions,
+            })
+            .expect("channel closed");
+    }
 }
 
 /// debounce a statement `$st`, i.e. the statement is executed only if the
@@ -158,8 +184,10 @@ macro_rules! debounce {
 
 struct CaptureTask {
     active_client: Option<CaptureHandle>,
+    ack_deadline: Option<Instant>,
     backend: Option<input_capture::Backend>,
     cancellation_token: CancellationToken,
+    enabled_captures: HashSet<CaptureHandle>,
     captures: Vec<(CaptureHandle, Position, CaptureType)>,
     conn: LanMouseConnection,
     event_tx: Sender<ICaptureEvent>,
@@ -208,11 +236,17 @@ impl CaptureTask {
                 tokio::select! {
                     r = self.request_rx.recv() => match r.expect("channel closed") {
                         CaptureRequest::Reenable => break,
-                        CaptureRequest::Create(h, p, t) => self.add_capture(h, p, t),
+                        CaptureRequest::Create(h, p, t) => {
+                            self.add_capture(h, p, t);
+                            self.conn.connect(h).await;
+                        }
                         CaptureRequest::Destroy(h) => self.remove_capture(h),
                         CaptureRequest::Release => { /* nothing to do */ }
                         CaptureRequest::SetReleaseBind(bind) => {
                             self.release_bind.borrow_mut().clone_from(&bind);
+                        }
+                        CaptureRequest::SendClipboard { handle, transfer_id, data, image_dimensions } => {
+                            self.send_clipboard_transfer(handle, transfer_id, data, image_dimensions).await;
                         }
                     },
                     _ = self.cancellation_token.cancelled() => return,
@@ -234,8 +268,9 @@ impl CaptureTask {
             ICaptureEvent::CaptureDisabled,
         );
 
-        /* create barriers for active clients */
-        let r = self.create_captures(&mut capture).await;
+        /* create barriers only for peers that confirmed remote input */
+        self.enabled_captures.clear();
+        let r = self.sync_captures(&mut capture).await;
         if let Err(e) = r {
             capture.terminate().await?;
             return Err(e.into());
@@ -249,12 +284,29 @@ impl CaptureTask {
         r
     }
 
-    async fn create_captures(&mut self, capture: &mut InputCapture) -> Result<(), CaptureError> {
+    async fn sync_captures(&mut self, capture: &mut InputCapture) -> Result<(), CaptureError> {
         let captures = self.captures.clone();
-        for (handle, pos, _type) in captures {
-            tokio::select! {
-                r = capture.create(handle, pos) => r?,
-                _ = self.cancellation_token.cancelled() => return Ok(()),
+        for (handle, pos, capture_type) in captures {
+            let should_exist =
+                capture_type == CaptureType::EnterOnly || self.conn.remote_ready(handle);
+            log::debug!(
+                "peer gate handle={handle} type={capture_type:?} ready={} barrier={} active={}",
+                self.conn.remote_ready(handle),
+                self.enabled_captures.contains(&handle),
+                self.active_client == Some(handle)
+            );
+            if should_exist && self.enabled_captures.insert(handle) {
+                if let Err(error) = capture.create(handle, pos).await {
+                    self.enabled_captures.remove(&handle);
+                    return Err(error);
+                }
+                log::info!("peer gate opened handle={handle}; capture barrier created");
+            } else if !should_exist && self.enabled_captures.remove(&handle) {
+                capture.destroy(handle).await?;
+                log::info!("peer gate closed handle={handle}; capture barrier destroyed");
+                if self.active_client == Some(handle) {
+                    self.release_capture(capture).await?;
+                }
             }
         }
         Ok(())
@@ -271,47 +323,104 @@ impl CaptureTask {
                     None => return Ok(()),
                 },
                 (handle, event) = self.conn.recv() => {
-                    if let Some(active) = self.active_client {
-                        if handle != active {
-                            // we only care about events coming from the client we are currently connected to
-                            // only `Ack` and `Leave` are relevant
-                            continue
-                        }
+                    if self.active_client != Some(handle) {
+                        self.sync_captures(capture).await?;
+                        continue;
                     }
-
                     match event {
-                        // connection acknowlegded => set state to Sending
-                        ProtoEvent::Ack(_) => {
-                            log::info!("client {handle} acknowledged the connection!");
+                        ProtoEvent::Ack(_) if self.state == State::WaitingForAck => {
+                            log::info!("client {handle} acknowledged entry");
                             self.state = State::Sending;
+                            self.ack_deadline = None;
                         }
-                        // client disconnected
-                        ProtoEvent::Leave(_) => {
-                            log::info!("releasing capture: left remote client device region");
+                        ProtoEvent::Pong(false) | ProtoEvent::Leave(_) => {
+                            log::info!("releasing capture: remote input unavailable");
                             self.release_capture(capture).await?;
-                        },
+                        }
                         _ => {}
                     }
+                    self.sync_captures(capture).await?;
+                },
+                _ = async {
+                    if let Some(deadline) = self.ack_deadline {
+                        tokio::time::sleep_until(deadline.into()).await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                }, if self.ack_deadline.is_some() => {
+                    log::warn!("releasing capture: peer did not acknowledge entry");
+                    self.release_capture(capture).await?;
                 },
                 e = self.request_rx.recv() => match e.expect("channel closed") {
                     CaptureRequest::Reenable => { /* already active */ },
                     CaptureRequest::Release => self.release_capture(capture).await?,
                     CaptureRequest::Create(h, p, t) => {
                         self.add_capture(h, p, t);
-                        capture.create(h, p).await?;
+                        self.conn.connect(h).await;
+                        self.sync_captures(capture).await?;
                     }
                     CaptureRequest::Destroy(h) => {
                         self.remove_capture(h);
-                        capture.destroy(h).await?;
+                        if self.enabled_captures.remove(&h) {
+                            capture.destroy(h).await?;
+                        }
                     }
                     CaptureRequest::SetReleaseBind(bind) => {
                         self.release_bind.borrow_mut().clone_from(&bind);
                     }
+                    CaptureRequest::SendClipboard { handle, transfer_id, data, image_dimensions } => {
+                        self.send_clipboard_transfer(handle, transfer_id, data, image_dimensions).await;
+                    }
                 },
-                _ = self.cancellation_token.cancelled() => break,
+                _ = self.cancellation_token.cancelled() => {
+                    self.release_capture(capture).await?;
+                    break;
+                },
             }
         }
         Ok(())
+    }
+    async fn send_clipboard_transfer(
+        &mut self,
+        handle: CaptureHandle,
+        transfer_id: u64,
+        data: Vec<u8>,
+        image_dimensions: Option<(u32, u32)>,
+    ) {
+        let Ok(total_len) = u32::try_from(data.len()) else {
+            log::warn!("clipboard payload is too large");
+            return;
+        };
+        let chunks = total_len.div_ceil(MAX_CLIPBOARD_CHUNK_SIZE as u32);
+        let start = match image_dimensions {
+            Some((width, height)) => ProtoEvent::ClipboardImageStart {
+                transfer_id,
+                width,
+                height,
+                total_len,
+                chunks,
+            },
+            None => ProtoEvent::ClipboardStart {
+                transfer_id,
+                total_len,
+                chunks,
+            },
+        };
+        if let Err(e) = self.conn.send(start, handle).await {
+            log::warn!("failed to send clipboard start to client {handle}: {e}");
+            return;
+        }
+        for (index, chunk) in data.chunks(MAX_CLIPBOARD_CHUNK_SIZE).enumerate() {
+            let event = ProtoEvent::ClipboardChunk {
+                transfer_id,
+                index: index as u32,
+                data: chunk.to_vec(),
+            };
+            if let Err(e) = self.conn.send(event, handle).await {
+                log::warn!("failed to send clipboard chunk to client {handle}: {e}");
+                return;
+            }
+        }
     }
 
     async fn handle_capture_event(
@@ -320,11 +429,25 @@ impl CaptureTask {
         event: (CaptureHandle, CaptureEvent),
     ) -> Result<(), CaptureError> {
         let (handle, event) = event;
-        log::trace!("({handle}): {event:?}");
+        log::info!(
+            "capture event handle={handle} event={event:?} ready={} barrier={} active={}",
+            self.conn.remote_ready(handle),
+            self.enabled_captures.contains(&handle),
+            self.active_client == Some(handle)
+        );
 
         if capture.keys_pressed(&self.release_bind.borrow()) {
             log::info!("releasing capture: release-bind pressed");
             return self.release_capture(capture).await;
+        }
+
+        if event == CaptureEvent::Begin
+            && self.get_type(handle) == CaptureType::Default
+            && !self.conn.remote_ready(handle)
+        {
+            log::warn!("rejecting capture: client {handle} cannot accept remote input");
+            capture.release().await?;
+            return Ok(());
         }
 
         if event == CaptureEvent::Begin {
@@ -348,6 +471,7 @@ impl CaptureTask {
         // activated a new client
         if event == CaptureEvent::Begin && Some(handle) != self.active_client {
             self.state = State::WaitingForAck;
+            self.ack_deadline = Some(Instant::now() + Duration::from_millis(750));
             self.active_client.replace(handle);
             self.event_tx
                 .send(ICaptureEvent::ClientEntered(handle))
@@ -374,6 +498,8 @@ impl CaptureTask {
     }
 
     async fn release_capture(&mut self, capture: &mut InputCapture) -> Result<(), CaptureError> {
+        self.ack_deadline = None;
+        self.state = State::WaitingForAck;
         // If we have an active client, notify them we're leaving
         if let Some(handle) = self.active_client.take() {
             // Synthesize key-up events for every key still held in the

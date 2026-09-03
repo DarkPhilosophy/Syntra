@@ -1,9 +1,9 @@
 use ashpd::{
     desktop::{
-        Session,
+        PersistMode, Session,
         input_capture::{
-            Activated, ActivatedBarrier, Barrier, BarrierID, Capabilities, CreateSessionOptions,
-            InputCapture, Region, ReleaseOptions, Zones,
+            Activated, ActivatedBarrier, Barrier, BarrierID, Capabilities, CreateSession2Options,
+            InputCapture, Region, ReleaseOptions, StartOptions, Zones,
         },
     },
     enumflags2::BitFlags,
@@ -18,9 +18,10 @@ use reis::{
 use std::{
     cell::Cell,
     collections::HashMap,
-    env, io,
+    env, fs, io,
     num::NonZeroU32,
     os::unix::net::UnixStream,
+    path::PathBuf,
     pin::Pin,
     rc::Rc,
     sync::{Arc, LazyLock},
@@ -178,16 +179,60 @@ async fn update_barriers(
     Ok((barriers, id_map))
 }
 
+fn restore_token_path() -> PathBuf {
+    let cache_dir = env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
+        .expect("HOME or XDG_CACHE_HOME must be set");
+    cache_dir.join("lan-mouse/input-capture.token")
+}
+
+fn read_restore_token() -> Option<String> {
+    fs::read_to_string(restore_token_path())
+        .ok()
+        .map(|token| token.trim().to_string())
+        .filter(|token| !token.is_empty())
+}
+
+fn write_restore_token(token: &str) {
+    let path = restore_token_path();
+    let result = path
+        .parent()
+        .ok_or_else(|| io::Error::other("restore token path has no parent"))
+        .and_then(fs::create_dir_all)
+        .and_then(|()| fs::write(path, token));
+    if let Err(error) = result {
+        log::warn!("failed to persist input-capture permission: {error}");
+    }
+}
+
 async fn create_session(
     input_capture: &InputCapture,
 ) -> std::result::Result<(Session<InputCapture>, BitFlags<Capabilities>), ashpd::Error> {
     log::debug!("creating input capture session");
-    let create_session_options = CreateSessionOptions::default().set_capabilities(
-        Capabilities::Keyboard | Capabilities::Pointer | Capabilities::Touchscreen,
-    );
-    input_capture
-        .create_session(None, create_session_options)
-        .await
+    if input_capture.version() < 2 {
+        let options = ashpd::desktop::input_capture::CreateSessionOptions::default()
+            .set_capabilities(
+                Capabilities::Keyboard | Capabilities::Pointer | Capabilities::Touchscreen,
+            );
+        return input_capture.create_session(None, options).await;
+    }
+
+    let session = input_capture
+        .create_session2(CreateSession2Options::default())
+        .await?;
+    let options = StartOptions::default()
+        .set_capabilities(
+            Capabilities::Keyboard | Capabilities::Pointer | Capabilities::Touchscreen,
+        )
+        .set_restore_token(read_restore_token())
+        .set_persist_mode(PersistMode::ExplicitlyRevoked);
+    let response = input_capture.start(&session, None, options).await?;
+    let response = response.response()?;
+    if let Some(token) = response.restore_token() {
+        write_restore_token(token);
+    }
+    Ok((session, response.capabilities()))
 }
 
 async fn connect_to_eis(

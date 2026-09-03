@@ -282,6 +282,12 @@ impl ClientManager {
         }
     }
 
+    pub(crate) fn set_remote_ready(&self, handle: ClientHandle, ready: bool) {
+        if let Some((_, state)) = self.clients.borrow_mut().get_mut(handle as usize) {
+            state.remote_ready = ready;
+        }
+    }
+
     pub(crate) fn set_peer_commit(&self, handle: ClientHandle, commit: Option<[u8; 8]>) {
         if let Some((_, s)) = self.clients.borrow_mut().get_mut(handle as usize) {
             s.peer_commit = commit;
@@ -301,6 +307,20 @@ impl ClientManager {
             .get(handle as usize)
             .map(|(_, s)| s.alive)
             .unwrap_or(false)
+    }
+
+    pub(crate) fn remote_ready(&self, handle: ClientHandle) -> bool {
+        self.clients
+            .borrow()
+            .get(handle as usize)
+            .map(|(_, state)| state.remote_ready)
+            .unwrap_or(false)
+    }
+    pub(crate) fn peer_commit(&self, handle: ClientHandle) -> Option<[u8; 8]> {
+        self.clients
+            .borrow()
+            .get(handle as usize)
+            .and_then(|(_, state)| state.peer_commit)
     }
 
     pub(crate) fn get_port(&self, handle: ClientHandle) -> Option<u16> {

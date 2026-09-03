@@ -1,30 +1,30 @@
 use input_event::{Event as InputEvent, KeyboardEvent, PointerEvent};
 use num_enum::{IntoPrimitive, TryFromPrimitive, TryFromPrimitiveError};
-use paste::paste;
-use std::{
-    fmt::{Debug, Display, Formatter},
-    mem::size_of,
-};
+use std::fmt::{Debug, Display, Formatter};
 use thiserror::Error;
 
-/// defines the maximum size an encoded event can take up
-/// this is currently the pointer motion event
-/// type: u8, time: u32, dx: f64, dy: f64
-pub const MAX_EVENT_SIZE: usize = size_of::<u8>() + size_of::<u32>() + 2 * size_of::<f64>();
+/// Largest datagram accepted by the application protocol.
+pub const MAX_DATAGRAM_SIZE: usize = 16 * 1024;
+/// Largest clipboard payload accepted by the protocol.
+pub const MAX_CLIPBOARD_SIZE: usize = 64 * 1024 * 1024;
+const CLIPBOARD_CHUNK_HEADER_SIZE: usize = 1 + 8 + 4;
+pub const MAX_CLIPBOARD_CHUNK_SIZE: usize = MAX_DATAGRAM_SIZE - CLIPBOARD_CHUNK_HEADER_SIZE;
 
-/// error type for protocol violations
 #[derive(Debug, Error)]
 pub enum ProtocolError {
-    /// event type does not exist
     #[error("invalid event id: `{0}`")]
     InvalidEventId(#[from] TryFromPrimitiveError<EventType>),
-    /// position type does not exist
-    #[error("invalid event id: `{0}`")]
+    #[error("invalid position: `{0}`")]
     InvalidPosition(#[from] TryFromPrimitiveError<Position>),
+    #[error("truncated event")]
+    Truncated,
+    #[error("event exceeds protocol limit: {actual} > {limit}")]
+    TooLarge { actual: usize, limit: usize },
+    #[error("invalid clipboard chunk count: expected {expected}, got {actual}")]
+    InvalidChunkCount { expected: u32, actual: u32 },
 }
 
-/// Position of a client
-#[derive(Clone, Copy, Debug, TryFromPrimitive, IntoPrimitive)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum Position {
     Left,
@@ -35,69 +35,103 @@ pub enum Position {
 
 impl Display for Position {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let pos = match self {
-            Position::Left => "left",
-            Position::Right => "right",
-            Position::Top => "top",
-            Position::Bottom => "bottom",
-        };
-        write!(f, "{pos}")
+        write!(
+            f,
+            "{}",
+            match self {
+                Position::Left => "left",
+                Position::Right => "right",
+                Position::Top => "top",
+                Position::Bottom => "bottom",
+            }
+        )
     }
 }
 
-/// main lan-mouse protocol event type
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum ProtoEvent {
-    /// notify a client that the cursor entered its region at the given position
-    /// [`ProtoEvent::Ack`] with the same serial is used for synchronization between devices
     Enter(Position),
-    /// notify a client that the cursor left its region
-    /// [`ProtoEvent::Ack`] with the same serial is used for synchronization between devices
     Leave(u32),
-    /// acknowledge of an [`ProtoEvent::Enter`] or [`ProtoEvent::Leave`] event
     Ack(u32),
-    /// Input event
     Input(InputEvent),
-    /// Ping event for tracking unresponsive clients.
-    /// A client has to respond with [`ProtoEvent::Pong`].
     Ping,
-    /// Response to [`ProtoEvent::Ping`], true if emulation is enabled / available
     Pong(bool),
-    /// Build identification for the sending peer. Sent by the
-    /// connect side once after the connection authenticates, and
-    /// echoed back by the listen side in reply, so each end can
-    /// display the peer's build hash and warn (soft) on mismatch.
-    /// `commit` is the 8-byte ASCII short commit hash from
-    /// `shadow_rs`'s `SHORT_COMMIT`. Old peers that don't
-    /// recognize the event type silently skip it per the
-    /// forward-compat handling in the receive loop.
-    Hello { commit: [u8; 8] },
+    Hello {
+        commit: [u8; 8],
+    },
+    ClipboardStart {
+        transfer_id: u64,
+        total_len: u32,
+        chunks: u32,
+    },
+    ClipboardImageStart {
+        transfer_id: u64,
+        width: u32,
+        height: u32,
+        total_len: u32,
+        chunks: u32,
+    },
+    ClipboardChunk {
+        transfer_id: u64,
+        index: u32,
+        data: Vec<u8>,
+    },
 }
 
 impl Display for ProtoEvent {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            ProtoEvent::Enter(s) => write!(f, "Enter({s})"),
-            ProtoEvent::Leave(s) => write!(f, "Leave({s})"),
-            ProtoEvent::Ack(s) => write!(f, "Ack({s})"),
-            ProtoEvent::Input(e) => write!(f, "{e}"),
-            ProtoEvent::Ping => write!(f, "ping"),
-            ProtoEvent::Pong(alive) => {
+            Self::Enter(position) => write!(f, "Enter({position})"),
+            Self::Leave(serial) => write!(f, "Leave({serial})"),
+            Self::Ack(serial) => write!(f, "Ack({serial})"),
+            Self::Input(event) => write!(f, "{event}"),
+            Self::Ping => write!(f, "ping"),
+            Self::Pong(alive) => write!(
+                f,
+                "pong: {}",
+                if *alive { "alive" } else { "not available" }
+            ),
+            Self::Hello { commit } => write!(
+                f,
+                "Hello({})",
+                std::str::from_utf8(commit).unwrap_or("????????")
+            ),
+            Self::ClipboardStart {
+                transfer_id,
+                total_len,
+                chunks,
+            } => {
                 write!(
                     f,
-                    "pong: {}",
-                    if *alive { "alive" } else { "not available" }
+                    "ClipboardStart({transfer_id}, {total_len} bytes, {chunks} chunks)"
                 )
             }
-            ProtoEvent::Hello { commit } => {
-                let s = std::str::from_utf8(commit).unwrap_or("????????");
-                write!(f, "Hello({s})")
+            Self::ClipboardImageStart {
+                transfer_id,
+                width,
+                height,
+                total_len,
+                chunks,
+            } => write!(
+                f,
+                "ClipboardImageStart({transfer_id}, {width}x{height}, {total_len} bytes, {chunks} chunks)"
+            ),
+            Self::ClipboardChunk {
+                transfer_id,
+                index,
+                data,
+            } => {
+                write!(
+                    f,
+                    "ClipboardChunk({transfer_id}, {index}, {} bytes)",
+                    data.len()
+                )
             }
         }
     }
 }
 
-#[derive(TryFromPrimitive, IntoPrimitive)]
+#[derive(Debug, TryFromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum EventType {
     PointerMotion,
@@ -112,198 +146,420 @@ pub enum EventType {
     Leave,
     Ack,
     Hello,
+    ClipboardStart,
+    ClipboardChunk,
+    ClipboardImageStart,
 }
 
 impl ProtoEvent {
     fn event_type(&self) -> EventType {
         match self {
-            ProtoEvent::Input(e) => match e {
-                InputEvent::Pointer(p) => match p {
-                    PointerEvent::Motion { .. } => EventType::PointerMotion,
-                    PointerEvent::Button { .. } => EventType::PointerButton,
-                    PointerEvent::Axis { .. } => EventType::PointerAxis,
-                    PointerEvent::AxisDiscrete120 { .. } => EventType::PointerAxisValue120,
-                },
-                InputEvent::Keyboard(k) => match k {
-                    KeyboardEvent::Key { .. } => EventType::KeyboardKey,
-                    KeyboardEvent::Modifiers { .. } => EventType::KeyboardModifiers,
-                },
-            },
-            ProtoEvent::Ping => EventType::Ping,
-            ProtoEvent::Pong(_) => EventType::Pong,
-            ProtoEvent::Enter(_) => EventType::Enter,
-            ProtoEvent::Leave(_) => EventType::Leave,
-            ProtoEvent::Ack(_) => EventType::Ack,
-            ProtoEvent::Hello { .. } => EventType::Hello,
+            Self::Input(InputEvent::Pointer(PointerEvent::Motion { .. })) => {
+                EventType::PointerMotion
+            }
+            Self::Input(InputEvent::Pointer(PointerEvent::Button { .. })) => {
+                EventType::PointerButton
+            }
+            Self::Input(InputEvent::Pointer(PointerEvent::Axis { .. })) => EventType::PointerAxis,
+            Self::Input(InputEvent::Pointer(PointerEvent::AxisDiscrete120 { .. })) => {
+                EventType::PointerAxisValue120
+            }
+            Self::Input(InputEvent::Keyboard(KeyboardEvent::Key { .. })) => EventType::KeyboardKey,
+            Self::Input(InputEvent::Keyboard(KeyboardEvent::Modifiers { .. })) => {
+                EventType::KeyboardModifiers
+            }
+            Self::Ping => EventType::Ping,
+            Self::Pong(_) => EventType::Pong,
+            Self::Enter(_) => EventType::Enter,
+            Self::Leave(_) => EventType::Leave,
+            Self::Ack(_) => EventType::Ack,
+            Self::Hello { .. } => EventType::Hello,
+            Self::ClipboardStart { .. } => EventType::ClipboardStart,
+            Self::ClipboardImageStart { .. } => EventType::ClipboardImageStart,
+            Self::ClipboardChunk { .. } => EventType::ClipboardChunk,
         }
     }
-}
 
-impl TryFrom<[u8; MAX_EVENT_SIZE]> for ProtoEvent {
-    type Error = ProtocolError;
+    pub fn encode(self) -> Result<Vec<u8>, ProtocolError> {
+        let mut buf = Vec::with_capacity(32);
+        buf.push(self.event_type() as u8);
+        match self {
+            Self::Input(InputEvent::Pointer(PointerEvent::Motion { time, dx, dy })) => {
+                put_u32(&mut buf, time);
+                put_f64(&mut buf, dx);
+                put_f64(&mut buf, dy);
+            }
+            Self::Input(InputEvent::Pointer(PointerEvent::Button {
+                time,
+                button,
+                state,
+            })) => {
+                put_u32(&mut buf, time);
+                put_u32(&mut buf, button);
+                put_u32(&mut buf, state);
+            }
+            Self::Input(InputEvent::Pointer(PointerEvent::Axis { time, axis, value })) => {
+                put_u32(&mut buf, time);
+                buf.push(axis);
+                put_f64(&mut buf, value);
+            }
+            Self::Input(InputEvent::Pointer(PointerEvent::AxisDiscrete120 { axis, value })) => {
+                buf.push(axis);
+                put_i32(&mut buf, value);
+            }
+            Self::Input(InputEvent::Keyboard(KeyboardEvent::Key { time, key, state })) => {
+                put_u32(&mut buf, time);
+                put_u32(&mut buf, key);
+                buf.push(state);
+            }
+            Self::Input(InputEvent::Keyboard(KeyboardEvent::Modifiers {
+                depressed,
+                latched,
+                locked,
+                group,
+            })) => {
+                put_u32(&mut buf, depressed);
+                put_u32(&mut buf, latched);
+                put_u32(&mut buf, locked);
+                put_u32(&mut buf, group);
+            }
+            Self::Ping => {}
+            Self::Pong(alive) => buf.push(u8::from(alive)),
+            Self::Enter(position) => buf.push(position as u8),
+            Self::Leave(serial) | Self::Ack(serial) => put_u32(&mut buf, serial),
+            Self::Hello { commit } => buf.extend_from_slice(&commit),
+            Self::ClipboardStart {
+                transfer_id,
+                total_len,
+                chunks,
+            } => {
+                validate_clipboard_start(total_len, chunks)?;
+                put_u64(&mut buf, transfer_id);
+                put_u32(&mut buf, total_len);
+                put_u32(&mut buf, chunks);
+            }
+            Self::ClipboardImageStart {
+                transfer_id,
+                width,
+                height,
+                total_len,
+                chunks,
+            } => {
+                validate_clipboard_image(width, height, total_len, chunks)?;
+                put_u64(&mut buf, transfer_id);
+                put_u32(&mut buf, width);
+                put_u32(&mut buf, height);
+                put_u32(&mut buf, total_len);
+                put_u32(&mut buf, chunks);
+            }
+            Self::ClipboardChunk {
+                transfer_id,
+                index,
+                data,
+            } => {
+                let actual = CLIPBOARD_CHUNK_HEADER_SIZE + data.len();
+                if actual > MAX_DATAGRAM_SIZE {
+                    return Err(ProtocolError::TooLarge {
+                        actual,
+                        limit: MAX_DATAGRAM_SIZE,
+                    });
+                }
+                put_u64(&mut buf, transfer_id);
+                put_u32(&mut buf, index);
+                buf.extend_from_slice(&data);
+            }
+        }
+        Ok(buf)
+    }
 
-    fn try_from(buf: [u8; MAX_EVENT_SIZE]) -> Result<Self, Self::Error> {
-        let mut buf = &buf[..];
-        let event_type = decode_u8(&mut buf)?;
-        match EventType::try_from(event_type)? {
+    pub fn decode(mut buf: &[u8]) -> Result<Self, ProtocolError> {
+        if buf.len() > MAX_DATAGRAM_SIZE {
+            return Err(ProtocolError::TooLarge {
+                actual: buf.len(),
+                limit: MAX_DATAGRAM_SIZE,
+            });
+        }
+        match EventType::try_from(get_u8(&mut buf)?)? {
             EventType::PointerMotion => {
                 Ok(Self::Input(InputEvent::Pointer(PointerEvent::Motion {
-                    time: decode_u32(&mut buf)?,
-                    dx: decode_f64(&mut buf)?,
-                    dy: decode_f64(&mut buf)?,
+                    time: get_u32(&mut buf)?,
+                    dx: get_f64(&mut buf)?,
+                    dy: get_f64(&mut buf)?,
                 })))
             }
             EventType::PointerButton => {
                 Ok(Self::Input(InputEvent::Pointer(PointerEvent::Button {
-                    time: decode_u32(&mut buf)?,
-                    button: decode_u32(&mut buf)?,
-                    state: decode_u32(&mut buf)?,
+                    time: get_u32(&mut buf)?,
+                    button: get_u32(&mut buf)?,
+                    state: get_u32(&mut buf)?,
                 })))
             }
             EventType::PointerAxis => Ok(Self::Input(InputEvent::Pointer(PointerEvent::Axis {
-                time: decode_u32(&mut buf)?,
-                axis: decode_u8(&mut buf)?,
-                value: decode_f64(&mut buf)?,
+                time: get_u32(&mut buf)?,
+                axis: get_u8(&mut buf)?,
+                value: get_f64(&mut buf)?,
             }))),
             EventType::PointerAxisValue120 => Ok(Self::Input(InputEvent::Pointer(
                 PointerEvent::AxisDiscrete120 {
-                    axis: decode_u8(&mut buf)?,
-                    value: decode_i32(&mut buf)?,
+                    axis: get_u8(&mut buf)?,
+                    value: get_i32(&mut buf)?,
                 },
             ))),
             EventType::KeyboardKey => Ok(Self::Input(InputEvent::Keyboard(KeyboardEvent::Key {
-                time: decode_u32(&mut buf)?,
-                key: decode_u32(&mut buf)?,
-                state: decode_u8(&mut buf)?,
+                time: get_u32(&mut buf)?,
+                key: get_u32(&mut buf)?,
+                state: get_u8(&mut buf)?,
             }))),
             EventType::KeyboardModifiers => Ok(Self::Input(InputEvent::Keyboard(
                 KeyboardEvent::Modifiers {
-                    depressed: decode_u32(&mut buf)?,
-                    latched: decode_u32(&mut buf)?,
-                    locked: decode_u32(&mut buf)?,
-                    group: decode_u32(&mut buf)?,
+                    depressed: get_u32(&mut buf)?,
+                    latched: get_u32(&mut buf)?,
+                    locked: get_u32(&mut buf)?,
+                    group: get_u32(&mut buf)?,
                 },
             ))),
             EventType::Ping => Ok(Self::Ping),
-            EventType::Pong => Ok(Self::Pong(decode_u8(&mut buf)? != 0)),
-            EventType::Enter => Ok(Self::Enter(decode_u8(&mut buf)?.try_into()?)),
-            EventType::Leave => Ok(Self::Leave(decode_u32(&mut buf)?)),
-            EventType::Ack => Ok(Self::Ack(decode_u32(&mut buf)?)),
+            EventType::Pong => Ok(Self::Pong(get_u8(&mut buf)? != 0)),
+            EventType::Enter => Ok(Self::Enter(get_u8(&mut buf)?.try_into()?)),
+            EventType::Leave => Ok(Self::Leave(get_u32(&mut buf)?)),
+            EventType::Ack => Ok(Self::Ack(get_u32(&mut buf)?)),
             EventType::Hello => {
-                let mut commit = [0u8; 8];
-                for b in commit.iter_mut() {
-                    *b = decode_u8(&mut buf)?;
-                }
+                let mut commit = [0; 8];
+                commit.copy_from_slice(take(&mut buf, 8)?);
                 Ok(Self::Hello { commit })
             }
+            EventType::ClipboardStart => {
+                let transfer_id = get_u64(&mut buf)?;
+                let total_len = get_u32(&mut buf)?;
+                let chunks = get_u32(&mut buf)?;
+                validate_clipboard_start(total_len, chunks)?;
+                Ok(Self::ClipboardStart {
+                    transfer_id,
+                    total_len,
+                    chunks,
+                })
+            }
+            EventType::ClipboardImageStart => {
+                let transfer_id = get_u64(&mut buf)?;
+                let width = get_u32(&mut buf)?;
+                let height = get_u32(&mut buf)?;
+                let total_len = get_u32(&mut buf)?;
+                let chunks = get_u32(&mut buf)?;
+                validate_clipboard_image(width, height, total_len, chunks)?;
+                Ok(Self::ClipboardImageStart {
+                    transfer_id,
+                    width,
+                    height,
+                    total_len,
+                    chunks,
+                })
+            }
+            EventType::ClipboardChunk => Ok(Self::ClipboardChunk {
+                transfer_id: get_u64(&mut buf)?,
+                index: get_u32(&mut buf)?,
+                data: buf.to_vec(),
+            }),
         }
     }
 }
 
-impl From<ProtoEvent> for ([u8; MAX_EVENT_SIZE], usize) {
-    fn from(event: ProtoEvent) -> Self {
-        let mut buf = [0u8; MAX_EVENT_SIZE];
-        let mut len = 0usize;
-        {
-            let mut buf = &mut buf[..];
-            let buf = &mut buf;
-            let len = &mut len;
-            encode_u8(buf, len, event.event_type() as u8);
-            match event {
-                ProtoEvent::Input(event) => match event {
-                    InputEvent::Pointer(p) => match p {
-                        PointerEvent::Motion { time, dx, dy } => {
-                            encode_u32(buf, len, time);
-                            encode_f64(buf, len, dx);
-                            encode_f64(buf, len, dy);
-                        }
-                        PointerEvent::Button {
-                            time,
-                            button,
-                            state,
-                        } => {
-                            encode_u32(buf, len, time);
-                            encode_u32(buf, len, button);
-                            encode_u32(buf, len, state);
-                        }
-                        PointerEvent::Axis { time, axis, value } => {
-                            encode_u32(buf, len, time);
-                            encode_u8(buf, len, axis);
-                            encode_f64(buf, len, value);
-                        }
-                        PointerEvent::AxisDiscrete120 { axis, value } => {
-                            encode_u8(buf, len, axis);
-                            encode_i32(buf, len, value);
-                        }
-                    },
-                    InputEvent::Keyboard(k) => match k {
-                        KeyboardEvent::Key { time, key, state } => {
-                            encode_u32(buf, len, time);
-                            encode_u32(buf, len, key);
-                            encode_u8(buf, len, state);
-                        }
-                        KeyboardEvent::Modifiers {
-                            depressed,
-                            latched,
-                            locked,
-                            group,
-                        } => {
-                            encode_u32(buf, len, depressed);
-                            encode_u32(buf, len, latched);
-                            encode_u32(buf, len, locked);
-                            encode_u32(buf, len, group);
-                        }
-                    },
-                },
-                ProtoEvent::Ping => {}
-                ProtoEvent::Pong(alive) => encode_u8(buf, len, alive as u8),
-                ProtoEvent::Enter(pos) => encode_u8(buf, len, pos as u8),
-                ProtoEvent::Leave(serial) => encode_u32(buf, len, serial),
-                ProtoEvent::Ack(serial) => encode_u32(buf, len, serial),
-                ProtoEvent::Hello { commit } => {
-                    for b in commit.iter() {
-                        encode_u8(buf, len, *b);
-                    }
-                }
+fn validate_clipboard_start(total_len: u32, chunks: u32) -> Result<(), ProtocolError> {
+    if total_len as usize > MAX_CLIPBOARD_SIZE {
+        return Err(ProtocolError::TooLarge {
+            actual: total_len as usize,
+            limit: MAX_CLIPBOARD_SIZE,
+        });
+    }
+    let expected = if total_len == 0 {
+        0
+    } else {
+        total_len.div_ceil(MAX_CLIPBOARD_CHUNK_SIZE as u32)
+    };
+    if chunks != expected {
+        return Err(ProtocolError::InvalidChunkCount {
+            expected,
+            actual: chunks,
+        });
+    }
+    Ok(())
+}
+
+fn validate_clipboard_image(
+    width: u32,
+    height: u32,
+    total_len: u32,
+    chunks: u32,
+) -> Result<(), ProtocolError> {
+    let expected_len = usize::try_from(width)
+        .ok()
+        .and_then(|width| {
+            usize::try_from(height)
+                .ok()
+                .and_then(|height| width.checked_mul(height))
+        })
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or(ProtocolError::TooLarge {
+            actual: usize::MAX,
+            limit: MAX_CLIPBOARD_SIZE,
+        })?;
+    if expected_len != total_len as usize {
+        return Err(ProtocolError::TooLarge {
+            actual: total_len as usize,
+            limit: expected_len,
+        });
+    }
+    validate_clipboard_start(total_len, chunks)
+}
+
+fn take<'a>(buf: &mut &'a [u8], len: usize) -> Result<&'a [u8], ProtocolError> {
+    if buf.len() < len {
+        return Err(ProtocolError::Truncated);
+    }
+    let (value, rest) = buf.split_at(len);
+    *buf = rest;
+    Ok(value)
+}
+
+fn get_u8(buf: &mut &[u8]) -> Result<u8, ProtocolError> {
+    Ok(take(buf, 1)?[0])
+}
+fn get_u32(buf: &mut &[u8]) -> Result<u32, ProtocolError> {
+    Ok(u32::from_be_bytes(
+        take(buf, 4)?.try_into().expect("length checked"),
+    ))
+}
+fn get_u64(buf: &mut &[u8]) -> Result<u64, ProtocolError> {
+    Ok(u64::from_be_bytes(
+        take(buf, 8)?.try_into().expect("length checked"),
+    ))
+}
+fn get_i32(buf: &mut &[u8]) -> Result<i32, ProtocolError> {
+    Ok(i32::from_be_bytes(
+        take(buf, 4)?.try_into().expect("length checked"),
+    ))
+}
+fn get_f64(buf: &mut &[u8]) -> Result<f64, ProtocolError> {
+    Ok(f64::from_be_bytes(
+        take(buf, 8)?.try_into().expect("length checked"),
+    ))
+}
+fn put_u32(buf: &mut Vec<u8>, value: u32) {
+    buf.extend_from_slice(&value.to_be_bytes());
+}
+fn put_u64(buf: &mut Vec<u8>, value: u64) {
+    buf.extend_from_slice(&value.to_be_bytes());
+}
+fn put_i32(buf: &mut Vec<u8>, value: i32) {
+    buf.extend_from_slice(&value.to_be_bytes());
+}
+fn put_f64(buf: &mut Vec<u8>, value: f64) {
+    buf.extend_from_slice(&value.to_be_bytes());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_round_trip(event: ProtoEvent) {
+        let encoded = event.encode().unwrap();
+        let decoded = ProtoEvent::decode(&encoded).unwrap();
+        assert_eq!(decoded.encode().unwrap(), encoded);
+    }
+
+    #[test]
+    fn fixed_events_round_trip() {
+        assert_round_trip(ProtoEvent::Ping);
+        assert_round_trip(ProtoEvent::Pong(true));
+        assert_round_trip(ProtoEvent::Enter(Position::Right));
+        assert_round_trip(ProtoEvent::Leave(u32::MAX));
+        assert_round_trip(ProtoEvent::Ack(17));
+        assert_round_trip(ProtoEvent::Hello {
+            commit: *b"deadbeef",
+        });
+        assert_round_trip(ProtoEvent::Input(InputEvent::Pointer(
+            PointerEvent::Motion {
+                time: 9,
+                dx: -1.5,
+                dy: 2.25,
+            },
+        )));
+    }
+
+    #[test]
+    fn clipboard_events_round_trip() {
+        assert_round_trip(ProtoEvent::ClipboardStart {
+            transfer_id: 42,
+            total_len: 5,
+            chunks: 1,
+        });
+        assert_round_trip(ProtoEvent::ClipboardImageStart {
+            transfer_id: 43,
+            width: 2,
+            height: 1,
+            total_len: 8,
+            chunks: 1,
+        });
+        assert_round_trip(ProtoEvent::ClipboardChunk {
+            transfer_id: 42,
+            index: 0,
+            data: b"hello".to_vec(),
+        });
+    }
+
+    #[test]
+    fn truncated_events_are_rejected() {
+        assert!(matches!(
+            ProtoEvent::decode(&[EventType::Ack as u8]),
+            Err(ProtocolError::Truncated)
+        ));
+        assert!(matches!(
+            ProtoEvent::decode(&[EventType::ClipboardStart as u8]),
+            Err(ProtocolError::Truncated)
+        ));
+        assert!(matches!(
+            ProtoEvent::decode(&[EventType::ClipboardChunk as u8]),
+            Err(ProtocolError::Truncated)
+        ));
+    }
+
+    #[test]
+    fn clipboard_limits_are_enforced() {
+        let chunks = (MAX_CLIPBOARD_SIZE as u32).div_ceil(MAX_CLIPBOARD_CHUNK_SIZE as u32);
+        assert_round_trip(ProtoEvent::ClipboardStart {
+            transfer_id: 1,
+            total_len: MAX_CLIPBOARD_SIZE as u32,
+            chunks,
+        });
+        assert!(matches!(
+            ProtoEvent::ClipboardStart {
+                transfer_id: 1,
+                total_len: MAX_CLIPBOARD_SIZE as u32 + 1,
+                chunks,
             }
-        }
-        (buf, len)
+            .encode(),
+            Err(ProtocolError::TooLarge { .. })
+        ));
+        assert_round_trip(ProtoEvent::ClipboardChunk {
+            transfer_id: 1,
+            index: 0,
+            data: vec![0; MAX_CLIPBOARD_CHUNK_SIZE],
+        });
+        assert!(matches!(
+            ProtoEvent::ClipboardChunk {
+                transfer_id: 1,
+                index: 0,
+                data: vec![0; MAX_CLIPBOARD_CHUNK_SIZE + 1],
+            }
+            .encode(),
+            Err(ProtocolError::TooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn unknown_events_remain_forward_compatible_errors() {
+        assert!(matches!(
+            ProtoEvent::decode(&[u8::MAX]),
+            Err(ProtocolError::InvalidEventId(_))
+        ));
     }
 }
-
-macro_rules! decode_impl {
-    ($t:ty) => {
-        paste! {
-            fn [<decode_ $t>](data: &mut &[u8]) -> Result<$t, ProtocolError> {
-                let (int_bytes, rest) = data.split_at(size_of::<$t>());
-                *data = rest;
-                Ok($t::from_be_bytes(int_bytes.try_into().unwrap()))
-            }
-        }
-    };
-}
-
-decode_impl!(u8);
-decode_impl!(u32);
-decode_impl!(i32);
-decode_impl!(f64);
-
-macro_rules! encode_impl {
-    ($t:ty) => {
-        paste! {
-            fn [<encode_ $t>](buf: &mut &mut [u8], amt: &mut usize, n: $t) {
-                let src = n.to_be_bytes();
-                let data = std::mem::take(buf);
-                let (int_bytes, rest) = data.split_at_mut(size_of::<$t>());
-                int_bytes.copy_from_slice(&src);
-                *amt += size_of::<$t>();
-                *buf = rest
-            }
-        }
-    };
-}
-
-encode_impl!(u8);
-encode_impl!(u32);
-encode_impl!(i32);
-encode_impl!(f64);
