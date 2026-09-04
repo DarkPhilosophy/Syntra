@@ -328,6 +328,12 @@ fn build_ui(app: &Application) {
                     FrontendEvent::IncomingDisconnected(addr) => {
                         window.show_toast(format!("{addr} disconnected").as_str());
                     }
+                    FrontendEvent::ClipboardSettings(settings) => {
+                        window.set_clipboard_settings(settings);
+                    }
+                    FrontendEvent::ClipboardTransferStatus(status) => {
+                        window.update_clipboard_transfer(status);
+                    }
                 }
             }
         }

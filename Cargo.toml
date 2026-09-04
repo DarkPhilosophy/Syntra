@@ -7,6 +7,9 @@ members = [
     "lan-mouse-cli",
     "lan-mouse-gtk",
     "lan-mouse-proto",
+    "lan-mouse-adapter-api",
+    "adapters/fuse",
+    "adapters/gtk-clipboard",
 ]
 
 [package]
@@ -34,6 +37,8 @@ lan-mouse-cli = { path = "lan-mouse-cli", version = "0.3.0" }
 lan-mouse-gtk = { path = "lan-mouse-gtk", version = "0.3.0", optional = true }
 lan-mouse-ipc = { path = "lan-mouse-ipc", version = "0.3.0" }
 lan-mouse-proto = { path = "lan-mouse-proto", version = "0.3.0" }
+lan-mouse-adapter-api = { path = "lan-mouse-adapter-api", version = "0.1.0" }
+base64 = "0.22"
 arboard = { version = "3.6.1", features = ["wayland-data-control"] }
 shadow-rs = { version = "1.2.0", features = ["metadata"] }
 
@@ -53,11 +58,11 @@ tokio = { version = "1.32.0", features = [
     "sync",
     "signal",
 ] }
+tokio-util = { version = "0.7", features = ["codec"] }
 futures = "0.3.28"
 clap = { version = "4.4.11", features = ["derive"] }
 slab = "0.4.9"
 thiserror = "2.0.0"
-tokio-util = "0.7.11"
 local-channel = "0.1.5"
 webrtc-dtls = { version = "0.12.0", features = ["pem"] }
 webrtc-util = "0.11.0"

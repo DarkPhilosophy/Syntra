@@ -17,7 +17,7 @@ use toml;
 use toml_edit::{self, DocumentMut};
 
 use lan_mouse_cli::CliArgs;
-use lan_mouse_ipc::{DEFAULT_PORT, Position};
+use lan_mouse_ipc::{ClipboardSettings, DEFAULT_PORT, Position};
 
 use input_event::scancode::{
     self,
@@ -69,6 +69,9 @@ struct ConfigToml {
     cert_path: Option<PathBuf>,
     clients: Option<Vec<TomlClient>>,
     authorized_fingerprints: Option<HashMap<String, String>>,
+    clipboard_text: Option<bool>,
+    clipboard_image: Option<bool>,
+    clipboard_files: Option<bool>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, Eq, PartialEq)]
@@ -479,6 +482,22 @@ impl Config {
             self.config_toml = Some(Default::default());
         }
         self.config_toml.as_mut().expect("config").port = Some(port);
+    }
+
+    pub fn clipboard_settings(&self) -> ClipboardSettings {
+        let config = self.config_toml.as_ref();
+        ClipboardSettings {
+            text: config.and_then(|c| c.clipboard_text).unwrap_or(true),
+            image: config.and_then(|c| c.clipboard_image).unwrap_or(true),
+            files: config.and_then(|c| c.clipboard_files).unwrap_or(true),
+        }
+    }
+
+    pub fn set_clipboard_settings(&mut self, settings: ClipboardSettings) {
+        let config = self.config_toml.get_or_insert_with(Default::default);
+        config.clipboard_text = Some(settings.text);
+        config.clipboard_image = Some(settings.image);
+        config.clipboard_files = Some(settings.files);
     }
 
     /// list of configured clients

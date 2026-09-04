@@ -205,6 +205,74 @@
                       </object>
                     </child>
                     <child>
+                      <object class="AdwPreferencesGroup" id="clipboard_group">
+                        <property name="title" translatable="yes">Clipboard</property>
+                        <child>
+                          <object class="AdwActionRow">
+                            <property name="title" translatable="yes">Text</property>
+                            <property name="subtitle" translatable="yes">Synchronize copied text</property>
+                            <child type="suffix">
+                              <object class="GtkSwitch" id="clipboard_text_switch">
+                                <property name="valign">center</property>
+                                <property name="tooltip-text" translatable="yes">Synchronize text clipboard</property>
+                                <signal name="state-set" handler="handle_clipboard_text" swapped="true"/>
+                                <accessibility>
+                                  <property name="label" translatable="yes">Synchronize text clipboard</property>
+                                </accessibility>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="AdwActionRow">
+                            <property name="title" translatable="yes">Images</property>
+                            <property name="subtitle" translatable="yes">Synchronize copied images</property>
+                            <child type="suffix">
+                              <object class="GtkSwitch" id="clipboard_image_switch">
+                                <property name="valign">center</property>
+                                <property name="tooltip-text" translatable="yes">Synchronize image clipboard</property>
+                                <signal name="state-set" handler="handle_clipboard_image" swapped="true"/>
+                                <accessibility>
+                                  <property name="label" translatable="yes">Synchronize image clipboard</property>
+                                </accessibility>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="AdwActionRow">
+                            <property name="title" translatable="yes">Files</property>
+                            <property name="subtitle" translatable="yes">Synchronize copied files</property>
+                            <child type="suffix">
+                              <object class="GtkSwitch" id="clipboard_files_switch">
+                                <property name="valign">center</property>
+                                <property name="tooltip-text" translatable="yes">Synchronize file clipboard</property>
+                                <signal name="state-set" handler="handle_clipboard_files" swapped="true"/>
+                                <accessibility>
+                                  <property name="label" translatable="yes">Synchronize file clipboard</property>
+                                </accessibility>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="AdwPreferencesGroup" id="transfers_group">
+                        <property name="title" translatable="yes">Transfers</property>
+                        <child>
+                          <object class="GtkListBox" id="transfers_list">
+                            <property name="selection-mode">none</property>
+                            <child type="placeholder">
+                              <object class="AdwActionRow">
+                                <property name="title" translatable="yes">No active transfers</property>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                    <child>
                       <object class="AdwPreferencesGroup">
                         <property name="title" translatable="yes">Connections</property>
                         <property name="header-suffix">

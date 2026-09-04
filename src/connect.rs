@@ -161,14 +161,7 @@ impl LanMouseConnection {
         handle: ClientHandle,
     ) -> Result<(), LanMouseConnectionError> {
         log::trace!("{event} >->->->->-");
-        let requires_remote_ready = matches!(
-            &event,
-            ProtoEvent::Input(_)
-                | ProtoEvent::Enter(_)
-                | ProtoEvent::ClipboardStart { .. }
-                | ProtoEvent::ClipboardImageStart { .. }
-                | ProtoEvent::ClipboardChunk { .. }
-        );
+        let requires_remote_ready = matches!(&event, ProtoEvent::Input(_) | ProtoEvent::Enter(_));
         let buf = event.encode()?;
         if let Some(addr) = self.client_manager.active_addr(handle) {
             let conn = {

@@ -1,3 +1,4 @@
+mod adapter_manager;
 mod capture;
 pub mod capture_test;
 pub mod client;
@@ -8,5 +9,7 @@ mod crypto;
 mod dns;
 mod emulation;
 pub mod emulation_test;
+mod file_transfer;
 mod listen;
 pub mod service;
+mod transfer_manager;

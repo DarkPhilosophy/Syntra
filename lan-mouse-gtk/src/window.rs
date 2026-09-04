@@ -2,17 +2,20 @@ mod imp;
 
 use std::collections::HashMap;
 
+use adw::ActionRow;
 use adw::prelude::*;
 use adw::subclass::prelude::*;
 use glib::{Object, clone};
 use gtk::{
-    NoSelection, gio,
+    Button, NoSelection, gio,
     glib::{self, closure_local},
+    prelude::*,
 };
 
 use lan_mouse_ipc::{
-    ClientConfig, ClientHandle, ClientState, DEFAULT_PORT, FrontendRequest, FrontendRequestWriter,
-    Position,
+    ClientConfig, ClientHandle, ClientState, ClipboardSettings, ClipboardTransferId,
+    ClipboardTransferState, ClipboardTransferStatus, DEFAULT_PORT, FrontendRequest,
+    FrontendRequestWriter, Position,
 };
 
 use crate::{
@@ -456,6 +459,65 @@ impl Window {
     pub(super) fn add_toast(&self, toast: adw::Toast) {
         let toast_overlay = &self.imp().toast_overlay;
         toast_overlay.add_toast(toast);
+    }
+
+    pub(super) fn set_clipboard_settings(&self, settings: ClipboardSettings) {
+        self.imp().clipboard_text_switch.set_state(settings.text);
+        self.imp().clipboard_text_switch.set_active(settings.text);
+        self.imp().clipboard_image_switch.set_state(settings.image);
+        self.imp().clipboard_image_switch.set_active(settings.image);
+        self.imp().clipboard_files_switch.set_state(settings.files);
+        self.imp().clipboard_files_switch.set_active(settings.files);
+    }
+
+    pub(super) fn update_clipboard_transfer(&self, status: ClipboardTransferStatus) {
+        let mut rows = self.imp().transfer_rows.borrow_mut();
+        let entry = rows
+            .entry((status.transfer_id, status.file_id))
+            .or_insert_with(|| {
+                let row = ActionRow::new();
+                let cancel = Button::with_label("Cancel");
+                cancel.update_property(&[gtk::accessible::Property::Label(&format!(
+                    "Cancel clipboard transfer: {}",
+                    status.name
+                ))]);
+                cancel.connect_clicked(clone!(
+                    #[strong(rename_to = window)]
+                    self,
+                    move |_| window
+                        .request(FrontendRequest::CancelClipboardTransfer(status.transfer_id))
+                ));
+                row.add_suffix(&cancel);
+                self.imp().transfers_list.append(&row);
+                (row, cancel)
+            });
+        let (row, cancel) = entry;
+        let terminal = matches!(
+            &status.state,
+            ClipboardTransferState::Completed
+                | ClipboardTransferState::Cancelled
+                | ClipboardTransferState::Failed(_)
+        );
+        cancel.set_sensitive(!terminal);
+        cancel.set_visible(!terminal);
+        let direction = match status.direction {
+            lan_mouse_ipc::ClipboardTransferDirection::Sending => "Sending",
+            lan_mouse_ipc::ClipboardTransferDirection::Receiving => "Receiving",
+        };
+        let state = match &status.state {
+            ClipboardTransferState::Failed(reason) => format!("Failed: {reason}"),
+            other => format!("{other:?}"),
+        };
+        let subtitle = format!(
+            "{direction} · {} / {} bytes · {state} · {} bytes/s",
+            status.transferred_bytes, status.total_bytes, status.bytes_per_second
+        );
+        row.set_title(&status.name);
+        row.set_subtitle(&subtitle);
+        row.update_property(&[gtk::accessible::Property::Label(&format!(
+            "{}: {}",
+            status.name, subtitle
+        ))]);
     }
 
     pub(super) fn set_capture(&self, active: bool) {

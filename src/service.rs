@@ -1,4 +1,8 @@
 use crate::{
+    adapter_manager::{
+        AdapterId as ProcessAdapterId, AdapterPaths, AdapterProcessManager, ManagerCommand,
+        ManagerEvent,
+    },
     capture::{Capture, CaptureType, ICaptureEvent},
     client::ClientManager,
     clipboard::{Clipboard, ClipboardContent},
@@ -7,22 +11,32 @@ use crate::{
     crypto,
     dns::{DnsEvent, DnsResolver},
     emulation::{Emulation, EmulationEvent},
+    file_transfer::{FileOffer, OutgoingFile, TransferError},
     listen::{LanMouseListener, ListenerCreationError},
+    transfer_manager::{TransferAction, TransferFrontendEvent, TransferOwner, TransferState},
 };
 use futures::StreamExt;
+use lan_mouse_adapter_api::{Message as AdapterMessage, Operation, PublishFileClipboard, Released};
 use lan_mouse_ipc::{
-    AsyncFrontendListener, ClientHandle, FrontendEvent, FrontendRequest, IpcError,
+    AsyncFrontendListener, ClientHandle, ClipboardSettings, ClipboardTransferDirection,
+    ClipboardTransferState, ClipboardTransferStatus, FrontendEvent, FrontendRequest, IpcError,
     IpcListenerCreationError, Position, Status,
 };
 use log;
+use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     io,
     net::{IpAddr, SocketAddr},
+    path::PathBuf,
     sync::{Arc, RwLock},
 };
 use thiserror::Error;
-use tokio::{process::Command, signal, sync::Notify};
+use tokio::{
+    process::Command,
+    signal,
+    sync::{Notify, mpsc},
+};
 
 #[derive(Debug, Error)]
 pub enum ServiceError {
@@ -34,6 +48,8 @@ pub enum ServiceError {
     ListenError(#[from] ListenerCreationError),
     #[error("failed to load certificate: `{0}`")]
     Certificate(#[from] crypto::Error),
+    #[error(transparent)]
+    Adapter(#[from] crate::adapter_manager::ManagerError),
 }
 
 pub struct Service {
@@ -63,6 +79,8 @@ pub struct Service {
     capture_status: Status,
     /// status of input emulation (enabled / disabled)
     emulation_status: Status,
+    /// clipboard capability settings
+    clipboard_settings: ClipboardSettings,
     /// keep track of registered connections to avoid duplicate barriers
     incoming_conns: HashSet<SocketAddr>,
     /// map from capture handle to connection info
@@ -70,6 +88,12 @@ pub struct Service {
     clipboard: Clipboard,
     next_clipboard_transfer: u64,
     next_trigger_handle: u64,
+    adapter_manager: Option<AdapterProcessManager>,
+    adapter_events: mpsc::Receiver<ManagerEvent>,
+    transfers: TransferState<Peer>,
+    source_result_tx: mpsc::Sender<SourceReadResult>,
+    source_results: mpsc::Receiver<SourceReadResult>,
+    gtk_ready: bool,
 }
 
 #[derive(Debug)]
@@ -77,6 +101,23 @@ struct Incoming {
     fingerprint: String,
     addr: SocketAddr,
     pos: Position,
+}
+
+const SOURCE_RESULT_CAPACITY: usize = 32;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum Peer {
+    Capture(ClientHandle),
+    Emulation(SocketAddr),
+}
+
+struct SourceReadResult {
+    owner: TransferOwner<Peer>,
+    file_id: u64,
+    request_id: u64,
+    offset: u64,
+    length: u64,
+    result: Result<(OutgoingFile, Option<(u64, Vec<u8>)>, Option<[u8; 32]>), TransferError>,
 }
 
 impl Service {
@@ -105,11 +146,27 @@ impl Service {
         let emulation_backend = config.emulation_backend().map(|b| b.into());
         let emulation = Emulation::new(emulation_backend, listener);
         let clipboard = Clipboard::new();
+        let executable_dir = std::env::current_exe()?
+            .parent()
+            .map(PathBuf::from)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "service executable has no parent directory",
+                )
+            })?;
+        let adapter_paths = AdapterPaths::new(
+            executable_dir.join("lan-mouse-adapter-gtk-clipboard"),
+            executable_dir.join("lan-mouse-adapter-fuse"),
+        )?;
+        let (adapter_manager, adapter_events) = AdapterProcessManager::start(adapter_paths);
+        let (source_result_tx, source_results) = mpsc::channel(SOURCE_RESULT_CAPACITY);
 
         // create dns resolver
         let resolver = DnsResolver::new()?;
 
         let port = config.port();
+        let clipboard_settings = config.clipboard_settings();
         let service = Self {
             config,
             capture,
@@ -124,11 +181,18 @@ impl Service {
             pending_frontend_events: Default::default(),
             capture_status: Default::default(),
             emulation_status: Default::default(),
+            clipboard_settings,
             incoming_conn_info: Default::default(),
             incoming_conns: Default::default(),
             clipboard,
             next_clipboard_transfer: 0,
             next_trigger_handle: 0,
+            adapter_manager: Some(adapter_manager),
+            adapter_events,
+            transfers: TransferState::new(),
+            source_result_tx,
+            source_results,
+            gtk_ready: false,
         };
         Ok(service)
     }
@@ -152,33 +216,31 @@ impl Service {
                 _ = self.frontend_event_pending.notified() => self.handle_frontend_pending().await,
                 event = self.emulation.event() => self.handle_emulation_event(event),
                 event = self.capture.event() => self.handle_capture_event(event),
-                result = self.clipboard.next_read() => {
-                    match result {
-                        Ok(ClipboardContent::Text(text)) => {
-                            for handle in self.client_manager.active_clients() {
-                                self.next_clipboard_transfer = self.next_clipboard_transfer.wrapping_add(1);
-                                self.capture.send_clipboard(
-                                    handle,
-                                    self.next_clipboard_transfer,
-                                    text.as_bytes().to_vec(),
-                                    None,
-                                );
-                            }
-                        }
-                        Ok(ClipboardContent::Image { width, height, rgba }) => {
-                            for handle in self.client_manager.active_clients() {
-                                self.next_clipboard_transfer = self.next_clipboard_transfer.wrapping_add(1);
-                                self.capture.send_clipboard(
-                                    handle,
-                                    self.next_clipboard_transfer,
-                                    rgba.clone(),
-                                    Some((width, height)),
-                                );
-                            }
-                        }
-                        Err(arboard::Error::ContentNotAvailable) => {}
-                        Err(e) => log::warn!("failed to read clipboard: {e}"),
+                event = self.adapter_events.recv() => {
+                    if let Some(event) = event {
+                        self.handle_adapter_event(event);
                     }
+                },
+                result = self.source_results.recv() => {
+                    if let Some(result) = result {
+                        self.handle_source_result(result);
+                    }
+                },
+                result = self.clipboard.next_read() => match result {
+                    Ok(ClipboardContent::Text(text)) if self.clipboard_settings.text => {
+                        for handle in self.client_manager.active_clients() {
+                            self.next_clipboard_transfer = self.next_clipboard_transfer.wrapping_add(1);
+                            self.capture.send_clipboard(handle, self.next_clipboard_transfer, text.as_bytes().to_vec(), None);
+                        }
+                    }
+                    Ok(ClipboardContent::Image { width, height, rgba }) if self.clipboard_settings.image => {
+                        for handle in self.client_manager.active_clients() {
+                            self.next_clipboard_transfer = self.next_clipboard_transfer.wrapping_add(1);
+                            self.capture.send_clipboard(handle, self.next_clipboard_transfer, rgba.clone(), Some((width, height)));
+                        }
+                    }
+                    Ok(_) | Err(arboard::Error::ContentNotAvailable) => {}
+                    Err(e) => log::warn!("failed to read clipboard: {e}"),
                 },
                 event = self.resolver.event() => self.handle_resolver_event(event),
                 _ = self.config.changed() => self.handle_config_change(),
@@ -193,6 +255,10 @@ impl Service {
         self.emulation.terminate().await;
         log::debug!("terminating dns resolver ...");
         self.resolver.terminate().await;
+        log::debug!("terminating file adapters ...");
+        if let Some(adapter_manager) = self.adapter_manager.take() {
+            adapter_manager.shutdown().await?;
+        }
 
         Ok(())
     }
@@ -247,6 +313,35 @@ impl Service {
             }
             FrontendRequest::UpdateEnterHook(handle, enter_hook) => {
                 self.update_enter_hook(handle, enter_hook)
+            }
+            FrontendRequest::SetClipboardText(value) => {
+                self.clipboard_settings.text = value;
+                self.config.set_clipboard_settings(self.clipboard_settings);
+                self.save_config();
+                self.notify_frontend(FrontendEvent::ClipboardSettings(self.clipboard_settings));
+            }
+            FrontendRequest::SetClipboardImage(value) => {
+                self.clipboard_settings.image = value;
+                self.config.set_clipboard_settings(self.clipboard_settings);
+                self.save_config();
+                self.notify_frontend(FrontendEvent::ClipboardSettings(self.clipboard_settings));
+            }
+            FrontendRequest::SetClipboardFiles(value) => {
+                self.clipboard_settings.files = value;
+                self.config.set_clipboard_settings(self.clipboard_settings);
+                self.save_config();
+                self.notify_frontend(FrontendEvent::ClipboardSettings(self.clipboard_settings));
+            }
+            FrontendRequest::CancelClipboardTransfer(transfer_id) => {
+                log::info!("cancelling clipboard transfer {transfer_id}");
+                match self.transfers.cancel_ui(
+                    transfer_id,
+                    None,
+                    lan_mouse_proto::ClipboardCancelReason::User,
+                ) {
+                    Ok(actions) => self.execute_transfer_actions(actions),
+                    Err(error) => log::warn!("cannot cancel transfer {transfer_id}: {error}"),
+                }
             }
             FrontendRequest::SaveConfiguration => self.save_config(),
         }
@@ -364,11 +459,43 @@ impl Service {
                 }
             }
             EmulationEvent::Clipboard(content) => self.clipboard.write(content),
+            EmulationEvent::ClipboardProtocol { addr, event } => {
+                self.handle_file_protocol(Peer::Emulation(addr), event);
+            }
         }
     }
 
+    fn handle_file_protocol(&mut self, peer: Peer, event: lan_mouse_proto::ProtoEvent) {
+        use lan_mouse_proto::ProtoEvent;
+        match event {
+            ProtoEvent::ClipboardManifest {
+                transfer_id,
+                entries,
+            } => {
+                let adapter_id = transfer_id.to_string();
+                match self.transfers.inbound_manifest(
+                    peer,
+                    adapter_id,
+                    transfer_id.to_string(),
+                    transfer_id,
+                    lan_mouse_adapter_api::Operation::Copy,
+                    entries,
+                ) {
+                    Ok(actions) => self.execute_transfer_actions(actions),
+                    Err(error) => log::warn!("file manifest rejected for {peer:?}: {error}"),
+                }
+            }
+            event => match self.transfers.handle_protocol(&peer, event) {
+                Ok(actions) => self.execute_transfer_actions(actions),
+                Err(error) => log::warn!("file protocol rejected for {peer:?}: {error}"),
+            },
+        }
+    }
     fn handle_capture_event(&mut self, event: ICaptureEvent) {
         match event {
+            ICaptureEvent::Clipboard { handle, event } => {
+                self.handle_file_protocol(Peer::Capture(handle), event);
+            }
             ICaptureEvent::CaptureBegin(handle) => {
                 // we entered the capture zone for an incoming connection
                 // => notify it that its capture should be released
@@ -378,8 +505,6 @@ impl Service {
             }
             ICaptureEvent::CaptureDisabled => {
                 self.capture_status = Status::Disabled;
-                self.notify_frontend(FrontendEvent::CaptureStatus(self.capture_status));
-                self.emulation.set_capture_ready(false);
             }
             ICaptureEvent::CaptureEnabled => {
                 self.capture_status = Status::Enabled;
@@ -393,7 +518,6 @@ impl Service {
             }
         }
     }
-
     fn handle_resolver_event(&mut self, event: DnsEvent) {
         let handle = match event {
             DnsEvent::Resolving(handle) => {
@@ -423,6 +547,7 @@ impl Service {
         self.enumerate();
         self.notify_frontend(FrontendEvent::EmulationStatus(self.emulation_status));
         self.notify_frontend(FrontendEvent::CaptureStatus(self.capture_status));
+        self.notify_frontend(FrontendEvent::ClipboardSettings(self.clipboard_settings));
         self.notify_frontend(FrontendEvent::PortChanged(self.port, None));
         self.notify_frontend(FrontendEvent::PublicKeyFingerprint(
             self.public_key_fingerprint.clone(),
@@ -646,5 +771,345 @@ impl Service {
                 Err(e) => log::warn!("{cmd}: {e}"),
             }
         });
+    }
+    fn handle_adapter_event(&mut self, event: ManagerEvent) {
+        match event {
+            ManagerEvent::Started(_) | ManagerEvent::Ready(_) => {}
+            ManagerEvent::Message { adapter, message } => {
+                let adapter_id = match &adapter {
+                    ProcessAdapterId::Gtk => "gtk-clipboard".to_owned(),
+                    ProcessAdapterId::Fuse { transfer_id } => transfer_id.clone(),
+                };
+                let actions = match message {
+                    AdapterMessage::RangeRequest(request) => {
+                        let transfer_id = request.transfer_id.clone();
+                        let request_id = request.request_id;
+                        let offset = request.offset;
+                        match self.transfers.adapter_range_request(&adapter_id, request) {
+                            Ok(actions) => Ok(actions),
+                            Err(error) => {
+                                if let Some(manager) = self.adapter_manager.as_ref() {
+                                    let _ = manager.try_send(ManagerCommand::RangeResponse(
+                                        lan_mouse_adapter_api::RangeResponse {
+                                            transfer_id,
+                                            request_id,
+                                            offset,
+                                            data_base64: String::new(),
+                                            eof: true,
+                                            error: Some(error.to_string()),
+                                        },
+                                    ));
+                                }
+                                Err(error)
+                            }
+                        }
+                    }
+                    AdapterMessage::RemoteManifest(_) => {
+                        log::warn!(
+                            "adapter {adapter_id} sent an unexpected remote manifest; \
+                             cancelling its owned transfers"
+                        );
+                        Ok(self.transfers.adapter_lost(&adapter_id))
+                    }
+                    AdapterMessage::MountReady(ready) => {
+                        self.transfers.adapter_mount_ready(&adapter_id, ready)
+                    }
+                    AdapterMessage::Progress(progress) => {
+                        self.transfers.adapter_progress(&adapter_id, progress)
+                    }
+                    AdapterMessage::Completed(completion) => {
+                        self.transfers.adapter_completed(&adapter_id, completion)
+                    }
+                    AdapterMessage::Cancelled(cancelled) => {
+                        self.transfers.adapter_cancelled(&adapter_id, cancelled)
+                    }
+                    AdapterMessage::Released(released) => self.transfers.adapter_released(released),
+                    AdapterMessage::Unmounted(unmounted) => {
+                        self.transfers.adapter_unmounted(&adapter_id, unmounted)
+                    }
+                    AdapterMessage::CopyManifest(manifest) => {
+                        if matches!(manifest.operation, Operation::Move) {
+                            log::debug!("rejecting unsupported move clipboard manifest");
+                            Ok(Vec::new())
+                        } else {
+                            let uri_text = manifest
+                                .entries
+                                .iter()
+                                .filter(|entry| {
+                                    !matches!(entry.kind, lan_mouse_adapter_api::EntryKind::Other)
+                                })
+                                .map(|entry| entry.uri.as_str())
+                                .collect::<Vec<_>>()
+                                .join("\r\n");
+                            let mut actions = Vec::new();
+                            for handle in self.client_manager.active_clients() {
+                                self.next_clipboard_transfer =
+                                    self.next_clipboard_transfer.wrapping_add(1).max(1);
+                                let wire_id = self.next_clipboard_transfer;
+                                match crate::file_transfer::FileOffer::from_uri_list(
+                                    wire_id, &uri_text,
+                                ) {
+                                    Ok(offer) => match self.transfers.local_copy_manifest(
+                                        Peer::Capture(handle),
+                                        wire_id,
+                                        adapter_id.clone(),
+                                        manifest.clone(),
+                                        offer,
+                                    ) {
+                                        Ok(mut peer_actions) => actions.append(&mut peer_actions),
+                                        Err(error) => log::warn!(
+                                            "clipboard manifest for {handle} rejected: {error}"
+                                        ),
+                                    },
+                                    Err(error) => {
+                                        log::warn!("clipboard manifest rejected: {error}")
+                                    }
+                                }
+                            }
+                            Ok(actions)
+                        }
+                    }
+                    AdapterMessage::Hello { .. }
+                    | AdapterMessage::Error { .. }
+                    | AdapterMessage::PasteDestination(_)
+                    | AdapterMessage::RangeResponse(_)
+                    | AdapterMessage::PublishFileClipboard(_)
+                    | AdapterMessage::Cancel { .. }
+                    | AdapterMessage::ClipboardData { .. } => {
+                        log::debug!("adapter {:?} message not handled by service", adapter);
+                        Ok(Vec::new())
+                    }
+                };
+                match actions {
+                    Ok(actions) => self.execute_transfer_actions(actions),
+                    Err(error) => log::warn!("adapter {:?} event rejected: {error}", adapter),
+                }
+            }
+            ManagerEvent::Cancelled {
+                adapter,
+                transfer_id,
+                ..
+            } => {
+                let adapter_id = match &adapter {
+                    ProcessAdapterId::Gtk => "gtk-clipboard".to_owned(),
+                    ProcessAdapterId::Fuse { transfer_id } => transfer_id.clone(),
+                };
+                if let Ok(actions) = self.transfers.adapter_cancelled(
+                    &adapter_id,
+                    lan_mouse_adapter_api::Cancelled { transfer_id },
+                ) {
+                    self.execute_transfer_actions(actions);
+                }
+            }
+            ManagerEvent::Rejected { adapter, reason } => {
+                log::warn!("adapter {:?} rejected transfer: {}", adapter, reason)
+            }
+            ManagerEvent::Exited { adapter, status } => {
+                let id = match adapter {
+                    ProcessAdapterId::Gtk => "gtk-clipboard".to_owned(),
+                    ProcessAdapterId::Fuse { transfer_id } => transfer_id,
+                };
+                let actions = self.transfers.adapter_lost(&id);
+                self.execute_transfer_actions(actions);
+                log::warn!("adapter exited: {}", status);
+            }
+        }
+    }
+
+    fn handle_source_result(&mut self, result: SourceReadResult) {
+        match result.result {
+            Ok((file, Some((offset, data)), digest)) => {
+                if let Err(error) = self
+                    .transfers
+                    .insert_outgoing_file(
+                        &result.owner,
+                        result.file_id,
+                        result.request_id,
+                        result.offset,
+                        result.length,
+                        file,
+                    )
+                    .and_then(|_| {
+                        self.transfers
+                            .source_chunk(
+                                &result.owner,
+                                result.file_id,
+                                result.request_id,
+                                offset,
+                                data,
+                            )
+                            .map(|actions| {
+                                self.execute_transfer_actions(actions);
+                                ()
+                            })
+                    })
+                {
+                    log::warn!("source read failed: {error}");
+                    return;
+                }
+                if let Some(digest) = digest {
+                    match self.transfers.source_complete(
+                        &result.owner,
+                        result.file_id,
+                        result.request_id,
+                        result.offset + result.length,
+                        digest,
+                    ) {
+                        Ok(actions) => self.execute_transfer_actions(actions),
+                        Err(error) => log::warn!("source completion failed: {error}"),
+                    }
+                }
+            }
+            Ok(_) => log::warn!("source read returned no data"),
+            Err(error) => log::warn!(
+                "source read failed for {:?}/{}: {}",
+                result.owner,
+                result.file_id,
+                error
+            ),
+        }
+    }
+
+    fn notify_transfer_frontend(&mut self, event: TransferFrontendEvent<Peer>) {
+        match event {
+            TransferFrontendEvent::Progress {
+                ui_id,
+                file_id,
+                completed,
+                total,
+                ..
+            } => {
+                self.notify_frontend(FrontendEvent::ClipboardTransferStatus(
+                    ClipboardTransferStatus {
+                        transfer_id: ui_id,
+                        file_id,
+                        name: String::new(),
+                        direction: ClipboardTransferDirection::Receiving,
+                        transferred_bytes: completed,
+                        total_bytes: total,
+                        bytes_per_second: 0,
+                        state: ClipboardTransferState::Transferring,
+                    },
+                ));
+            }
+            TransferFrontendEvent::Completed { ui_id, file_id, .. } => self.notify_frontend(
+                FrontendEvent::ClipboardTransferStatus(ClipboardTransferStatus {
+                    transfer_id: ui_id,
+                    file_id: file_id.unwrap_or_default(),
+                    name: String::new(),
+                    direction: ClipboardTransferDirection::Receiving,
+                    transferred_bytes: 0,
+                    total_bytes: 0,
+                    bytes_per_second: 0,
+                    state: ClipboardTransferState::Completed,
+                }),
+            ),
+            TransferFrontendEvent::Cancelled { ui_id, file_id, .. } => self.notify_frontend(
+                FrontendEvent::ClipboardTransferStatus(ClipboardTransferStatus {
+                    transfer_id: ui_id,
+                    file_id: file_id.unwrap_or_default(),
+                    name: String::new(),
+                    direction: ClipboardTransferDirection::Receiving,
+                    transferred_bytes: 0,
+                    total_bytes: 0,
+                    bytes_per_second: 0,
+                    state: ClipboardTransferState::Cancelled,
+                }),
+            ),
+            TransferFrontendEvent::Failed {
+                ui_id,
+                file_id,
+                error,
+                ..
+            } => self.notify_frontend(FrontendEvent::ClipboardTransferStatus(
+                ClipboardTransferStatus {
+                    transfer_id: ui_id,
+                    file_id: file_id.unwrap_or_default(),
+                    name: String::new(),
+                    direction: ClipboardTransferDirection::Receiving,
+                    transferred_bytes: 0,
+                    total_bytes: 0,
+                    bytes_per_second: 0,
+                    state: ClipboardTransferState::Failed(error),
+                },
+            )),
+            TransferFrontendEvent::Offered { .. } => {}
+        }
+    }
+
+    fn execute_transfer_actions(&mut self, actions: Vec<TransferAction<Peer>>) {
+        for action in actions {
+            match action {
+                TransferAction::Peer { peer, event } => match peer {
+                    Peer::Capture(handle) => self.capture.send_proto(handle, event),
+                    Peer::Emulation(addr) => self.emulation.send_proto(addr, event),
+                },
+                TransferAction::Adapter {
+                    adapter_id,
+                    message,
+                } => {
+                    let command = match message {
+                        AdapterMessage::RemoteManifest(m) => ManagerCommand::RemoteManifest(m),
+                        AdapterMessage::RangeResponse(m) => ManagerCommand::RangeResponse(m),
+                        AdapterMessage::PublishFileClipboard(m) => {
+                            ManagerCommand::PublishFileClipboard(m)
+                        }
+                        AdapterMessage::Released(m) => ManagerCommand::Released(m),
+                        AdapterMessage::Unmounted(m) => ManagerCommand::Unmounted(m),
+                        AdapterMessage::Cancel { transfer_id } => {
+                            let adapter = if adapter_id == "gtk-clipboard" {
+                                ProcessAdapterId::Gtk
+                            } else {
+                                ProcessAdapterId::Fuse {
+                                    transfer_id: adapter_id.clone(),
+                                }
+                            };
+                            ManagerCommand::Cancel {
+                                adapter,
+                                transfer_id,
+                            }
+                        }
+                        _ => continue,
+                    };
+                    if let Some(manager) = self.adapter_manager.as_ref() {
+                        let _ = manager.try_send(command);
+                    }
+                }
+                TransferAction::Frontend(event) => self.notify_transfer_frontend(event),
+                TransferAction::ReadSource {
+                    owner,
+                    file_id,
+                    request_id,
+                    offset,
+                    length,
+                    offer,
+                } => {
+                    let tx = self.source_result_tx.clone();
+                    tokio::task::spawn_local(async move {
+                        let result = async {
+                            let mut file = offer.open(file_id, offset).await?;
+                            let mut hasher = Sha256::new();
+                            let chunk = file.next_chunk_bounded(length as usize).await?;
+                            if let Some((_, ref data)) = chunk {
+                                hasher.update(data);
+                            }
+                            let digest = file.is_eof().then(|| hasher.finalize().into());
+                            Ok((file, chunk, digest))
+                        }
+                        .await;
+                        let _ = tx
+                            .send(SourceReadResult {
+                                owner,
+                                file_id,
+                                request_id,
+                                offset,
+                                length,
+                                result,
+                            })
+                            .await;
+                    });
+                }
+            }
+        }
     }
 }

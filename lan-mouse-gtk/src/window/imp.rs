@@ -1,14 +1,14 @@
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 
 use adw::subclass::prelude::*;
 use adw::{ActionRow, PreferencesGroup, ToastOverlay, prelude::*};
 use glib::subclass::InitializingObject;
 use gtk::glib::clone;
-use gtk::{Button, CompositeTemplate, Entry, Image, Label, ListBox, gdk, gio, glib};
-
-use lan_mouse_ipc::{DEFAULT_PORT, FrontendRequestWriter};
+use gtk::{Button, CompositeTemplate, Entry, Image, Label, ListBox, Switch, gdk, gio, glib};
 
 use crate::authorization_window::AuthorizationWindow;
+use lan_mouse_ipc::{ClipboardTransferId, DEFAULT_PORT, FrontendRequestWriter};
 
 #[derive(CompositeTemplate, Default)]
 #[template(resource = "/de/feschber/LanMouse/window.ui")]
@@ -43,6 +43,19 @@ pub struct Window {
     pub input_emulation_button: TemplateChild<Button>,
     #[template_child]
     pub input_capture_button: TemplateChild<Button>,
+    #[template_child]
+    pub clipboard_text_switch: TemplateChild<Switch>,
+    #[template_child]
+    pub clipboard_image_switch: TemplateChild<Switch>,
+    #[template_child]
+    pub clipboard_files_switch: TemplateChild<Switch>,
+    #[template_child]
+    pub transfers_group: TemplateChild<PreferencesGroup>,
+    #[template_child]
+    pub transfers_list: TemplateChild<ListBox>,
+    pub transfer_rows: RefCell<
+        HashMap<(ClipboardTransferId, lan_mouse_ipc::ClipboardFileId), (ActionRow, Button)>,
+    >,
     #[template_child]
     pub authorized_list: TemplateChild<ListBox>,
     pub clients: RefCell<Option<gio::ListStore>>,
@@ -138,6 +151,27 @@ impl Window {
             .set_text(self.port.get().to_string().as_str());
         self.port_edit_apply.set_visible(false);
         self.port_edit_cancel.set_visible(false);
+    }
+
+    #[template_callback]
+    fn handle_clipboard_text(&self, state: bool) -> bool {
+        self.obj()
+            .request(lan_mouse_ipc::FrontendRequest::SetClipboardText(state));
+        true
+    }
+
+    #[template_callback]
+    fn handle_clipboard_image(&self, state: bool) -> bool {
+        self.obj()
+            .request(lan_mouse_ipc::FrontendRequest::SetClipboardImage(state));
+        true
+    }
+
+    #[template_callback]
+    fn handle_clipboard_files(&self, state: bool) -> bool {
+        self.obj()
+            .request(lan_mouse_ipc::FrontendRequest::SetClipboardFiles(state));
+        true
     }
 
     #[template_callback]

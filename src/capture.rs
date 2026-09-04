@@ -25,6 +25,11 @@ pub(crate) struct Capture {
 }
 
 pub(crate) enum ICaptureEvent {
+    /// A clipboard protocol event received from a connected peer.
+    Clipboard {
+        handle: CaptureHandle,
+        event: ProtoEvent,
+    },
     /// a client was entered
     CaptureBegin(CaptureHandle),
     /// capture disabled
@@ -62,6 +67,11 @@ enum CaptureRequest {
     Reenable,
     /// set release bind
     SetReleaseBind(Vec<scancode::Linux>),
+    /// send a protocol event without tying it to input readiness
+    SendProto {
+        handle: CaptureHandle,
+        event: ProtoEvent,
+    },
     SendClipboard {
         handle: CaptureHandle,
         transfer_id: u64,
@@ -163,6 +173,11 @@ impl Capture {
             })
             .expect("channel closed");
     }
+    pub(crate) fn send_proto(&self, handle: CaptureHandle, event: ProtoEvent) {
+        self.request_tx
+            .send(CaptureRequest::SendProto { handle, event })
+            .expect("channel closed");
+    }
 }
 
 /// debounce a statement `$st`, i.e. the statement is executed only if the
@@ -245,8 +260,30 @@ impl CaptureTask {
                         CaptureRequest::SetReleaseBind(bind) => {
                             self.release_bind.borrow_mut().clone_from(&bind);
                         }
+                        CaptureRequest::SendProto { handle, event } => {
+                            if let Err(e) = self.conn.send(event, handle).await {
+                                log::warn!("failed to send clipboard protocol event: {e}");
+                            }
+                        }
                         CaptureRequest::SendClipboard { handle, transfer_id, data, image_dimensions } => {
                             self.send_clipboard_transfer(handle, transfer_id, data, image_dimensions).await;
+                        }
+                    },
+                    (handle, event) = self.conn.recv() => {
+                        if matches!(
+                            &event,
+                            ProtoEvent::ClipboardStart { .. }
+                                | ProtoEvent::ClipboardImageStart { .. }
+                                | ProtoEvent::ClipboardChunk { .. }
+                                | ProtoEvent::ClipboardCapabilities(_)
+                                | ProtoEvent::ClipboardManifest { .. }
+                                | ProtoEvent::ClipboardFileRequest { .. }
+                                | ProtoEvent::ClipboardFileChunk { .. }
+                                | ProtoEvent::ClipboardFileComplete { .. }
+                                | ProtoEvent::ClipboardTransferCancel { .. }
+                                | ProtoEvent::ClipboardTransferProgress { .. }
+                        ) {
+                            self.event_tx.send(ICaptureEvent::Clipboard { handle, event }).expect("channel closed");
                         }
                     },
                     _ = self.cancellation_token.cancelled() => return,
@@ -332,6 +369,25 @@ impl CaptureTask {
                     None => return Ok(()),
                 },
                 (handle, event) = self.conn.recv() => {
+                    let is_clipboard = matches!(
+                        &event,
+                        ProtoEvent::ClipboardStart { .. }
+                            | ProtoEvent::ClipboardImageStart { .. }
+                            | ProtoEvent::ClipboardChunk { .. }
+                            | ProtoEvent::ClipboardCapabilities(_)
+                            | ProtoEvent::ClipboardManifest { .. }
+                            | ProtoEvent::ClipboardFileRequest { .. }
+                            | ProtoEvent::ClipboardFileChunk { .. }
+                            | ProtoEvent::ClipboardFileComplete { .. }
+                            | ProtoEvent::ClipboardTransferCancel { .. }
+                            | ProtoEvent::ClipboardTransferProgress { .. }
+                    );
+                    if is_clipboard {
+                        self.event_tx
+                            .send(ICaptureEvent::Clipboard { handle, event })
+                            .expect("channel closed");
+                        continue;
+                    }
                     if self.active_client != Some(handle) {
                         self.sync_captures(capture).await?;
                         continue;
@@ -380,6 +436,11 @@ impl CaptureTask {
                     }
                     CaptureRequest::SetReleaseBind(bind) => {
                         self.release_bind.borrow_mut().clone_from(&bind);
+                    }
+                    CaptureRequest::SendProto { handle, event } => {
+                        if let Err(e) = self.conn.send(event, handle).await {
+                            log::warn!("failed to send clipboard protocol event: {e}");
+                        }
                     }
                     CaptureRequest::SendClipboard { handle, transfer_id, data, image_dimensions } => {
                         self.send_clipboard_transfer(handle, transfer_id, data, image_dimensions).await;

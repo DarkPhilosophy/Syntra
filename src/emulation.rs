@@ -66,6 +66,11 @@ pub(crate) enum EmulationEvent {
         commit: [u8; 8],
     },
     Clipboard(ClipboardContent),
+    /// File-clipboard protocol traffic received from an authenticated listener peer.
+    ClipboardProtocol {
+        addr: SocketAddr,
+        event: ProtoEvent,
+    },
 }
 
 enum EmulationRequest {
@@ -73,6 +78,7 @@ enum EmulationRequest {
     Release(SocketAddr),
     ChangePort(u16),
     CaptureReady(bool),
+    SendProto { addr: SocketAddr, event: ProtoEvent },
     Terminate,
 }
 
@@ -120,6 +126,12 @@ impl Emulation {
     pub(crate) fn set_capture_ready(&self, ready: bool) {
         self.request_tx
             .send(EmulationRequest::CaptureReady(ready))
+            .expect("channel closed");
+    }
+
+    pub(crate) fn send_proto(&self, addr: SocketAddr, event: ProtoEvent) {
+        self.request_tx
+            .send(EmulationRequest::SendProto { addr, event })
             .expect("channel closed");
     }
 
@@ -299,6 +311,19 @@ impl ListenTask {
                                     }
                                 }
                             }
+                            event @ (
+                                ProtoEvent::ClipboardCapabilities(_)
+                                | ProtoEvent::ClipboardManifest { .. }
+                                | ProtoEvent::ClipboardFileRequest { .. }
+                                | ProtoEvent::ClipboardFileChunk { .. }
+                                | ProtoEvent::ClipboardFileComplete { .. }
+                                | ProtoEvent::ClipboardTransferCancel { .. }
+                                | ProtoEvent::ClipboardTransferProgress { .. }
+                            ) => {
+                                self.event_tx
+                                    .send(EmulationEvent::ClipboardProtocol { addr, event })
+                                    .expect("channel closed");
+                            }
                             _ => {}
                         }
                     }
@@ -328,6 +353,9 @@ impl ListenTask {
                     }
                     EmulationRequest::CaptureReady(ready) => {
                         self.capture_ready = ready;
+                    }
+                    EmulationRequest::SendProto { addr, event } => {
+                        self.listener.reply(addr, event).await;
                     }
                     EmulationRequest::Terminate => break,
                 },

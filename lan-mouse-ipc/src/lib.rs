@@ -186,6 +186,45 @@ pub struct ClientState {
     pub peer_commit: Option<[u8; 8]>,
 }
 
+pub type ClipboardTransferId = u64;
+pub type ClipboardFileId = u64;
+
+#[derive(Debug, Default, Eq, PartialEq, Clone, Copy, Serialize, Deserialize)]
+pub struct ClipboardSettings {
+    pub text: bool,
+    pub image: bool,
+    pub files: bool,
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClipboardTransferDirection {
+    Sending,
+    Receiving,
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClipboardTransferState {
+    Pending,
+    Transferring,
+    Completed,
+    Cancelled,
+    Failed(String),
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
+pub struct ClipboardTransferStatus {
+    pub transfer_id: ClipboardTransferId,
+    pub file_id: ClipboardFileId,
+    pub name: String,
+    pub direction: ClipboardTransferDirection,
+    pub transferred_bytes: u64,
+    pub total_bytes: u64,
+    pub bytes_per_second: u64,
+    pub state: ClipboardTransferState,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FrontendEvent {
     /// a client was created
@@ -225,6 +264,10 @@ pub enum FrontendEvent {
     IncomingDisconnected(SocketAddr),
     /// failed connection attempt (approval for fingerprint required)
     ConnectionAttempt { fingerprint: String },
+    /// authoritative clipboard capability settings
+    ClipboardSettings(ClipboardSettings),
+    /// authoritative status for one file in a clipboard transfer
+    ClipboardTransferStatus(ClipboardTransferStatus),
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
@@ -263,6 +306,14 @@ pub enum FrontendRequest {
     UpdateEnterHook(u64, Option<String>),
     /// save config file
     SaveConfiguration,
+    /// independently enable or disable text clipboard synchronization
+    SetClipboardText(bool),
+    /// independently enable or disable image clipboard synchronization
+    SetClipboardImage(bool),
+    /// independently enable or disable file clipboard synchronization
+    SetClipboardFiles(bool),
+    /// cancel an in-progress clipboard transfer
+    CancelClipboardTransfer(ClipboardTransferId),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
