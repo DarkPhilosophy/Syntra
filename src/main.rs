@@ -1,4 +1,4 @@
-use env_logger::Env;
+use env_logger::{Env, Target};
 use input_capture::InputCaptureError;
 use input_emulation::InputEmulationError;
 use lan_mouse::{
@@ -13,7 +13,9 @@ use lan_mouse_gtk::GtkError;
 use lan_mouse_ipc::{IpcError, IpcListenerCreationError};
 use std::{
     future::Future,
-    io,
+    io::{self, Write},
+    os::unix::net::UnixDatagram,
+    path::PathBuf,
     process::{self, Child},
 };
 use thiserror::Error;
@@ -41,14 +43,40 @@ enum LanMouseError {
 }
 
 fn main() {
-    // init logging
-    let env = Env::default().filter_or("LAN_MOUSE_LOG_LEVEL", "info");
-    env_logger::init_from_env(env);
+    let env = Env::default().filter_or(
+        "LAN_MOUSE_LOG_LEVEL",
+        "info/clipboard|Clipboard|file transfer|CopyManifest|RemoteManifest|RangeRequest|RangeResponse|MountReady|PublishFileClipboard|PasteDestination|Cancelled|Completed|Unmounted",
+    );
+    let console = UnixDatagram::unbound().ok();
+    let console_path = clipboard_console_path();
+    let mut logger = env_logger::Builder::from_env(env);
+    logger.target(Target::Stderr);
+    logger.format(move |buf, record| {
+        let line = format!(
+            "[{}][{}][{}] {}\n",
+            buf.timestamp_millis(),
+            record.level(),
+            record.target(),
+            record.args()
+        );
+        if let Some(console) = &console {
+            let _ = console.send_to(line.as_bytes(), &console_path);
+        }
+        buf.write_all(line.as_bytes())
+    });
+    logger.init();
+
 
     if let Err(e) = run() {
         log::error!("{e}");
         process::exit(1);
     }
+}
+fn clipboard_console_path() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("lan-mouse-clipboard-console.sock")
 }
 
 fn run() -> Result<(), LanMouseError> {

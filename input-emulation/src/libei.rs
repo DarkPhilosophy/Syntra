@@ -2,18 +2,28 @@ use futures::{StreamExt, future};
 use std::{
     env, fs, io,
     os::{fd::OwnedFd, unix::net::UnixStream},
-    path::PathBuf,
+    path::{Path, PathBuf},
+    str::FromStr,
     sync::{
         Arc, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
-use tokio::task::JoinHandle;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    sync::{mpsc, oneshot},
+    task::JoinHandle,
+};
 
-use ashpd::desktop::{
-    PersistMode, Session,
-    remote_desktop::{DeviceType, RemoteDesktop, SelectDevicesOptions},
+use ashpd::{
+    AppID,
+    desktop::{
+        PersistMode, Session,
+        clipboard::{Clipboard, RequestClipboardOptions, SetSelectionOptions},
+        remote_desktop::{DeviceType, RemoteDesktop, SelectDevicesOptions},
+    },
+    documents::{Documents, Permission},
 };
 use async_trait::async_trait;
 
@@ -40,6 +50,11 @@ struct Devices {
     keyboard: Arc<RwLock<Option<(ei::Device, ei::Keyboard)>>>,
 }
 
+struct ClipboardCommand {
+    contents: Vec<(String, Vec<u8>)>,
+    published: oneshot::Sender<Result<(), ashpd::Error>>,
+}
+
 pub(crate) struct LibeiEmulation {
     context: ei::Context,
     conn: event::Connection,
@@ -48,7 +63,10 @@ pub(crate) struct LibeiEmulation {
     error: Arc<Mutex<Option<EmulationError>>>,
     libei_error: Arc<AtomicBool>,
     _remote_desktop: RemoteDesktop,
-    session: Session<RemoteDesktop>,
+    session: Arc<Session<RemoteDesktop>>,
+    clipboard_rx: Option<mpsc::Receiver<(String, Vec<u8>)>>,
+    clipboard_task: Option<JoinHandle<()>>,
+    clipboard_command_tx: Option<mpsc::Sender<ClipboardCommand>>,
 }
 
 /// Get the path to the RemoteDesktop token file
@@ -62,6 +80,120 @@ fn get_token_file_path() -> PathBuf {
         });
 
     cache_dir.join("lan-mouse").join("remote-desktop.token")
+}
+
+fn decode_file_uri(uri: &str) -> Option<PathBuf> {
+    let encoded = uri.strip_prefix("file://")?;
+    let bytes = encoded.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).ok()?;
+            decoded.push(u8::from_str_radix(hex, 16).ok()?);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    Some(PathBuf::from(String::from_utf8(decoded).ok()?))
+}
+
+fn file_uri(path: &Path) -> String {
+    let mut uri = String::from("file://");
+    for byte in path.as_os_str().as_encoded_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(*byte, b'/' | b'-' | b'_' | b'.' | b'~') {
+            uri.push(char::from(*byte));
+        } else {
+            use std::fmt::Write as _;
+            let _ = write!(uri, "%{byte:02X}");
+        }
+    }
+    uri
+}
+
+async fn export_flatpak_file_uris(
+    mut contents: Vec<(String, Vec<u8>)>,
+) -> Vec<(String, Vec<u8>)> {
+    let Some((_, gnome_data)) = contents
+        .iter()
+        .find(|(mime, _)| mime == "x-special/gnome-copied-files")
+    else {
+        return contents;
+    };
+    let Ok(gnome_text) = std::str::from_utf8(gnome_data) else {
+        return contents;
+    };
+    let mut lines = gnome_text.lines();
+    let operation = lines.next().unwrap_or("copy");
+    let original_uris = lines.filter(|line| !line.is_empty()).collect::<Vec<_>>();
+    if original_uris.is_empty() {
+        return contents;
+    }
+
+    let Ok(documents) = Documents::new().await else {
+        return contents;
+    };
+    let Ok(mount_point) = documents.mount_point().await else {
+        return contents;
+    };
+    let app_ids = [
+        "org.gnome.Nautilus",
+        "org.gnome.NautilusPreviewer",
+        "org.kde.dolphin",
+    ]
+    .into_iter()
+    .filter_map(|app_id| AppID::from_str(app_id).ok())
+    .collect::<Vec<_>>();
+    if app_ids.is_empty() {
+        return contents;
+    }
+    let mut exported = Vec::with_capacity(original_uris.len());
+    for uri in original_uris {
+        let Some(path) = decode_file_uri(uri) else {
+            return contents;
+        };
+        let Ok(file) = fs::File::open(&path) else {
+            return contents;
+        };
+        let Ok(document_id) = documents.add(&file, true, false).await else {
+            return contents;
+        };
+        for app_id in &app_ids {
+            if documents
+                .grant_permissions(document_id.clone(), app_id, &[Permission::Read])
+                .await
+                .is_err()
+            {
+                return contents;
+            }
+        }
+        let Some(name) = path.file_name() else {
+            return contents;
+        };
+        exported.push(file_uri(
+            &mount_point
+                .as_ref()
+                .join(document_id.as_ref())
+                .join(name),
+        ));
+    }
+
+    let uri_list = exported.join("\r\n") + "\r\n";
+    let gnome = format!("{operation}\n{}\n", exported.join("\n"));
+    for (mime, data) in &mut contents {
+        match mime.as_str() {
+            "text/uri-list" => *data = uri_list.as_bytes().to_vec(),
+            "x-special/gnome-copied-files" => *data = gnome.as_bytes().to_vec(),
+            _ => {}
+        }
+    }
+    log::info!(
+        "clipboard-trace event=document-export outcome=success files={}",
+        exported.len()
+    );
+    contents
 }
 
 /// Read the RemoteDesktop token from file
@@ -84,7 +216,15 @@ fn write_token(token: &str) -> io::Result<()> {
     Ok(())
 }
 
-async fn get_ei_fd() -> Result<(RemoteDesktop, Session<RemoteDesktop>, OwnedFd), ashpd::Error> {
+async fn get_ei_fd() -> Result<
+    (
+        RemoteDesktop,
+        Session<RemoteDesktop>,
+        OwnedFd,
+        Option<Clipboard>,
+    ),
+    ashpd::Error,
+> {
     let remote_desktop = RemoteDesktop::new().await?;
 
     let restore_token = read_token();
@@ -98,6 +238,14 @@ async fn get_ei_fd() -> Result<(RemoteDesktop, Session<RemoteDesktop>, OwnedFd),
         .set_persist_mode(PersistMode::ExplicitlyRevoked)
         .set_restore_token(restore_token.as_deref());
     remote_desktop.select_devices(&session, options).await?;
+    let clipboard = Clipboard::new().await.ok();
+    let clipboard_requested = match clipboard.as_ref() {
+        Some(clipboard) => clipboard
+            .request(&session, RequestClipboardOptions::default())
+            .await
+            .is_ok(),
+        None => false,
+    };
 
     log::info!("requesting permission for input emulation");
     let start_response = match remote_desktop
@@ -133,12 +281,326 @@ async fn get_ei_fd() -> Result<(RemoteDesktop, Session<RemoteDesktop>, OwnedFd),
     let fd = remote_desktop
         .connect_to_eis(&session, Default::default())
         .await?;
-    Ok((remote_desktop, session, fd))
+    let clipboard = (clipboard_requested && start_response.is_clipboard_enabled())
+        .then_some(clipboard)
+        .flatten();
+    log::info!("native RemoteDesktop clipboard enabled={}", clipboard.is_some());
+    Ok((remote_desktop, session, fd, clipboard))
 }
 
 impl LibeiEmulation {
     pub(crate) async fn new() -> Result<Self, LibeiEmulationCreationError> {
-        let (_remote_desktop, session, eifd) = get_ei_fd().await?;
+        let (_remote_desktop, session, eifd, clipboard) = get_ei_fd().await?;
+        let session = Arc::new(session);
+        let (clipboard_tx, clipboard_rx) = mpsc::channel(8);
+        let (clipboard_command_tx, mut clipboard_command_rx) =
+            mpsc::channel::<ClipboardCommand>(8);
+        let clipboard_task = match clipboard {
+            Some(clipboard) => {
+                let clipboard_session = Arc::clone(&session);
+                Some(tokio::task::spawn_local(async move {
+                    let Ok(changed) = clipboard
+                        .receive_selection_owner_changed::<RemoteDesktop>()
+                        .await
+                    else {
+                        return;
+                    };
+                    let Ok(transfers) = clipboard
+                        .receive_selection_transfer::<RemoteDesktop>()
+                        .await
+                    else {
+                        return;
+                    };
+                    futures::pin_mut!(changed);
+                    futures::pin_mut!(transfers);
+                    // Retain the complete offer until a later SetSelection succeeds.
+                    // GNOME may request either file MIME type long after publication.
+                    let mut offered = Vec::<(String, Vec<u8>)>::new();
+                    let mut trace_seq = 0_u64;
+                    'clipboard: loop {
+                        tokio::select! {
+                            command = clipboard_command_rx.recv() => {
+                                let Some(command) = command else { break };
+                                trace_seq = trace_seq.wrapping_add(1);
+                                let command_seq = trace_seq;
+                                let offered_summary = command
+                                    .contents
+                                    .iter()
+                                    .map(|(mime, data)| format!("{mime}:{}B", data.len()))
+                                    .collect::<Vec<_>>()
+                                    .join(",");
+                                log::info!(
+                                    "clipboard-trace event=publication-request direction=outbound \
+                                     request_id={command_seq} offers=[{offered_summary}]"
+                                );
+                                let mime_types = command
+                                    .contents
+                                    .iter()
+                                    .map(|(mime, _)| mime.as_str())
+                                    .collect::<Vec<_>>();
+                                let options =
+                                    SetSelectionOptions::default().set_mime_types(&mime_types);
+                                let result = clipboard.set_selection(&clipboard_session, options).await;
+                                match result {
+                                    Ok(()) => {
+                                        offered = command.contents;
+                                        let _ = command.published.send(Ok(()));
+                                        log::info!(
+                                            "clipboard-trace event=publication-result direction=outbound \
+                                             request_id={command_seq} outcome=success \
+                                             retained=[{offered_summary}]"
+                                        );
+                                    }
+                                    Err(error) => {
+                                        let message = error.to_string();
+                                        let _ = command.published.send(Err(error));
+                                        log::warn!(
+                                            "clipboard-trace event=publication-result direction=outbound \
+                                             request_id={command_seq} outcome=failed \
+                                             offers=[{offered_summary}] error_class=portal"
+                                        );
+                                    }
+                                }
+                            }
+                            transfer = transfers.next() => {
+                                let Some((transfer_session, mime_type, serial)) = transfer else { break };
+                                trace_seq = trace_seq.wrapping_add(1);
+                                let transfer_seq = trace_seq;
+                                log::info!(
+                                    "clipboard-trace event=selection-transfer-request direction=inbound \
+                                     request_id={transfer_seq} mime={mime_type} serial={serial} \
+                                     retained_offers={}",
+                                    offered.len()
+                                );
+                                let data = offered
+                                    .iter()
+                                    .find_map(|(offered_mime, data)| {
+                                        (offered_mime == &mime_type).then_some(data.as_slice())
+                                    });
+                                let success = if let Some(data) = data {
+                                    match clipboard
+                                        .selection_write(&transfer_session, serial)
+                                        .await
+                                    {
+                                        Ok(fd) => {
+                                            let fd: std::os::fd::OwnedFd = fd.into();
+                                            let mut file = tokio::fs::File::from_std(
+                                                std::fs::File::from(fd),
+                                            );
+                                            let result = file.write_all(data).await;
+                                            log::info!(
+                                                "clipboard-trace event=selection-transfer-write direction=outbound \
+                                                 request_id={transfer_seq} mime={mime_type} serial={serial} \
+                                                 bytes={} outcome={}",
+                                                data.len(),
+                                                if result.is_ok() { "success" } else { "failed" }
+                                            );
+                                            drop(file);
+                                            if let Err(error) = &result {
+                                                log::warn!(
+                                                    "failed to write portal selection transfer \
+                                                     for {mime_type}: {error}"
+                                                );
+                                            }
+                                            result.is_ok()
+                                        }
+                                        Err(error) => {
+                                            log::warn!(
+                                                "clipboard-trace event=selection-transfer-write direction=outbound \
+                                                 request_id={transfer_seq} mime={mime_type} serial={serial} \
+                                                 bytes=0 outcome=open-failed error_class=portal"
+                                            );
+                                            log::warn!(
+                                                "failed to open portal selection transfer \
+                                                 for {mime_type}: {error}"
+                                            );
+                                            false
+                                        }
+                                    }
+                                } else {
+                                    log::warn!(
+                                        "clipboard-trace event=selection-transfer-write direction=outbound \
+                                         request_id={transfer_seq} mime={mime_type} serial={serial} \
+                                         bytes=0 outcome=rejected reason=unoffered-mime"
+                                    );
+                                    false
+                                };
+                                if let Err(error) = clipboard
+                                    .selection_write_done(&transfer_session, serial, success)
+                                    .await
+                                {
+                                    log::warn!(
+                                        "clipboard-trace event=selection-transfer-done direction=outbound \
+                                         request_id={transfer_seq} mime={mime_type} serial={serial} \
+                                         success={success} outcome=failed error_class=portal"
+                                    );
+                                    log::warn!(
+                                        "failed to finish portal selection transfer \
+                                         for {mime_type}: {error}"
+                                    );
+                                } else {
+                                    log::info!(
+                                        "clipboard-trace event=selection-transfer-done direction=outbound \
+                                         request_id={transfer_seq} mime={mime_type} serial={serial} \
+                                         success={success} outcome=success"
+                                    );
+                                }
+                            }
+                            owner = changed.next() => {
+                                let Some((changed_session, selection)) = owner else { break };
+                                trace_seq = trace_seq.wrapping_add(1);
+                                let owner_seq = trace_seq;
+                                log::info!(
+                                    "clipboard-trace event=owner-changed direction=local \
+                                     request_id={owner_seq} session_is_owner={:?} mimes=[{}] \
+                                     retained_offers={}",
+                                    selection.session_is_owner(),
+                                    selection.mime_types().join(","),
+                                    offered.len()
+                                );
+                                if selection.session_is_owner() == Some(true) {
+                                    log::info!(
+                                        "clipboard-trace event=owner-change-ignored direction=local \
+                                         request_id={owner_seq} reason=session-owner"
+                                    );
+                                    continue;
+                                }
+                                let file_owner = [
+                                    "x-special/gnome-copied-files",
+                                    "text/uri-list",
+                                ]
+                                .iter()
+                                .any(|candidate| {
+                                    selection.mime_types().iter().any(|mime| mime == *candidate)
+                                });
+                                if file_owner {
+                                    let replaced_offers = offered.len();
+                                    offered.clear();
+                                    log::info!(
+                                        "clipboard-trace event=ownership-replacement direction=local \
+                                         request_id={owner_seq} owner_kind=file \
+                                         replaced_offers={replaced_offers} outcome=stale-offers-suppressed"
+                                    );
+                                }
+                                let Some(mime_type) = [
+                                    "x-special/gnome-copied-files",
+                                    "text/uri-list",
+                                    "text/plain;charset=utf-8",
+                                    "text/plain",
+                                    "UTF8_STRING",
+                                ]
+                                .iter()
+                                .find(|candidate| {
+                                    selection.mime_types().iter().any(|mime| mime == **candidate)
+                                })
+                                else {
+                                    log::info!(
+                                        "clipboard-trace event=owner-change-ignored direction=local \
+                                         request_id={owner_seq} reason=no-supported-mime"
+                                    );
+                                    continue;
+                                };
+                                let read_started = Instant::now();
+                                log::info!(
+                                    "clipboard-trace event=mime-read-start direction=local \
+                                     request_id={owner_seq} mime={mime_type}"
+                                );
+                                let Ok(fd) = clipboard.selection_read(&changed_session, mime_type).await else {
+                                    log::warn!(
+                                        "clipboard-trace event=mime-read-result direction=local \
+                                         request_id={owner_seq} mime={mime_type} bytes=0 \
+                                         outcome=open-failed retry_class=terminal elapsed_ms={}",
+                                        read_started.elapsed().as_millis()
+                                    );
+                                    continue;
+                                };
+                                let fd: std::os::fd::OwnedFd = fd.into();
+                                let mut file = tokio::fs::File::from_std(std::fs::File::from(fd))
+                                    .take(1024 * 1024 + 1);
+                                let mut data = Vec::new();
+                                let mut read_attempt = 0_u8;
+                                loop {
+                                    match file.read_to_end(&mut data).await {
+                                        Ok(_) => break,
+                                        Err(error)
+                                            if error.kind() == io::ErrorKind::WouldBlock
+                                                && read_attempt < 5 =>
+                                        {
+                                            read_attempt += 1;
+                                            log::info!(
+                                                "clipboard-trace event=mime-read-retry direction=local \
+                                                 request_id={owner_seq} mime={mime_type} attempt={read_attempt}"
+                                            );
+                                            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                                        }
+                                        Err(error) => {
+                                            log::warn!(
+                                                "clipboard-trace event=mime-read-result direction=local \
+                                                 request_id={owner_seq} mime={mime_type} bytes={} \
+                                                 outcome=failed retry_class=terminal error_kind={:?} \
+                                                 elapsed_ms={}",
+                                                data.len(),
+                                                error.kind(),
+                                                read_started.elapsed().as_millis()
+                                            );
+                                            continue 'clipboard;
+                                        }
+                                    }
+                                }
+                                if data.len() > 1024 * 1024 {
+                                    log::warn!(
+                                        "clipboard-trace event=mime-read-result direction=local \
+                                         request_id={owner_seq} mime={mime_type} bytes={} \
+                                         outcome=rejected reason=too-large retry_class=terminal \
+                                         elapsed_ms={}",
+                                        data.len(),
+                                        read_started.elapsed().as_millis()
+                                    );
+                                    continue;
+                                }
+                                log::info!(
+                                    "clipboard-trace event=mime-read-result direction=local \
+                                     request_id={owner_seq} mime={mime_type} bytes={} \
+                                     outcome=success retry_class=none elapsed_ms={}",
+                                    data.len(),
+                                    read_started.elapsed().as_millis()
+                                );
+                                // Some portal implementations omit
+                                // session_is_owner for our own SetSelection
+                                // notification. Never feed our retained offer
+                                // back into Lan Mouse as a new local copy:
+                                // that echo cancels and replaces the remote
+                                // offer before Files can enable Paste.
+                                if offered.iter().any(|(offered_mime, offered_data)| {
+                                    offered_mime == *mime_type && offered_data == &data
+                                }) {
+                                    log::info!(
+                                        "clipboard-trace event=owner-change-ignored direction=local \
+                                         request_id={owner_seq} mime={mime_type} bytes={} \
+                                         reason=retained-offer-echo",
+                                        data.len()
+                                    );
+                                    continue;
+                                }
+                                log::info!(
+                                    "clipboard-trace event=local-selection-forwarded direction=outbound \
+                                     request_id={owner_seq} mime={mime_type} bytes={}",
+                                    data.len()
+                                );
+                                if clipboard_tx
+                                    .send(((*mime_type).to_string(), data))
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }))
+            }
+            None => None,
+        };
         let stream = UnixStream::from(eifd);
         stream.set_nonblocking(true)?;
         let context = ei::Context::new(stream)?;
@@ -167,6 +629,9 @@ impl LibeiEmulation {
             libei_error,
             _remote_desktop,
             session,
+            clipboard_rx: Some(clipboard_rx),
+            clipboard_command_tx: clipboard_task.as_ref().map(|_| clipboard_command_tx),
+            clipboard_task,
         })
     }
 }
@@ -174,11 +639,51 @@ impl LibeiEmulation {
 impl Drop for LibeiEmulation {
     fn drop(&mut self) {
         self.ei_task.abort();
+        if let Some(task) = self.clipboard_task.take() {
+            task.abort();
+        }
     }
 }
 
 #[async_trait]
 impl Emulation for LibeiEmulation {
+    fn take_clipboard_receiver(&mut self) -> Option<mpsc::Receiver<(String, Vec<u8>)>> {
+        self.clipboard_rx.take()
+    }
+    async fn set_file_clipboard(
+        &mut self,
+        contents: Vec<(String, Vec<u8>)>,
+    ) -> Result<(), EmulationError> {
+        let contents = export_flatpak_file_uris(contents).await;
+        if self
+            .clipboard_task
+            .as_ref()
+            .map_or(true, JoinHandle::is_finished)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "portal clipboard task stopped",
+            )
+            .into());
+        }
+        let (published, result) = oneshot::channel();
+        self.clipboard_command_tx
+            .as_ref()
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::Unsupported, "portal clipboard unavailable")
+            })?
+            .send(ClipboardCommand {
+                contents,
+                published,
+            })
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "portal clipboard task stopped"))?;
+        result
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "portal clipboard task stopped"))??;
+        Ok(())
+    }
+
     fn healthy(&self) -> bool {
         !self.libei_error.load(Ordering::SeqCst)
     }

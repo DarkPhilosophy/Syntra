@@ -172,12 +172,17 @@ impl LanMouseConnection {
                 if requires_remote_ready && !self.remote_ready(handle) {
                     return Err(LanMouseConnectionError::TargetEmulationDisabled);
                 }
-                match conn.send(&buf).await {
-                    Ok(_) => {}
-                    Err(e) => {
-                        log::warn!("client {handle} failed to send: {e}");
-                        disconnect(&self.client_manager, handle, addr, &self.conns).await;
+                if let Err(e) = conn.send(&buf).await {
+                    log::warn!("client {handle} failed to send: {e}");
+                    if disconnect(&self.client_manager, handle, addr, &conn, &self.conns).await {
+                        // Announce the dead transport exactly once so bound
+                        // transfers are dropped instead of stalling.
+                        self.recv_tx
+                            .send((handle, ProtoEvent::Pong(false)))
+                            .expect("channel closed");
                     }
+                    self.connect(handle).await;
+                    return Err(LanMouseConnectionError::NotConnected);
                 }
                 log::trace!("sent event to {addr}");
                 return Ok(());
@@ -327,28 +332,43 @@ async fn receive_loop(
             Err(e) => log::debug!("ignoring undecodable event from {addr}: {e}"),
         }
     }
-    // Wake the capture state machine immediately when the transport dies.
-    // Otherwise its last `remote_ready=true` could survive until another
-    // unrelated event and leave a stale barrier active.
-    client_manager.set_remote_ready(handle, false);
-    tx.send((handle, ProtoEvent::Pong(false)))
-        .expect("channel closed");
     log::warn!("recv error");
-    disconnect(&client_manager, handle, addr, &conns).await;
+    // Only the connection that is still current may tear down peer state:
+    // a newer transport to the same address must not be invalidated by the
+    // late exit of the one it replaced.
+    if disconnect(&client_manager, handle, addr, &conn, &conns).await {
+        // Wake the capture state machine immediately when the transport
+        // dies. Otherwise its last `remote_ready=true` could survive until
+        // another unrelated event and leave a stale barrier active.
+        tx.send((handle, ProtoEvent::Pong(false)))
+            .expect("channel closed");
+    }
 }
 
 async fn disconnect(
     client_manager: &ClientManager,
     handle: ClientHandle,
     addr: SocketAddr,
+    conn: &Arc<dyn Conn + Send + Sync>,
     conns: &Mutex<HashMap<SocketAddr, Arc<dyn Conn + Send + Sync>>>,
-) {
+) -> bool {
+    let mut conns = conns.lock().await;
+    // A newer connection may already have replaced this one on the same
+    // address. Cleaning up then would tear down the live transport.
+    match conns.get(&addr) {
+        Some(current) if Arc::ptr_eq(current, conn) => {}
+        _ => {
+            log::debug!("stale cleanup for {addr} ignored");
+            return false;
+        }
+    }
     log::warn!("client ({handle}) @ {addr} connection closed");
-    conns.lock().await.remove(&addr);
+    conns.remove(&addr);
     client_manager.set_active_addr(handle, None);
     client_manager.set_alive(handle, false);
     client_manager.set_remote_ready(handle, false);
     client_manager.set_peer_commit(handle, None);
-    let active: Vec<SocketAddr> = conns.lock().await.keys().copied().collect();
+    let active: Vec<SocketAddr> = conns.keys().copied().collect();
     log::info!("active connections: {active:?}");
+    true
 }

@@ -6,7 +6,7 @@ use crate::{
     capture::{Capture, CaptureType, ICaptureEvent},
     client::ClientManager,
     clipboard::{Clipboard, ClipboardContent},
-    config::{Config, ConfigClient},
+    config::{Config, ConfigClient, EmulationBackend},
     connect::LanMouseConnection,
     crypto,
     dns::{DnsEvent, DnsResolver},
@@ -30,6 +30,7 @@ use std::{
     net::{IpAddr, SocketAddr},
     path::PathBuf,
     sync::{Arc, RwLock},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
 use tokio::{
@@ -86,6 +87,9 @@ pub struct Service {
     /// map from capture handle to connection info
     incoming_conn_info: HashMap<ClientHandle, Incoming>,
     clipboard: Clipboard,
+    /// The RemoteDesktop portal owns clipboard observation for libei/xdp.
+    /// Do not probe Wayland through arboard when that native path is selected.
+    legacy_clipboard: bool,
     next_clipboard_transfer: u64,
     next_trigger_handle: u64,
     adapter_manager: Option<AdapterProcessManager>,
@@ -93,7 +97,24 @@ pub struct Service {
     transfers: TransferState<Peer>,
     source_result_tx: mpsc::Sender<SourceReadResult>,
     source_results: mpsc::Receiver<SourceReadResult>,
+    /// UI transfer ids that actually moved bytes and therefore exist in the UI
+    announced_transfers: HashSet<lan_mouse_ipc::ClipboardTransferId>,
+    /// Last progress snapshot used for accurate terminal status.
+    transfer_progress: HashMap<lan_mouse_ipc::ClipboardTransferId, (u64, u64)>,
+    /// Last local file selection. Both portal sessions can report the same
+    /// owner change; it must create one offer, not an A↔B echo storm.
+    last_file_clipboard: Option<String>,
+    /// The native portal currently exposes a file selection. Ignore the
+    /// legacy arboard text view of its URI list so it cannot replace the
+    /// remote file offer with plain text.
+    native_file_selection: bool,
     gtk_ready: bool,
+    /// automated copy/paste end-to-end check requested
+    e2e: bool,
+    /// the automated copy has not been injected yet
+    e2e_pending: bool,
+    /// Absolute deadline survives other busy select branches.
+    e2e_check_at: tokio::time::Instant,
 }
 
 #[derive(Debug)]
@@ -145,6 +166,10 @@ impl Service {
         let capture = Capture::new(capture_backend, conn, config.release_bind());
         let emulation_backend = config.emulation_backend().map(|b| b.into());
         let emulation = Emulation::new(emulation_backend, listener);
+        let legacy_clipboard = !matches!(
+            config.emulation_backend(),
+            Some(EmulationBackend::Libei | EmulationBackend::Xdp)
+        );
         let clipboard = Clipboard::new();
         let executable_dir = std::env::current_exe()?
             .parent()
@@ -167,6 +192,7 @@ impl Service {
 
         let port = config.port();
         let clipboard_settings = config.clipboard_settings();
+        let e2e_pending = config.test_copyfile_e2e();
         let service = Self {
             config,
             capture,
@@ -185,14 +211,29 @@ impl Service {
             incoming_conn_info: Default::default(),
             incoming_conns: Default::default(),
             clipboard,
-            next_clipboard_transfer: 0,
+            legacy_clipboard,
+            // Wire transfer IDs must remain unique across process restarts.
+            // Reusing 1, 2, … lets a peer's still-live clipboard offer reject
+            // the next process's manifest as a duplicate/stale transfer.
+            next_clipboard_transfer: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos() as u64
+                ^ u64::from(std::process::id()),
             next_trigger_handle: 0,
             adapter_manager: Some(adapter_manager),
             adapter_events,
             transfers: TransferState::new(),
+            native_file_selection: false,
             source_result_tx,
             source_results,
             gtk_ready: false,
+            last_file_clipboard: None,
+            announced_transfers: HashSet::new(),
+            transfer_progress: HashMap::new(),
+            e2e: e2e_pending,
+            e2e_pending,
+            e2e_check_at: tokio::time::Instant::now() + Duration::from_secs(2),
         };
         Ok(service)
     }
@@ -212,6 +253,19 @@ impl Service {
 
         loop {
             tokio::select! {
+                _ = tokio::time::sleep_until(self.e2e_check_at), if self.e2e_pending => {
+                    // File transfer only needs the authenticated peer transport.
+                    // Remote input readiness is an unrelated capability.
+                    let ready = self.client_manager.active_clients().into_iter().any(|handle| {
+                        self.client_manager.alive(handle)
+                    });
+                    if ready {
+                        self.e2e_pending = false;
+                        self.run_copyfile_e2e();
+                    } else {
+                        self.e2e_check_at += Duration::from_secs(2);
+                    }
+                },
                 request = self.frontend_listener.next() => self.handle_frontend_request(request),
                 _ = self.frontend_event_pending.notified() => self.handle_frontend_pending().await,
                 event = self.emulation.event() => self.handle_emulation_event(event),
@@ -226,15 +280,19 @@ impl Service {
                         self.handle_source_result(result);
                     }
                 },
-                result = self.clipboard.next_read() => match result {
-                    Ok(ClipboardContent::Text(text)) if self.clipboard_settings.text => {
-                        for handle in self.client_manager.active_clients() {
+                result = self.clipboard.next_read(), if self.legacy_clipboard => match result {
+                    Ok(ClipboardContent::Text(text))
+                        if self.clipboard_settings.text && !self.native_file_selection =>
+                    {
+                        for handle in self.client_manager.clipboard_clients() {
                             self.next_clipboard_transfer = self.next_clipboard_transfer.wrapping_add(1);
                             self.capture.send_clipboard(handle, self.next_clipboard_transfer, text.as_bytes().to_vec(), None);
                         }
                     }
-                    Ok(ClipboardContent::Image { width, height, rgba }) if self.clipboard_settings.image => {
-                        for handle in self.client_manager.active_clients() {
+                    Ok(ClipboardContent::Image { width, height, rgba })
+                        if self.clipboard_settings.image && !self.native_file_selection =>
+                    {
+                        for handle in self.client_manager.clipboard_clients() {
                             self.next_clipboard_transfer = self.next_clipboard_transfer.wrapping_add(1);
                             self.capture.send_clipboard(handle, self.next_clipboard_transfer, rgba.clone(), Some((width, height)));
                         }
@@ -458,13 +516,178 @@ impl Service {
                     self.broadcast_client(handle);
                 }
             }
-            EmulationEvent::Clipboard(content) => self.clipboard.write(content),
+            EmulationEvent::Clipboard(content) => {
+                match &content {
+                    ClipboardContent::Text(text) if self.clipboard_settings.text => {
+                        self.emulation.publish_file_clipboard(vec![
+                            ("text/plain;charset=utf-8".to_string(), text.as_bytes().to_vec()),
+                            ("text/plain".to_string(), text.as_bytes().to_vec()),
+                        ]);
+                    }
+                    _ => self.clipboard.write(content),
+                }
+            }
+            EmulationEvent::NativeClipboard(ClipboardContent::Text(text))
+                if self.clipboard_settings.text =>
+            {
+                self.native_file_selection = false;
+                for handle in self.client_manager.clipboard_clients() {
+                    self.next_clipboard_transfer = self.next_clipboard_transfer.wrapping_add(1);
+                    self.capture.send_clipboard(
+                        handle,
+                        self.next_clipboard_transfer,
+                        text.as_bytes().to_vec(),
+                        None,
+                    );
+                }
+            }
+            EmulationEvent::NativeClipboard(_) => {
+                self.native_file_selection = false;
+            }
+            EmulationEvent::FileClipboard { mime_type, value } => {
+                self.native_file_selection = true;
+                self.handle_native_file_clipboard(mime_type, value);
+            }
             EmulationEvent::ClipboardProtocol { addr, event } => {
                 self.handle_file_protocol(Peer::Emulation(addr), event);
             }
         }
     }
 
+    /// A file clipboard published by our own FUSE mount must never be
+    /// re-announced as a local copy: that would echo the transfer back to
+    /// the peer that sent it.
+    fn is_own_clipboard_mount(value: &str) -> bool {
+        value
+            .lines()
+            .filter(|line| line.starts_with("file://"))
+            .all(|line| {
+                line.contains("lan-mouse/clipboard/") || line.contains("lan%2Dmouse/clipboard/")
+            })
+            && value.lines().any(|line| line.starts_with("file://"))
+    }
+
+    fn handle_native_file_clipboard(&mut self, mime_type: String, value: String) {
+        if Self::is_own_clipboard_mount(&value) {
+            log::debug!("ignoring clipboard echo of our own mount");
+            return;
+        }
+        if self.last_file_clipboard.as_deref() == Some(value.as_str()) {
+            log::debug!("ignoring duplicate native file clipboard event");
+            return;
+        }
+        self.last_file_clipboard = Some(value.clone());
+        log::info!("native file clipboard detected: mime={mime_type}");
+        if let Some(manager) = self.adapter_manager.as_ref() {
+            let _ = manager.try_send(ManagerCommand::ClipboardData {
+                transfer_id: "remote-desktop".to_string(),
+                mime_type,
+                value,
+            });
+        }
+    }
+
+    /// Automated end-to-end check of the file clipboard: generate a file,
+    /// publish it as a local copy and let the peer paste it back.
+    fn run_copyfile_e2e(&mut self) {
+        let dir = std::env::home_dir()
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .join("tmp");
+        if let Err(error) = std::fs::create_dir_all(&dir) {
+            log::error!("copyfile-e2e: cannot create {}: {error}", dir.display());
+            return;
+        }
+        let path = dir.join(format!("lan-mouse-e2e-{}.bin", std::process::id()));
+        // 96 KiB of deterministic but non-trivial content: larger than a
+        // single chunk, so a real multi-chunk stream is exercised.
+        let payload = Self::e2e_payload();
+        if let Err(error) = std::fs::write(&path, &payload) {
+            log::error!("copyfile-e2e: cannot write {}: {error}", path.display());
+            return;
+        }
+        let digest = Sha256::digest(&payload);
+        log::info!(
+            "copyfile-e2e: source={} size={} sha256={:x}",
+            path.display(),
+            payload.len(),
+            digest
+        );
+        let uri = format!("file://{}", path.display());
+        self.handle_native_file_clipboard(
+            lan_mouse_adapter_api::GNOME_COPIED_FILES_MIME.to_string(),
+            format!("copy\r\n{uri}\r\n"),
+        );
+    }
+
+    /// Deterministic payload used by the automated end-to-end check.
+    fn e2e_payload() -> Vec<u8> {
+        (0..98_304u32).map(|i| (i % 251) as u8).collect()
+    }
+
+    /// Paste side of the automated check: copy the remote FUSE file into
+    /// `~/tmp`, exactly as a file manager paste would, then verify the result.
+    fn verify_copyfile_e2e(&self, uris: &[String]) {
+        let paths: Vec<PathBuf> = uris
+            .iter()
+            .filter_map(|uri| uri.strip_prefix("file://").map(percent_decode_path))
+            .filter(|path| {
+                path.file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with("lan-mouse-e2e-"))
+            })
+            .collect();
+        if paths.is_empty() {
+            return;
+        }
+        let destination_dir = std::env::home_dir()
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .join("tmp");
+        let expected = Self::e2e_payload();
+        let expected_digest = Sha256::digest(&expected);
+        tokio::task::spawn_blocking(move || {
+            for source in paths {
+                let Some(name) = source.file_name() else {
+                    log::error!("copyfile-e2e: FAIL source has no file name");
+                    continue;
+                };
+                let destination =
+                    destination_dir.join(format!("pasted-{}", name.to_string_lossy()));
+                if let Err(error) = std::fs::copy(&source, &destination) {
+                    log::error!(
+                        "copyfile-e2e: FAIL paste {} -> {}: {error}",
+                        source.display(),
+                        destination.display()
+                    );
+                    continue;
+                }
+                match std::fs::read(&destination) {
+                    Ok(data) => {
+                        let digest = Sha256::digest(&data);
+                        if data.len() == expected.len() && digest == expected_digest {
+                            log::info!(
+                                "copyfile-e2e: PASS pasted={} size={} sha256={:x}",
+                                destination.display(),
+                                data.len(),
+                                digest
+                            );
+                        } else {
+                            log::error!(
+                                "copyfile-e2e: FAIL pasted={} size={} expected={} sha256={:x} expected={:x}",
+                                destination.display(),
+                                data.len(),
+                                expected.len(),
+                                digest,
+                                expected_digest
+                            );
+                        }
+                    }
+                    Err(error) => log::error!(
+                        "copyfile-e2e: FAIL read pasted file {}: {error}",
+                        destination.display()
+                    ),
+                }
+            }
+        });
+    }
     fn handle_file_protocol(&mut self, peer: Peer, event: lan_mouse_proto::ProtoEvent) {
         use lan_mouse_proto::ProtoEvent;
         match event {
@@ -496,6 +719,35 @@ impl Service {
             ICaptureEvent::Clipboard { handle, event } => {
                 self.handle_file_protocol(Peer::Capture(handle), event);
             }
+            ICaptureEvent::FileClipboard {
+                handle,
+                mime_type,
+                value,
+            } => {
+                if Self::is_own_clipboard_mount(&value) {
+                    log::debug!("ignoring clipboard echo of our own mount");
+                    return;
+                }
+                log::info!(
+                    "native clipboard selection routed from capture handle={handle} mime={mime_type}"
+                );
+                if let Some(manager) = self.adapter_manager.as_ref() {
+                    let _ = manager.try_send(ManagerCommand::ClipboardData {
+                        transfer_id: format!("portal-{handle}"),
+                        mime_type,
+                        value,
+                    });
+                }
+            }
+            ICaptureEvent::PeerLost(handle) => {
+                // The transport died: every transfer bound to it can never
+                // complete, so drop it instead of leaving it stalled.
+                let actions = self.transfers.peer_lost(&Peer::Capture(handle));
+                if !actions.is_empty() {
+                    log::info!("peer {handle} lost: dropping {} transfer action(s)", actions.len());
+                    self.execute_transfer_actions(actions);
+                }
+            }
             ICaptureEvent::CaptureBegin(handle) => {
                 // we entered the capture zone for an incoming connection
                 // => notify it that its capture should be released
@@ -514,7 +766,9 @@ impl Service {
             ICaptureEvent::ClientEntered(handle) => {
                 log::info!("entering client {handle} ...");
                 self.spawn_hook_command(handle);
-                self.clipboard.read_once();
+                if self.legacy_clipboard {
+                    self.clipboard.read_once();
+                }
             }
         }
     }
@@ -828,6 +1082,11 @@ impl Service {
                         self.transfers.adapter_unmounted(&adapter_id, unmounted)
                     }
                     AdapterMessage::CopyManifest(manifest) => {
+                        log::info!(
+                            "file clipboard detected: transfer={} entries={}",
+                            manifest.transfer_id,
+                            manifest.entries.len()
+                        );
                         if matches!(manifest.operation, Operation::Move) {
                             log::debug!("rejecting unsupported move clipboard manifest");
                             Ok(Vec::new())
@@ -842,7 +1101,7 @@ impl Service {
                                 .collect::<Vec<_>>()
                                 .join("\r\n");
                             let mut actions = Vec::new();
-                            for handle in self.client_manager.active_clients() {
+                            for handle in self.client_manager.clipboard_clients() {
                                 self.next_clipboard_transfer =
                                     self.next_clipboard_transfer.wrapping_add(1).max(1);
                                 let wire_id = self.next_clipboard_transfer;
@@ -974,15 +1233,16 @@ impl Service {
         match event {
             TransferFrontendEvent::Progress {
                 ui_id,
-                file_id,
                 completed,
                 total,
                 ..
             } => {
+                self.announced_transfers.insert(ui_id);
+                self.transfer_progress.insert(ui_id, (completed, total));
                 self.notify_frontend(FrontendEvent::ClipboardTransferStatus(
                     ClipboardTransferStatus {
                         transfer_id: ui_id,
-                        file_id,
+                        file_id: 0,
                         name: String::new(),
                         direction: ClipboardTransferDirection::Receiving,
                         transferred_bytes: completed,
@@ -992,47 +1252,77 @@ impl Service {
                     },
                 ));
             }
-            TransferFrontendEvent::Completed { ui_id, file_id, .. } => self.notify_frontend(
-                FrontendEvent::ClipboardTransferStatus(ClipboardTransferStatus {
-                    transfer_id: ui_id,
-                    file_id: file_id.unwrap_or_default(),
-                    name: String::new(),
-                    direction: ClipboardTransferDirection::Receiving,
-                    transferred_bytes: 0,
-                    total_bytes: 0,
-                    bytes_per_second: 0,
-                    state: ClipboardTransferState::Completed,
-                }),
-            ),
-            TransferFrontendEvent::Cancelled { ui_id, file_id, .. } => self.notify_frontend(
-                FrontendEvent::ClipboardTransferStatus(ClipboardTransferStatus {
-                    transfer_id: ui_id,
-                    file_id: file_id.unwrap_or_default(),
-                    name: String::new(),
-                    direction: ClipboardTransferDirection::Receiving,
-                    transferred_bytes: 0,
-                    total_bytes: 0,
-                    bytes_per_second: 0,
-                    state: ClipboardTransferState::Cancelled,
-                }),
-            ),
+            TransferFrontendEvent::Completed {
+                ui_id,
+                file_id,
+                completed,
+                total,
+                ..
+            } => {
+                if self.announced_transfers.remove(&ui_id) {
+                    self.transfer_progress.remove(&ui_id);
+                    self.notify_frontend(FrontendEvent::ClipboardTransferStatus(
+                        ClipboardTransferStatus {
+                            transfer_id: ui_id,
+                            file_id: file_id.unwrap_or_default(),
+                            name: String::new(),
+                            direction: ClipboardTransferDirection::Receiving,
+                            transferred_bytes: completed,
+                            total_bytes: total,
+                            bytes_per_second: 0,
+                            state: ClipboardTransferState::Completed,
+                        },
+                    ));
+                }
+            }
+            TransferFrontendEvent::Cancelled {
+                ui_id,
+                file_id,
+                completed,
+                total,
+                ..
+            } => {
+                if self.announced_transfers.remove(&ui_id) {
+                    self.transfer_progress.remove(&ui_id);
+                    self.notify_frontend(FrontendEvent::ClipboardTransferStatus(
+                        ClipboardTransferStatus {
+                            transfer_id: ui_id,
+                            file_id: file_id.unwrap_or_default(),
+                            name: String::new(),
+                            direction: ClipboardTransferDirection::Receiving,
+                            transferred_bytes: completed,
+                            total_bytes: total,
+                            bytes_per_second: 0,
+                            state: ClipboardTransferState::Cancelled,
+                        },
+                    ));
+                }
+            }
             TransferFrontendEvent::Failed {
                 ui_id,
                 file_id,
+                completed,
+                total,
                 error,
                 ..
-            } => self.notify_frontend(FrontendEvent::ClipboardTransferStatus(
-                ClipboardTransferStatus {
-                    transfer_id: ui_id,
-                    file_id: file_id.unwrap_or_default(),
-                    name: String::new(),
-                    direction: ClipboardTransferDirection::Receiving,
-                    transferred_bytes: 0,
-                    total_bytes: 0,
-                    bytes_per_second: 0,
-                    state: ClipboardTransferState::Failed(error),
-                },
-            )),
+            } => {
+                if self.announced_transfers.remove(&ui_id) {
+                    self.transfer_progress.remove(&ui_id);
+                    self.notify_frontend(FrontendEvent::ClipboardTransferStatus(
+                        ClipboardTransferStatus {
+                            transfer_id: ui_id,
+                            file_id: file_id.unwrap_or_default(),
+                            name: String::new(),
+                            direction: ClipboardTransferDirection::Receiving,
+                            transferred_bytes: completed,
+                            total_bytes: total,
+                            bytes_per_second: 0,
+                            state: ClipboardTransferState::Failed(error),
+                        },
+                    ));
+                }
+            }
+            // A plain copy only publishes metadata: never a transfer row.
             TransferFrontendEvent::Offered { .. } => {}
         }
     }
@@ -1040,19 +1330,47 @@ impl Service {
     fn execute_transfer_actions(&mut self, actions: Vec<TransferAction<Peer>>) {
         for action in actions {
             match action {
-                TransferAction::Peer { peer, event } => match peer {
-                    Peer::Capture(handle) => self.capture.send_proto(handle, event),
-                    Peer::Emulation(addr) => self.emulation.send_proto(addr, event),
-                },
+                TransferAction::Peer { peer, event } => {
+                    log::info!("file transfer protocol event: peer={peer:?} event={event:?}");
+                    match peer {
+                        Peer::Capture(handle) => self.capture.send_proto(handle, event),
+                        Peer::Emulation(addr) => self.emulation.send_proto(addr, event),
+                    }
+                }
                 TransferAction::Adapter {
                     adapter_id,
                     message,
                 } => {
+                    log::info!(
+                        "file transfer adapter event: adapter={adapter_id} message={message:?}"
+                    );
                     let command = match message {
                         AdapterMessage::RemoteManifest(m) => ManagerCommand::RemoteManifest(m),
                         AdapterMessage::RangeResponse(m) => ManagerCommand::RangeResponse(m),
                         AdapterMessage::PublishFileClipboard(m) => {
-                            ManagerCommand::PublishFileClipboard(m)
+                            self.verify_copyfile_e2e(&m.uris);
+                            let operation = if matches!(
+                                m.operation,
+                                lan_mouse_adapter_api::Operation::Move
+                            ) {
+                                "cut"
+                            } else {
+                                "copy"
+                            };
+                            let uri_list = format!("{}\r\n", m.uris.join("\r\n")).into_bytes();
+                            let gnome_files =
+                                format!("{operation}\n{}\n", m.uris.join("\n")).into_bytes();
+                            self.emulation.publish_file_clipboard(vec![
+                                (
+                                    lan_mouse_adapter_api::URI_LIST_MIME.to_string(),
+                                    uri_list,
+                                ),
+                                (
+                                    lan_mouse_adapter_api::GNOME_COPIED_FILES_MIME.to_string(),
+                                    gnome_files,
+                                ),
+                            ]);
+                            continue;
                         }
                         AdapterMessage::Released(m) => ManagerCommand::Released(m),
                         AdapterMessage::Unmounted(m) => ManagerCommand::Unmounted(m),
@@ -1113,3 +1431,24 @@ impl Service {
         }
     }
 }
+
+/// Decode a percent-encoded `file://` path body into a filesystem path.
+fn percent_decode_path(encoded: &str) -> PathBuf {
+    let bytes = encoded.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
+            if let Some(byte) = hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                out.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    PathBuf::from(String::from_utf8_lossy(&out).into_owned())
+}
+

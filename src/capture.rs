@@ -17,6 +17,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::connect::LanMouseConnection;
 
+/// How often a lost peer transport is retried while idle.
+const RECONNECT_INTERVAL: Duration = Duration::from_secs(2);
+
 pub(crate) struct Capture {
     cancellation_token: CancellationToken,
     request_tx: Sender<CaptureRequest>,
@@ -30,6 +33,13 @@ pub(crate) enum ICaptureEvent {
         handle: CaptureHandle,
         event: ProtoEvent,
     },
+    FileClipboard {
+        handle: CaptureHandle,
+        mime_type: String,
+        value: String,
+    },
+    /// The transport to a peer died: transfers bound to it are dead too.
+    PeerLost(CaptureHandle),
     /// a client was entered
     CaptureBegin(CaptureHandle),
     /// capture disabled
@@ -242,6 +252,24 @@ impl CaptureTask {
             .2
     }
 
+    /// Tell the service that every transfer bound to this peer is dead.
+    fn notify_peer_lost(&self, handle: CaptureHandle) {
+        log::warn!("peer {handle} lost: dropping transfers bound to it");
+        self.event_tx
+            .send(ICaptureEvent::PeerLost(handle))
+            .expect("channel closed");
+    }
+
+    /// Re-establish transports for peers whose connection died.
+    /// [`LanMouseConnection::connect`] is a no-op while a peer is connected.
+    async fn reconnect_lost_peers(&self) {
+        for handle in self.captures.iter().map(|(h, ..)| *h).collect::<Vec<_>>() {
+            if !self.conn.peer_connected(handle) {
+                self.conn.connect(handle).await;
+            }
+        }
+    }
+
     async fn run(mut self) {
         loop {
             if let Err(e) = self.do_capture().await {
@@ -284,8 +312,11 @@ impl CaptureTask {
                                 | ProtoEvent::ClipboardTransferProgress { .. }
                         ) {
                             self.event_tx.send(ICaptureEvent::Clipboard { handle, event }).expect("channel closed");
+                        } else if matches!(&event, ProtoEvent::Pong(false)) && !self.conn.peer_connected(handle) {
+                            self.notify_peer_lost(handle);
                         }
                     },
+                    _ = tokio::time::sleep(RECONNECT_INTERVAL) => self.reconnect_lost_peers().await,
                     _ = self.cancellation_token.cancelled() => return,
                 }
             }
@@ -388,6 +419,9 @@ impl CaptureTask {
                             .expect("channel closed");
                         continue;
                     }
+                    if matches!(&event, ProtoEvent::Pong(false)) && !self.conn.peer_connected(handle) {
+                        self.notify_peer_lost(handle);
+                    }
                     if self.active_client != Some(handle) {
                         self.sync_captures(capture).await?;
                         continue;
@@ -406,6 +440,7 @@ impl CaptureTask {
                     }
                     self.sync_captures(capture).await?;
                 },
+                _ = tokio::time::sleep(RECONNECT_INTERVAL) => self.reconnect_lost_peers().await,
                 _ = async {
                     if let Some(deadline) = self.ack_deadline {
                         tokio::time::sleep_until(deadline.into()).await;
@@ -494,6 +529,10 @@ impl CaptureTask {
                 log::warn!("failed to send clipboard chunk to client {handle}: {e}");
                 return;
             }
+            // DTLS preserves message boundaries but does not provide reliable
+            // delivery. Avoid overflowing the receiver's UDP socket when an
+            // uncompressed image expands into hundreds of datagrams.
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
     }
 
@@ -503,6 +542,23 @@ impl CaptureTask {
         event: (CaptureHandle, CaptureEvent),
     ) -> Result<(), CaptureError> {
         let (handle, event) = event;
+        let event = match event {
+            CaptureEvent::Clipboard { mime_type, data } => {
+                match String::from_utf8(data) {
+                    Ok(value) => self
+                        .event_tx
+                        .send(ICaptureEvent::FileClipboard {
+                            handle,
+                            mime_type,
+                            value,
+                        })
+                        .expect("channel closed"),
+                    Err(error) => log::warn!("native file clipboard is not UTF-8: {error}"),
+                }
+                return Ok(());
+            }
+            event => event,
+        };
         log::info!(
             "capture event handle={handle} event={event:?} ready={} barrier={} active={}",
             self.conn.remote_ready(handle),
@@ -561,6 +617,7 @@ impl CaptureTask {
                 State::WaitingForAck => ProtoEvent::Enter(opposite_pos),
                 State::Sending => ProtoEvent::Input(e),
             },
+            CaptureEvent::Clipboard { .. } => unreachable!("clipboard events return above"),
         };
 
         if let Err(e) = self.conn.send(event, handle).await {

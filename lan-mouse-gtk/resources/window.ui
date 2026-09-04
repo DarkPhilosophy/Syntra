@@ -51,6 +51,112 @@
                     <property name="orientation">vertical</property>
                     <property name="spacing">12</property>
                     <child>
+                      <object class="AdwPreferencesGroup" id="clipboard_console_group">
+                        <property name="title" translatable="yes">Live clipboard debugger</property>
+                        <property name="description" translatable="yes">Structured Copy → transport → publish → Paste timeline</property>
+                        <child>
+                          <object class="GtkBox">
+                            <property name="orientation">vertical</property>
+                            <property name="spacing">6</property>
+                            <property name="margin-top">6</property>
+                            <property name="margin-bottom">6</property>
+                            <property name="margin-start">6</property>
+                            <property name="margin-end">6</property>
+                            <child>
+                              <object class="GtkBox">
+                                <property name="spacing">6</property>
+                                <child>
+                                  <object class="GtkDropDown" id="clipboard_console_level">
+                                    <property name="tooltip-text" translatable="yes">Minimum log level</property>
+                                    <property name="model">
+                                      <object class="GtkStringList">
+                                        <items>
+                                          <item translatable="yes">All levels</item>
+                                          <item>ERROR</item>
+                                          <item>WARN</item>
+                                          <item>INFO</item>
+                                          <item>DEBUG</item>
+                                          <item>TRACE</item>
+                                        </items>
+                                      </object>
+                                    </property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkDropDown" id="clipboard_console_stage">
+                                    <property name="tooltip-text" translatable="yes">Clipboard pipeline stage</property>
+                                    <property name="model">
+                                      <object class="GtkStringList">
+                                        <items>
+                                          <item translatable="yes">All stages</item>
+                                          <item>Copy detection</item>
+                                          <item>Peer transport</item>
+                                          <item>Portal publish</item>
+                                          <item>Paste request</item>
+                                          <item>FUSE read</item>
+                                          <item>Lifecycle</item>
+                                          <item>Errors</item>
+                                        </items>
+                                      </object>
+                                    </property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkDropDown" id="clipboard_console_direction">
+                                    <property name="tooltip-text" translatable="yes">Event direction</property>
+                                    <property name="model">
+                                      <object class="GtkStringList">
+                                        <items>
+                                          <item translatable="yes">All directions</item>
+                                          <item>Local</item>
+                                          <item>Outbound</item>
+                                          <item>Inbound</item>
+                                        </items>
+                                      </object>
+                                    </property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkToggleButton" id="clipboard_console_pause">
+                                    <property name="label" translatable="yes">Pause</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkButton" id="clipboard_console_clear">
+                                    <property name="label" translatable="yes">Clear</property>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkSearchEntry" id="clipboard_console_search">
+                                <property name="placeholder-text" translatable="yes">Search event, transfer ID, MIME, peer, or error</property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkScrolledWindow" id="clipboard_console_scroll">
+                                <property name="height-request">320</property>
+                                <property name="vexpand">true</property>
+                                <property name="has-frame">true</property>
+                                <child>
+                                  <object class="GtkTextView" id="clipboard_console">
+                                    <property name="editable">false</property>
+                                    <property name="cursor-visible">false</property>
+                                    <property name="monospace">true</property>
+                                    <property name="wrap-mode">word-char</property>
+                                    <property name="left-margin">8</property>
+                                    <property name="right-margin">8</property>
+                                    <property name="top-margin">8</property>
+                                    <property name="bottom-margin">8</property>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                    <child>
                       <object class="AdwPreferencesGroup" id="capture_emulation_group">
                       <property name="title" translatable="yes">Capture / Emulation Status</property>
                         <child>
@@ -251,6 +357,32 @@
                                 <accessibility>
                                   <property name="label" translatable="yes">Synchronize file clipboard</property>
                                 </accessibility>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="AdwActionRow">
+                            <property name="title" translatable="yes">Dolphin (Flatpak)</property>
+                            <property name="subtitle" translatable="yes">Allow access to Lan Mouse file transfers</property>
+                            <child type="suffix">
+                              <object class="GtkButton" id="grant_dolphin_button">
+                                <property name="label" translatable="yes">Grant access</property>
+                                <property name="valign">center</property>
+                                <signal name="clicked" handler="handle_grant_dolphin" swapped="true"/>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="AdwActionRow">
+                            <property name="title" translatable="yes">Sushi (Flatpak)</property>
+                            <property name="subtitle" translatable="yes">Allow previews of Lan Mouse file transfers</property>
+                            <child type="suffix">
+                              <object class="GtkButton" id="grant_sushi_button">
+                                <property name="label" translatable="yes">Grant access</property>
+                                <property name="valign">center</property>
+                                <signal name="clicked" handler="handle_grant_sushi" swapped="true"/>
                               </object>
                             </child>
                           </object>

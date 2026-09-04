@@ -270,6 +270,19 @@ impl ClientManager {
             .collect()
     }
 
+    /// Returns every connected peer that can currently receive clipboard data.
+    ///
+    /// Clipboard synchronization is independent of which peer currently owns
+    /// the input-capture route.
+    pub(crate) fn clipboard_clients(&self) -> Vec<ClientHandle> {
+        self.clients
+            .borrow()
+            .iter()
+            .filter(|(_, (_, state))| state.alive && state.remote_ready)
+            .map(|(handle, _)| handle as ClientHandle)
+            .collect()
+    }
+
     pub(crate) fn set_active_addr(&self, handle: ClientHandle, addr: Option<SocketAddr>) {
         if let Some((_, s)) = self.clients.borrow_mut().get_mut(handle as usize) {
             s.active_addr = addr;

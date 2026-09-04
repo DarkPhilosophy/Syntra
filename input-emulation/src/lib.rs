@@ -5,6 +5,7 @@ use std::{
 };
 
 use input_event::{Event, KeyboardEvent};
+use tokio::sync::mpsc;
 
 pub use self::error::{EmulationCreationError, EmulationError, InputEmulationError};
 
@@ -73,11 +74,12 @@ pub struct InputEmulation {
     emulation: Box<dyn Emulation>,
     handles: HashSet<EmulationHandle>,
     pressed_keys: HashMap<EmulationHandle, HashSet<u32>>,
+    clipboard_rx: Option<mpsc::Receiver<(String, Vec<u8>)>>,
 }
 
 impl InputEmulation {
     async fn with_backend(backend: Backend) -> Result<InputEmulation, EmulationCreationError> {
-        let emulation: Box<dyn Emulation> = match backend {
+        let mut emulation: Box<dyn Emulation> = match backend {
             #[cfg(wlroots)]
             Backend::Wlroots => Box::new(wlroots::WlrootsEmulation::new()?),
             #[cfg(libei)]
@@ -89,13 +91,15 @@ impl InputEmulation {
             #[cfg(windows)]
             Backend::Windows => Box::new(windows::WindowsEmulation::new()?),
             #[cfg(target_os = "macos")]
-            Backend::MacOs => Box::new(macos::MacOSEmulation::new()?),
+            Backend::MacOs => Box::new(macos::MacOSEmulation::new().await?),
             Backend::Dummy => Box::new(dummy::DummyEmulation::new()),
         };
+        let clipboard_rx = emulation.take_clipboard_receiver();
         Ok(Self {
             emulation,
             handles: HashSet::new(),
             pressed_keys: HashMap::new(),
+            clipboard_rx,
         })
     }
 
@@ -208,6 +212,19 @@ impl InputEmulation {
         self.emulation.consume(event, handle).await?;
         Ok(())
     }
+    pub async fn clipboard_event(&mut self) -> Option<(String, Vec<u8>)> {
+        match self.clipboard_rx.as_mut() {
+            Some(receiver) => receiver.recv().await,
+            None => std::future::pending().await,
+        }
+    }
+    pub async fn set_file_clipboard(
+        &mut self,
+        contents: Vec<(String, Vec<u8>)>,
+    ) -> Result<(), EmulationError> {
+        self.emulation.set_file_clipboard(contents).await
+    }
+
 
     pub fn has_pressed_keys(&self, handle: EmulationHandle) -> bool {
         self.pressed_keys
@@ -237,6 +254,20 @@ trait Emulation: Send {
     fn healthy(&self) -> bool {
         true
     }
+    fn take_clipboard_receiver(&mut self) -> Option<mpsc::Receiver<(String, Vec<u8>)>> {
+        None
+    }
+    async fn set_file_clipboard(
+        &mut self,
+        _contents: Vec<(String, Vec<u8>)>,
+    ) -> Result<(), EmulationError> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "clipboard publishing is unavailable for this backend",
+        )
+        .into())
+    }
+
 
     async fn consume(
         &mut self,

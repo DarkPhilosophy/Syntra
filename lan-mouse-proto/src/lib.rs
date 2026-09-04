@@ -12,8 +12,12 @@ pub const MAX_CLIPBOARD_CHUNK_SIZE: usize = MAX_DATAGRAM_SIZE - CLIPBOARD_CHUNK_
 pub const MAX_CLIPBOARD_PATH_SIZE: usize = 1024;
 pub const MAX_CLIPBOARD_MANIFEST_ENTRIES: usize = 256;
 const CLIPBOARD_FILE_CHUNK_HEADER_SIZE: usize = 1 + 8 + 8 + 8 + 8;
+/// File chunks must survive a single DTLS datagram on a normal 1500 byte
+/// path MTU: larger payloads rely on IP fragmentation and are dropped,
+/// which stalls a paste after the first request.
+const SAFE_DATAGRAM_SIZE: usize = 1200;
 pub const MAX_CLIPBOARD_FILE_CHUNK_SIZE: usize =
-    MAX_DATAGRAM_SIZE - CLIPBOARD_FILE_CHUNK_HEADER_SIZE;
+    SAFE_DATAGRAM_SIZE - CLIPBOARD_FILE_CHUNK_HEADER_SIZE;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClipboardEntryKind {

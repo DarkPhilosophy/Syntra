@@ -35,12 +35,17 @@ mod dummy;
 
 pub type CaptureHandle = u64;
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum CaptureEvent {
     /// capture on this capture handle is now active
     Begin,
     /// input event coming from capture handle
     Input(Event),
+    /// Clipboard selection read through the native desktop portal.
+    Clipboard {
+        mime_type: String,
+        data: Vec<u8>,
+    },
 }
 
 impl Display for CaptureEvent {
@@ -48,6 +53,9 @@ impl Display for CaptureEvent {
         match self {
             CaptureEvent::Begin => write!(f, "begin capture"),
             CaptureEvent::Input(e) => write!(f, "{e}"),
+            CaptureEvent::Clipboard { mime_type, data } => {
+                write!(f, "clipboard {mime_type} ({} bytes)", data.len())
+            }
         }
     }
 }
@@ -265,7 +273,7 @@ impl Stream for InputCapture {
                 swap(&mut self.position_map, &mut position_map);
                 {
                     for &id in position_map.get(&pos).expect("position") {
-                        self.pending.push_back((id, event));
+                        self.pending.push_back((id, event.clone()));
                     }
                 }
                 swap(&mut self.position_map, &mut position_map);

@@ -2,11 +2,41 @@ use gtk::{gdk, gio, glib, prelude::*};
 use lan_mouse_adapter_api::{
     CopyManifest, EntryKind, Message, Operation, SourceEntry, read_messages, write_message,
 };
+use parking_lot::Mutex;
 use std::io::{self, BufReader};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 
-const MAX_READ: usize = 1024 * 1024;
+struct ClipboardBackend(gdk::ContentProvider);
+
+struct ActiveTransfer {
+    transfer_id: String,
+    backend: ClipboardBackend,
+    reasserted_after_empty: bool,
+}
+
+fn release_transfer(
+    transfer_id: &str,
+    active: &Mutex<Option<ActiveTransfer>>,
+    clipboard: &gdk::Clipboard,
+) {
+    let current = {
+        let mut active = active.lock();
+        if active
+            .as_ref()
+            .is_none_or(|current| current.transfer_id != transfer_id)
+        {
+            return;
+        }
+        active.take().unwrap()
+    };
+
+    let ClipboardBackend(_provider) = current.backend;
+    if let Err(error) = clipboard.set_content(None::<&gdk::ContentProvider>) {
+        eprintln!("GDK clipboard release failed for transfer {transfer_id}: {error}");
+    }
+}
+
 fn emit(message: &Message) {
     let mut out = io::stdout().lock();
     let _ = write_message(&mut out, message);
@@ -83,7 +113,7 @@ fn main() {
     let loop_for_input = loop_.clone();
     std::thread::spawn(move || {
         for message in read_messages(BufReader::new(io::stdin())).flatten() {
-            queue.lock().unwrap().push(message);
+            queue.lock().push(message);
         }
         cancel.store(true, Ordering::Release);
         loop_for_input.quit();
@@ -93,133 +123,178 @@ fn main() {
         return;
     };
     let clipboard = display.clipboard();
-    let active_transfer: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    if let Some(path) = std::env::var_os("LAN_MOUSE_DEBUG_COPY_PATH").map(std::path::PathBuf::from)
+    {
+        let clipboard = clipboard.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_secs(15), move || {
+            let file = gio::File::for_path(&path);
+            let uri = file.uri();
+            let uri_text = format!("{uri}\r\n");
+            let gnome = format!("copy\r\n{uri_text}");
+            let uri_provider = gdk::ContentProvider::for_bytes(
+                "text/uri-list",
+                &glib::Bytes::from(uri_text.as_bytes()),
+            );
+            let gnome_provider = gdk::ContentProvider::for_bytes(
+                "x-special/gnome-copied-files",
+                &glib::Bytes::from(gnome.as_bytes()),
+            );
+            let provider = gdk::ContentProvider::new_union(&[uri_provider, gnome_provider]);
+            match clipboard.set_content(Some(&provider)) {
+                Ok(()) => eprintln!("debug-copy: offered {uri}"),
+                Err(error) => eprintln!("debug-copy: failed to offer {uri}: {error}"),
+            }
+        });
+    }
+    let active_transfer: Arc<Mutex<Option<ActiveTransfer>>> = Arc::new(Mutex::new(None));
     let suppress_echo = Arc::new(Mutex::new(false));
+    let remote_file_clipboard: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+    let generation = Arc::new(AtomicU64::new(0));
+    let generation_for_main = Arc::clone(&generation);
     let queue_for_main = Arc::clone(&incoming);
     let clipboard_for_main = clipboard.clone();
     let active_for_main = Arc::clone(&active_transfer);
     let suppress_for_main = Arc::clone(&suppress_echo);
+    let remote_for_main = Arc::clone(&remote_file_clipboard);
     glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
-        let messages = std::mem::take(&mut *queue_for_main.lock().unwrap());
+        let messages = std::mem::take(&mut *queue_for_main.lock());
         for message in messages {
             match message {
-                Message::PublishFileClipboard(publication) => {
-                    let uri_text = publication.uris.join("\r\n") + "\r\n";
-                    let gnome = format!(
-                        "{}\r\n{}",
-                        if matches!(publication.operation, Operation::Move) {
-                            "cut"
-                        } else {
-                            "copy"
-                        },
-                        uri_text
-                    );
-                    let uri_provider = gdk::ContentProvider::for_bytes(
-                        "text/uri-list",
-                        &glib::Bytes::from(uri_text.as_bytes()),
-                    );
-                    let gnome_provider = gdk::ContentProvider::for_bytes(
-                        "x-special/gnome-copied-files",
-                        &glib::Bytes::from(gnome.as_bytes()),
-                    );
-                    let provider = gdk::ContentProvider::new_union(&[uri_provider, gnome_provider]);
-                    let mut active = active_for_main.lock().unwrap();
-                    if active.as_deref() != Some(publication.transfer_id.as_str()) {
-                        if let Some(old) = active.replace(publication.transfer_id.clone()) {
-                            emit(&Message::Released(lan_mouse_adapter_api::Released {
-                                transfer_id: old,
-                            }));
+                Message::ClipboardData {
+                    mime_type, value, ..
+                } => {
+                    if matches!(
+                        mime_type.as_str(),
+                        "x-special/gnome-copied-files" | "text/uri-list"
+                    ) {
+                        if let Some(manifest) = process_text(&value, &generation_for_main) {
+                            emit(&Message::CopyManifest(manifest));
                         }
                     }
-                    *suppress_for_main.lock().unwrap() = true;
-                    let _ = clipboard_for_main.set_content(Some(&provider));
                 }
-                Message::Released(released) => {
-                    if active_for_main.lock().unwrap().as_deref()
-                        == Some(released.transfer_id.as_str())
-                    {
-                        let _ = clipboard_for_main.set_content(None::<&gdk::ContentProvider>);
-                        *active_for_main.lock().unwrap() = None;
+                Message::PublishFileClipboard(publication) => {
+                    // `text/uri-list` is CRLF-delimited per RFC 2483, while
+                    // Nautilus' private copied-files format is strictly:
+                    // `copy\n<URI>\n...`. Feeding CRLF to the latter leaves
+                    // the offer visible but disables Paste in Nautilus.
+                    let operation = if matches!(publication.operation, Operation::Move) {
+                        "cut"
+                    } else {
+                        "copy"
+                    };
+                    let gnome = format!("{operation}\n{}\n", publication.uris.join("\n"));
+                    *remote_for_main.lock() = Some(gnome.as_bytes().to_vec());
+                    *suppress_for_main.lock() = true;
+
+                    let files: Vec<gio::File> = publication
+                        .uris
+                        .iter()
+                        .map(|uri| gio::File::for_uri(uri))
+                        .collect();
+                    let file_list = gdk::FileList::from_array(&files);
+                    // GDK's native FileList provider is the same clipboard
+                    // contract used by GTK file managers. It exports the
+                    // portal file-transfer formats GNOME Files consumes;
+                    // mixing raw MIME providers into the union causes Mutter
+                    // to withdraw the selection after advertising it.
+                    let provider = gdk::ContentProvider::for_value(&file_list.to_value());
+                    let backend = match clipboard_for_main.set_content(Some(&provider)) {
+                        Ok(()) => Some(ClipboardBackend(provider)),
+                        Err(error) => {
+                            eprintln!(
+                                "GDK clipboard publish failed for transfer {}: {error}",
+                                publication.transfer_id
+                            );
+                            None
+                        }
+                    };
+
+                    if let Some(backend) = backend {
+                        let mut active = active_for_main.lock();
+                        if active
+                            .as_ref()
+                            .is_none_or(|current| current.transfer_id != publication.transfer_id)
+                        {
+                            if let Some(old) = active.replace(ActiveTransfer {
+                                transfer_id: publication.transfer_id.clone(),
+                                backend,
+                                reasserted_after_empty: false,
+                            }) {
+                                emit(&Message::Released(lan_mouse_adapter_api::Released {
+                                    transfer_id: old.transfer_id,
+                                }));
+                            }
+                        } else {
+                            active.as_mut().unwrap().backend = backend;
+                            active.as_mut().unwrap().reasserted_after_empty = false;
+                        }
                     }
                 }
-                Message::Unmounted(event) => {
-                    if active_for_main.lock().unwrap().as_deref()
-                        == Some(event.transfer_id.as_str())
-                    {
-                        let _ = clipboard_for_main.set_content(None::<&gdk::ContentProvider>);
-                        *active_for_main.lock().unwrap() = None;
-                    }
-                }
-                Message::Cancel { transfer_id } => {
-                    if active_for_main.lock().unwrap().as_deref() == Some(transfer_id.as_str()) {
-                        let _ = clipboard_for_main.set_content(None::<&gdk::ContentProvider>);
-                        *active_for_main.lock().unwrap() = None;
-                    }
-                }
+                Message::Released(released) => release_transfer(
+                    &released.transfer_id,
+                    &active_for_main,
+                    &clipboard_for_main,
+                ),
+                Message::Unmounted(event) => release_transfer(
+                    &event.transfer_id,
+                    &active_for_main,
+                    &clipboard_for_main,
+                ),
+                Message::Cancel { transfer_id } => release_transfer(
+                    &transfer_id,
+                    &active_for_main,
+                    &clipboard_for_main,
+                ),
                 _ => {}
             }
         }
         glib::ControlFlow::Continue
     });
 
-    let generation = Arc::new(AtomicU64::new(0));
-    let cancel_signal = cancelled.clone();
-    let generation_signal = generation.clone();
+    // Event-driven local copy detection: GdkClipboard emits `changed`
+    // whenever the selection owner changes. We only ever READ the offer,
+    // never take ownership, so no auxiliary window and no polling.
+    let cancel_for_changed = Arc::clone(&cancelled);
     let suppress_for_changed = Arc::clone(&suppress_echo);
+    let remote_for_changed = Arc::clone(&remote_file_clipboard);
     let active_for_changed = Arc::clone(&active_transfer);
+    let generation_for_changed = Arc::clone(&generation);
+    let last_seen: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
     clipboard.connect_changed(move |clipboard| {
-        if cancel_signal.load(Ordering::Acquire) {
+        if cancel_for_changed.load(Ordering::Acquire) {
             return;
         }
-        let mut suppress = suppress_for_changed.lock().unwrap();
-        if *suppress {
-            *suppress = false;
+        let formats = clipboard.formats();
+        let names = formats.mime_types();
+        eprintln!("clipboard changed: mimes={names:?}");
+        if std::mem::take(&mut *suppress_for_changed.lock()) {
             return;
         }
-        if let Some(transfer_id) = active_for_changed.lock().unwrap().take() {
-            emit(&Message::Released(lan_mouse_adapter_api::Released {
-                transfer_id,
-            }));
-        }
-        let available = clipboard.formats().mime_types();
-        if clipboard
-            .formats()
-            .contains_type(gdk::FileList::static_type())
-        {
-            let generation_typed = generation_signal.clone();
-            clipboard.read_value_async(
-                gdk::FileList::static_type(),
-                glib::Priority::DEFAULT,
-                None::<&gio::Cancellable>,
-                move |result| {
-                    let Ok(value) = result else {
-                        return;
-                    };
-                    let Ok(file_list) = value.get::<gdk::FileList>() else {
-                        return;
-                    };
-                    let uris: Vec<String> = file_list
-                        .files()
-                        .iter()
-                        .map(|file| file.uri().to_string())
-                        .collect();
-                    let text = uris.join("\r\n") + "\r\n";
-                    if let Some(manifest) = process_text(&text, &generation_typed) {
-                        emit(&Message::CopyManifest(manifest));
-                    }
-                },
-            );
-            return;
-        }
-        let names: Vec<_> = available.iter().map(|value| value.as_str()).collect();
         let Some(mime) = ["x-special/gnome-copied-files", "text/uri-list"]
-            .iter()
-            .find(|mime| names.iter().any(|name| name == *mime))
+            .into_iter()
+            .find(|mime| names.iter().any(|name| name.as_str() == *mime))
         else {
+            // GNOME can briefly publish an empty selection while changing
+            // owners. Reassert our live remote offer once after that
+            // transition so Files receives the file MIME metadata.
+            let mut active = active_for_changed.lock();
+            if let Some(current) = active.as_mut() {
+                if !current.reasserted_after_empty {
+                    current.reasserted_after_empty = true;
+                    *suppress_for_changed.lock() = true;
+                    if clipboard.set_content(Some(&current.backend.0)).is_ok() {
+                        return;
+                    }
+                }
+            }
+            *active = None;
+            *last_seen.lock() = None;
             return;
         };
-        let clipboard = clipboard.clone();
-        let generation = generation_signal.clone();
+        let remote = Arc::clone(&remote_for_changed);
+        let active = Arc::clone(&active_for_changed);
+        let generation = Arc::clone(&generation_for_changed);
+        let seen = Arc::clone(&last_seen);
         clipboard.read_async(
             &[mime],
             glib::Priority::DEFAULT,
@@ -229,16 +304,40 @@ fn main() {
                     return;
                 };
                 stream.read_bytes_async(
-                    MAX_READ,
+                    1024 * 1024,
                     glib::Priority::DEFAULT,
                     None::<&gio::Cancellable>,
-                    move |result| {
-                        let Ok(bytes) = result else {
+                    move |bytes| {
+                        let Ok(bytes) = bytes else {
                             return;
                         };
+                        let payload = bytes.to_vec();
+                        if payload.is_empty() {
+                            return;
+                        }
+                        // Never re-announce content this machine received
+                        // from the peer, and never announce the same
+                        // selection twice.
+                        if remote.lock().as_deref() == Some(payload.as_slice()) {
+                            return;
+                        }
+                        // This is a new local file offer, so the adapter no
+                        // longer owns the remote offer kept alive above.
+                        *active.lock() = None;
+                        let mut seen = seen.lock();
+                        if seen.as_deref() == Some(payload.as_slice()) {
+                            return;
+                        }
+                        *seen = Some(payload.clone());
+                        drop(seen);
                         if let Some(manifest) =
-                            process_text(&String::from_utf8_lossy(bytes.as_ref()), &generation)
+                            process_text(&String::from_utf8_lossy(&payload), &generation)
                         {
+                            eprintln!(
+                                "local file copy detected: transfer={} entries={}",
+                                manifest.transfer_id,
+                                manifest.entries.len()
+                            );
                             emit(&Message::CopyManifest(manifest));
                         }
                     },

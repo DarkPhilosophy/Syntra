@@ -15,6 +15,7 @@ use std::{
 };
 use tokio::{
     select,
+    sync::oneshot,
     task::{JoinHandle, spawn_local},
 };
 
@@ -66,6 +67,11 @@ pub(crate) enum EmulationEvent {
         commit: [u8; 8],
     },
     Clipboard(ClipboardContent),
+    FileClipboard {
+        mime_type: String,
+        value: String,
+    },
+    NativeClipboard(ClipboardContent),
     /// File-clipboard protocol traffic received from an authenticated listener peer.
     ClipboardProtocol {
         addr: SocketAddr,
@@ -79,6 +85,10 @@ enum EmulationRequest {
     ChangePort(u16),
     CaptureReady(bool),
     SendProto { addr: SocketAddr, event: ProtoEvent },
+    PublishFileClipboard {
+        contents: Vec<(String, Vec<u8>)>,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     Terminate,
 }
 
@@ -134,6 +144,25 @@ impl Emulation {
             .send(EmulationRequest::SendProto { addr, event })
             .expect("channel closed");
     }
+    pub(crate) fn publish_file_clipboard(&self, contents: Vec<(String, Vec<u8>)>) {
+        let (reply, result) = oneshot::channel();
+        if self
+            .request_tx
+            .send(EmulationRequest::PublishFileClipboard { contents, reply })
+            .is_err()
+        {
+            log::warn!("cannot publish file clipboard: emulation task stopped");
+            return;
+        }
+        tokio::task::spawn_local(async move {
+            match result.await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => log::warn!("cannot publish file clipboard: {error}"),
+                Err(_) => log::warn!("cannot publish file clipboard: emulation task stopped"),
+            }
+        });
+    }
+
 
     pub(crate) async fn event(&mut self) -> EmulationEvent {
         self.event_rx.recv().await.expect("channel closed")
@@ -357,6 +386,10 @@ impl ListenTask {
                     EmulationRequest::SendProto { addr, event } => {
                         self.listener.reply(addr, event).await;
                     }
+                    EmulationRequest::PublishFileClipboard { contents, reply } => {
+                        let result = self.emulation_proxy.publish_file_clipboard(contents).await;
+                        let _ = reply.send(result);
+                    }
                     EmulationRequest::Terminate => break,
                 },
                 _ = interval.tick() => {
@@ -394,6 +427,10 @@ enum ProxyRequest {
     Remove(SocketAddr),
     Terminate,
     Reenable,
+    PublishFileClipboard {
+        contents: Vec<(String, Vec<u8>)>,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
 }
 
 impl EmulationProxy {
@@ -454,6 +491,17 @@ impl EmulationProxy {
             .send(ProxyRequest::Reenable)
             .expect("channel closed");
     }
+    async fn publish_file_clipboard(
+        &self,
+        contents: Vec<(String, Vec<u8>)>,
+    ) -> Result<(), String> {
+        let (reply, result) = oneshot::channel();
+        self.request_tx
+            .send(ProxyRequest::PublishFileClipboard { contents, reply })
+            .map_err(|_| "emulation task stopped".to_string())?;
+        result.await.map_err(|_| "emulation task stopped".to_string())?
+    }
+
 
     async fn terminate(&mut self) {
         self.exit_requested.replace(true);
@@ -490,6 +538,9 @@ impl EmulationTask {
                     ProxyRequest::Terminate => return,
                     ProxyRequest::Input(..) => { /* emulation inactive => ignore */ }
                     ProxyRequest::Remove(..) => { /* emulation inactive => ignore */ }
+                    ProxyRequest::PublishFileClipboard { reply, .. } => {
+                        let _ = reply.send(Err("emulation inactive".to_string()));
+                    }
                 }
             }
         }
@@ -563,6 +614,35 @@ impl EmulationTask {
                     }
                     ProxyRequest::Terminate => break Ok(()),
                     ProxyRequest::Reenable => continue,
+                    ProxyRequest::PublishFileClipboard { contents, reply } => {
+                        let result = emulation
+                            .set_file_clipboard(contents)
+                            .await
+                            .map_err(|error| error.to_string());
+                        let _ = reply.send(result);
+                    },
+                },
+                clipboard = emulation.clipboard_event() => {
+                    if let Some((mime_type, data)) = clipboard {
+                        if matches!(
+                            mime_type.as_str(),
+                            "text/plain;charset=utf-8" | "text/plain" | "UTF8_STRING"
+                        ) {
+                            match String::from_utf8(data) {
+                                Ok(text) => self.event_tx
+                                    .send(EmulationEvent::NativeClipboard(ClipboardContent::Text(text)))
+                                    .expect("channel closed"),
+                                Err(error) => log::warn!("native text clipboard is not UTF-8: {error}"),
+                            }
+                        } else {
+                            match String::from_utf8(data) {
+                                Ok(value) => self.event_tx
+                                    .send(EmulationEvent::FileClipboard { mime_type, value })
+                                    .expect("channel closed"),
+                                Err(error) => log::warn!("native file clipboard is not UTF-8: {error}"),
+                            }
+                        }
+                    }
                 },
                 _ = health_check.tick() => {
                     if !emulation.healthy() {
@@ -591,6 +671,9 @@ async fn wait_for_termination(rx: &mut Receiver<ProxyRequest>) {
             ProxyRequest::Input(_, _) => continue,
             ProxyRequest::Remove(_) => continue,
             ProxyRequest::Reenable => continue,
+            ProxyRequest::PublishFileClipboard { reply, .. } => {
+                let _ = reply.send(Err("emulation task stopped".to_string()));
+            }
         }
     }
 }

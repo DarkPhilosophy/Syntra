@@ -115,6 +115,10 @@ struct Args {
     #[arg(long)]
     cert_path: Option<PathBuf>,
 
+    /// run an automated file copy/paste end-to-end check between peers
+    #[arg(long)]
+    test_copyfile_e2e: bool,
+
     /// subcommands
     #[command(subcommand)]
     command: Option<Command>,
@@ -483,6 +487,11 @@ impl Config {
         }
         self.config_toml.as_mut().expect("config").port = Some(port);
     }
+    /// automated file clipboard end-to-end check requested on the cmdline
+    pub fn test_copyfile_e2e(&self) -> bool {
+        self.args.test_copyfile_e2e
+    }
+
 
     pub fn clipboard_settings(&self) -> ClipboardSettings {
         let config = self.config_toml.as_ref();

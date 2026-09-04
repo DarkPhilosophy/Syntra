@@ -1,6 +1,7 @@
 use ashpd::{
     desktop::{
         PersistMode, Session,
+        clipboard::{Clipboard, RequestClipboardOptions},
         input_capture::{
             Activated, ActivatedBarrier, Barrier, BarrierID, Capabilities, CreateSession2Options,
             InputCapture, Region, ReleaseOptions, StartOptions, Zones,
@@ -31,6 +32,7 @@ use std::{
     task::{Context, Poll},
 };
 use tokio::{
+    io::AsyncReadExt,
     sync::{
         Notify,
         mpsc::{self, Receiver, Sender},
@@ -213,19 +215,33 @@ fn write_restore_token(token: &str) {
 
 async fn create_session(
     input_capture: &InputCapture,
-) -> std::result::Result<(Session<InputCapture>, BitFlags<Capabilities>), ashpd::Error> {
+) -> std::result::Result<(Session<InputCapture>, BitFlags<Capabilities>, bool), ashpd::Error> {
     log::debug!("creating input capture session");
-    if input_capture.version() < 2 {
-        let options = ashpd::desktop::input_capture::CreateSessionOptions::default()
-            .set_capabilities(
-                Capabilities::Keyboard | Capabilities::Pointer | Capabilities::Touchscreen,
-            );
-        return input_capture.create_session(None, options).await;
-    }
-
-    let session = input_capture
+    let session = match input_capture
         .create_session2(CreateSession2Options::default())
-        .await?;
+        .await
+    {
+        Ok(session) => session,
+        Err(error) => {
+            log::warn!("CreateSession2 unavailable, clipboard integration disabled: {error}");
+            let options = ashpd::desktop::input_capture::CreateSessionOptions::default()
+                .set_capabilities(
+                    Capabilities::Keyboard | Capabilities::Pointer | Capabilities::Touchscreen,
+                );
+            let (session, capabilities) = input_capture.create_session(None, options).await?;
+            return Ok((session, capabilities, false));
+        }
+    };
+    let clipboard_requested = match Clipboard::new().await {
+        Ok(clipboard) => clipboard
+            .request(&session, RequestClipboardOptions::default())
+            .await
+            .is_ok(),
+        Err(error) => {
+            log::warn!("clipboard portal unavailable: {error}");
+            false
+        }
+    };
     let options = StartOptions::default()
         .set_capabilities(
             Capabilities::Keyboard | Capabilities::Pointer | Capabilities::Touchscreen,
@@ -237,7 +253,9 @@ async fn create_session(
     if let Some(token) = response.restore_token() {
         write_restore_token(token);
     }
-    Ok((session, response.capabilities()))
+    let clipboard_enabled = clipboard_requested && response.is_clipboard_enabled();
+    log::info!("native clipboard portal enabled={clipboard_enabled}");
+    Ok((session, response.capabilities(), clipboard_enabled))
 }
 
 async fn connect_to_eis(
@@ -328,11 +346,11 @@ async fn do_capture(
     notify_release: Arc<Notify>,
     capturing: Arc<AtomicBool>,
     release_complete: Arc<Notify>,
-    session: Option<(Session<InputCapture>, BitFlags<Capabilities>)>,
+    session: Option<(Session<InputCapture>, BitFlags<Capabilities>, bool)>,
     event_tx: Sender<(Position, CaptureEvent)>,
     cancellation_token: CancellationToken,
 ) -> Result<(), CaptureError> {
-    let mut session = session.map(|s| s.0);
+    let mut session = session.map(|s| (s.0, s.2));
 
     /* safety: libei_task does not outlive Self */
     let input_capture = unsafe { &*input_capture };
@@ -342,46 +360,45 @@ async fn do_capture(
     let mut zones_changed = input_capture.receive_zones_changed().await?;
 
     loop {
-        // do capture session
         let cancel_session = CancellationToken::new();
         let cancel_update = CancellationToken::new();
-
         let mut capture_event_occured: Option<LibeiNotifyEvent> = None;
         let mut zones_have_changed = false;
 
-        // kill session if clients need to be updated
         let handle_session_update_request = async {
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
                     log::debug!("cancelled")
-                }, /* exit requested */
+                },
                 _ = cancel_update.cancelled() => {
                     log::debug!("update task cancelled");
-                }, /* session exited */
+                },
                 _ = zones_changed.next() => {
                     log::debug!("zones changed!");
                     zones_have_changed = true
-                }, /* zones have changed */
-                e = capture_event.recv() => if let Some(e) = e { /* clients changed */
+                },
+                e = capture_event.recv() => if let Some(e) = e {
                     log::debug!("capture event: {e:?}");
                     capture_event_occured.replace(e);
                 },
             }
-            // kill session (might already be dead!)
             log::debug!("=> cancelling session");
             cancel_session.cancel();
         };
 
         if !active_clients.is_empty() {
-            // create session
-            let mut session = match session.take() {
+            let (mut session, clipboard_enabled) = match session.take() {
                 Some(s) => s,
-                None => create_session(input_capture).await?.0,
+                None => {
+                    let created = create_session(input_capture).await?;
+                    (created.0, created.2)
+                }
             };
 
             let capture_session = do_capture_session(
                 input_capture,
                 &mut session,
+                clipboard_enabled,
                 &event_tx,
                 &active_clients,
                 &mut next_barrier_id,
@@ -394,7 +411,6 @@ async fn do_capture(
             let (capture_result, ()) = tokio::join!(capture_session, handle_session_update_request);
             log::debug!("capture session + session_update task done!");
 
-            // disable capture
             log::debug!("disabling input capture");
             if let Err(e) = input_capture.disable(&session, Default::default()).await {
                 log::warn!("input_capture.disable(&session) {e}");
@@ -402,14 +418,11 @@ async fn do_capture(
             if let Err(e) = session.close().await {
                 log::warn!("session.close(): {e}");
             }
-
-            // propagate error from capture session
             capture_result?;
         } else {
             handle_session_update_request.await;
         }
 
-        // update clients if requested
         if let Some(event) = capture_event_occured.take() {
             match event {
                 LibeiNotifyEvent::Create(p) => active_clients.push(p),
@@ -417,16 +430,52 @@ async fn do_capture(
             }
         }
 
-        // break
         if cancellation_token.is_cancelled() {
             break Ok(());
         }
     }
 }
 
+const FILE_CLIPBOARD_MIME_TYPES: [&str; 2] = [
+    "x-special/gnome-copied-files",
+    "text/uri-list",
+];
+const MAX_FILE_CLIPBOARD_BYTES: u64 = 1024 * 1024;
+
+async fn read_portal_file_clipboard(
+    clipboard: &Clipboard,
+    session: &Session<InputCapture>,
+    mime_types: &[String],
+) -> Option<(String, Vec<u8>)> {
+    let mime_type = FILE_CLIPBOARD_MIME_TYPES
+        .iter()
+        .find(|candidate| mime_types.iter().any(|mime| mime == **candidate))?;
+    let fd = match clipboard.selection_read(session, mime_type).await {
+        Ok(fd) => fd,
+        Err(error) => {
+            log::warn!("native clipboard read failed for {mime_type}: {error}");
+            return None;
+        }
+    };
+    let fd: std::os::fd::OwnedFd = fd.into();
+    let file = std::fs::File::from(fd);
+    let mut file = tokio::fs::File::from_std(file).take(MAX_FILE_CLIPBOARD_BYTES + 1);
+    let mut data = Vec::new();
+    if let Err(error) = file.read_to_end(&mut data).await {
+        log::warn!("native clipboard data read failed: {error}");
+        return None;
+    }
+    if data.len() as u64 > MAX_FILE_CLIPBOARD_BYTES {
+        log::warn!("native clipboard selection exceeds size limit");
+        return None;
+    }
+    Some(((*mime_type).to_string(), data))
+}
+
 async fn do_capture_session(
     input_capture: &InputCapture,
     session: &mut Session<InputCapture>,
+    clipboard_enabled: bool,
     event_tx: &Sender<(Position, CaptureEvent)>,
     active_clients: &[Position],
     next_barrier_id: &mut NonZeroU32,
@@ -479,6 +528,19 @@ async fn do_capture_session(
     let capture_session_task = async {
         // receiver for activation tokens
         let mut activated = input_capture.receive_activated().await?;
+        let clipboard = if clipboard_enabled {
+            Some(Clipboard::new().await?)
+        } else {
+            None
+        };
+        let mut clipboard_changed = match clipboard.as_ref() {
+            Some(clipboard) => Some(Box::pin(
+                clipboard
+                    .receive_selection_owner_changed::<InputCapture>()
+                    .await?,
+            )),
+            None => None,
+        };
         let mut ei_devices_changed = false;
         loop {
             tokio::select! {
@@ -509,18 +571,53 @@ async fn do_capture_session(
                     // client entered => send event
                     event_tx.send((pos, CaptureEvent::Begin)).await.expect("no channel");
 
-                    tokio::select! {
-                        _ = notify_release.notified() => { /* capture release */
-                            log::debug!("release session requested");
-                        },
-                        _ = release_session.notified() => { /* release session */
-                            log::debug!("ei devices changed");
-                            ei_devices_changed = true;
-                        },
-                        _ = cancel_session.cancelled() => { /* kill session notify */
-                            log::debug!("session cancel requested");
-                            break
-                        },
+                    loop {
+                        tokio::select! {
+                            _ = notify_release.notified() => {
+                                log::debug!("release session requested");
+                                break;
+                            },
+                            _ = release_session.notified() => {
+                                log::debug!("ei devices changed");
+                                ei_devices_changed = true;
+                                break;
+                            },
+                            _ = cancel_session.cancelled() => {
+                                log::debug!("session cancel requested");
+                                break;
+                            },
+                            changed = async {
+                                match clipboard_changed.as_mut() {
+                                    Some(stream) => stream.as_mut().next().await,
+                                    None => None,
+                                }
+                            }, if clipboard_changed.is_some() => {
+                                let Some((_changed_session, changed)) = changed else {
+                                    clipboard_changed = None;
+                                    continue;
+                                };
+                                if changed.session_is_owner() == Some(true) {
+                                    continue;
+                                }
+                                let Some(clipboard) = clipboard.as_ref() else {
+                                    continue;
+                                };
+                                if let Some((mime_type, data)) = read_portal_file_clipboard(
+                                    clipboard,
+                                    session,
+                                    changed.mime_types(),
+                                ).await {
+                                    log::info!(
+                                        "native file clipboard detected: mime={mime_type} bytes={}",
+                                        data.len()
+                                    );
+                                    event_tx
+                                        .send((pos, CaptureEvent::Clipboard { mime_type, data }))
+                                        .await
+                                        .expect("no channel");
+                                }
+                            },
+                        }
                     }
 
                     let release_result =

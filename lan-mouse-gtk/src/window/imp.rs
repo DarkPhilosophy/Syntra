@@ -1,11 +1,18 @@
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+#[cfg(unix)]
+use std::os::unix::net::UnixDatagram;
+#[cfg(target_os = "linux")]
+use std::process::Command;
 
 use adw::subclass::prelude::*;
 use adw::{ActionRow, PreferencesGroup, ToastOverlay, prelude::*};
 use glib::subclass::InitializingObject;
 use gtk::glib::clone;
-use gtk::{Button, CompositeTemplate, Entry, Image, Label, ListBox, Switch, gdk, gio, glib};
+use gtk::{
+    Button, CompositeTemplate, DropDown, Entry, Image, Label, ListBox, ScrolledWindow, SearchEntry,
+    Switch, TextView, ToggleButton, gdk, gio, glib,
+};
 
 use crate::authorization_window::AuthorizationWindow;
 use lan_mouse_ipc::{ClipboardTransferId, DEFAULT_PORT, FrontendRequestWriter};
@@ -53,6 +60,25 @@ pub struct Window {
     pub transfers_group: TemplateChild<PreferencesGroup>,
     #[template_child]
     pub transfers_list: TemplateChild<ListBox>,
+    #[template_child]
+    pub clipboard_console_search: TemplateChild<SearchEntry>,
+    #[template_child]
+    pub clipboard_console_level: TemplateChild<DropDown>,
+    #[template_child]
+    pub clipboard_console_stage: TemplateChild<DropDown>,
+    #[template_child]
+    pub clipboard_console_direction: TemplateChild<DropDown>,
+    #[template_child]
+    pub clipboard_console_pause: TemplateChild<ToggleButton>,
+    #[template_child]
+    pub clipboard_console_clear: TemplateChild<Button>,
+    #[template_child]
+    pub clipboard_console_scroll: TemplateChild<ScrolledWindow>,
+    #[template_child]
+    pub clipboard_console: TemplateChild<TextView>,
+    pub clipboard_console_lines: RefCell<VecDeque<String>>,
+    #[cfg(unix)]
+    pub clipboard_console_socket: RefCell<Option<UnixDatagram>>,
     pub transfer_rows: RefCell<
         HashMap<(ClipboardTransferId, lan_mouse_ipc::ClipboardFileId), (ActionRow, Button)>,
     >,
@@ -173,6 +199,38 @@ impl Window {
             .request(lan_mouse_ipc::FrontendRequest::SetClipboardFiles(state));
         true
     }
+    #[cfg(target_os = "linux")]
+    fn grant_flatpak_access(&self, app_id: &str, button: &Button) {
+        let result = Command::new("flatpak")
+            .args([
+                "override",
+                "--user",
+                "--filesystem=xdg-run/lan-mouse:ro",
+                app_id,
+            ])
+            .status();
+        if result.is_ok_and(|status| status.success()) {
+            button.set_label("Granted");
+            button.set_sensitive(false);
+            button.add_css_class("success");
+        } else {
+            self.toast_overlay.add_toast(adw::Toast::new(
+                "Could not grant Flatpak access",
+            ));
+        }
+    }
+
+    #[template_callback]
+    fn handle_grant_dolphin(&self, button: &Button) {
+        #[cfg(target_os = "linux")]
+        self.grant_flatpak_access("org.kde.dolphin", button);
+    }
+
+    #[template_callback]
+    fn handle_grant_sushi(&self, button: &Button) {
+        #[cfg(target_os = "linux")]
+        self.grant_flatpak_access("org.gnome.NautilusPreviewer", button);
+    }
 
     #[template_callback]
     fn handle_emulation(&self) {
@@ -234,6 +292,7 @@ impl ObjectImpl for Window {
         obj.setup_icon();
         obj.setup_clients();
         obj.setup_authorized();
+        obj.setup_clipboard_console();
     }
 }
 

@@ -1,6 +1,8 @@
 mod imp;
 
 use std::collections::HashMap;
+#[cfg(unix)]
+use std::{fs, os::unix::net::UnixDatagram, path::PathBuf};
 
 use adw::ActionRow;
 use adw::prelude::*;
@@ -52,6 +54,175 @@ impl Window {
             .borrow_mut()
             .replace(conn);
         window
+    }
+    #[cfg(unix)]
+    fn clipboard_console_path() -> PathBuf {
+        std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("lan-mouse-clipboard-console.sock")
+    }
+
+    pub(super) fn setup_clipboard_console(&self) {
+        #[cfg(unix)]
+        {
+            let path = Self::clipboard_console_path();
+            let _ = fs::remove_file(&path);
+            match UnixDatagram::bind(&path) {
+                Ok(socket) => {
+                    if socket.set_nonblocking(true).is_ok() {
+                        self.imp().clipboard_console_socket.replace(Some(socket));
+                    }
+                }
+                Err(error) => self.append_console_line(format!(
+                    "[ERROR][console] cannot open live diagnostic stream: {error}"
+                )),
+            }
+        }
+        let refresh = clone!(
+            #[weak(rename_to = window)]
+            self,
+            move || window.render_clipboard_console()
+        );
+        self.imp().clipboard_console_search.connect_search_changed(clone!(
+            #[strong]
+            refresh,
+            move |_| refresh()
+        ));
+        for dropdown in [
+            self.imp().clipboard_console_level.get(),
+            self.imp().clipboard_console_stage.get(),
+            self.imp().clipboard_console_direction.get(),
+        ] {
+            dropdown.connect_selected_notify(clone!(
+                #[strong]
+                refresh,
+                move |_| refresh()
+            ));
+        }
+        self.imp().clipboard_console_pause.connect_toggled(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |button| {
+                button.set_label(if button.is_active() { "Resume" } else { "Pause" });
+                if !button.is_active() {
+                    window.render_clipboard_console();
+                }
+            }
+        ));
+        self.imp().clipboard_console_clear.connect_clicked(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_| {
+                window.imp().clipboard_console_lines.borrow_mut().clear();
+                window.render_clipboard_console();
+            }
+        ));
+        glib::timeout_add_local(
+            std::time::Duration::from_millis(50),
+            clone!(
+                #[weak(rename_to = window)]
+                self,
+                #[upgrade_or]
+                glib::ControlFlow::Break,
+                move || {
+                    window.receive_clipboard_console();
+                    glib::ControlFlow::Continue
+                }
+            ),
+        );
+    }
+
+    fn append_console_line(&self, line: String) {
+        let mut lines = self.imp().clipboard_console_lines.borrow_mut();
+        lines.push_back(line);
+        while lines.len() > 2_000 {
+            lines.pop_front();
+        }
+    }
+
+    fn receive_clipboard_console(&self) {
+        #[cfg(unix)]
+        {
+            let mut received = false;
+            if let Some(socket) = self.imp().clipboard_console_socket.borrow().as_ref() {
+                let mut buffer = [0_u8; 65_536];
+                loop {
+                    match socket.recv(&mut buffer) {
+                        Ok(length) => {
+                            for line in String::from_utf8_lossy(&buffer[..length]).lines() {
+                                self.append_console_line(line.to_owned());
+                            }
+                            received = true;
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                        Err(error) => {
+                            self.append_console_line(format!(
+                                "[ERROR][console] live stream failed: {error}"
+                            ));
+                            received = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if received && !self.imp().clipboard_console_pause.is_active() {
+                self.render_clipboard_console();
+            }
+        }
+    }
+
+    fn render_clipboard_console(&self) {
+        let query = self.imp().clipboard_console_search.text().to_string().to_lowercase();
+        let level = self.imp().clipboard_console_level.selected();
+        let stage = self.imp().clipboard_console_stage.selected();
+        let direction = self.imp().clipboard_console_direction.selected();
+        let stage_terms: &[&str] = match stage {
+            1 => &["copy", "owner-changed", "local-selection", "manifest"],
+            2 => &["peer", "protocol", "range", "manifest", "transport"],
+            3 => &["set-selection", "publication", "portal", "selection-transfer"],
+            4 => &["paste", "selection-transfer-request", "lookup", "open", "read"],
+            5 => &["fuse", "lookup", "getattr", "open", "read", "release"],
+            6 => &["progress", "completed", "cancel", "unmounted", "released"],
+            7 => &["[error]", "[warn]", "failed", "rejected"],
+            _ => &[],
+        };
+        let direction_term = match direction {
+            1 => "direction=local",
+            2 => "direction=outbound",
+            3 => "direction=inbound",
+            _ => "",
+        };
+        let level_term = match level {
+            1 => "[ERROR]",
+            2 => "[WARN]",
+            3 => "[INFO]",
+            4 => "[DEBUG]",
+            5 => "[TRACE]",
+            _ => "",
+        };
+        let lines = self.imp().clipboard_console_lines.borrow();
+        let text = lines
+            .iter()
+            .filter(|line| level_term.is_empty() || line.contains(level_term))
+            .filter(|line| {
+                let lower = line.to_lowercase();
+                (stage_terms.is_empty() || stage_terms.iter().any(|term| lower.contains(term)))
+                    && (direction_term.is_empty() || lower.contains(direction_term))
+                    && (query.is_empty() || lower.contains(&query))
+            })
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
+        let adjustment = self.imp().clipboard_console_scroll.vadjustment();
+        let follow = adjustment.value() + adjustment.page_size() >= adjustment.upper() - 4.0;
+        let buffer = self.imp().clipboard_console.buffer();
+        buffer.set_text(&text);
+        if follow {
+            glib::idle_add_local_once(move || {
+                adjustment.set_value(adjustment.upper() - adjustment.page_size());
+            });
+        }
     }
 
     fn clients(&self) -> gio::ListStore {

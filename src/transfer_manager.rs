@@ -75,17 +75,23 @@ pub(crate) enum TransferFrontendEvent<P> {
         ui_id: UiTransferId,
         owner: TransferOwner<P>,
         file_id: Option<u64>,
+        completed: u64,
+        total: u64,
     },
     Cancelled {
         ui_id: UiTransferId,
         owner: TransferOwner<P>,
         file_id: Option<u64>,
+        completed: u64,
+        total: u64,
         reason: ClipboardCancelReason,
     },
     Failed {
         ui_id: UiTransferId,
         owner: TransferOwner<P>,
         file_id: Option<u64>,
+        completed: u64,
+        total: u64,
         error: String,
     },
 }
@@ -146,6 +152,9 @@ pub(crate) enum TransferStateError<P: Debug> {
     UnsupportedProtocolEvent,
 }
 
+/// A clipboard offer is pure metadata: only a real data request marks it as
+/// an actual transfer.
+
 struct LocalTransfer<P> {
     ui_id: UiTransferId,
     owner: TransferOwner<P>,
@@ -154,6 +163,10 @@ struct LocalTransfer<P> {
     operation: Operation,
     offer: FileOffer,
     outgoing: HashMap<(u64, u64), OutgoingFile>,
+    /// A local offer is only metadata until the peer actually pastes.
+    announced: bool,
+    /// Greatest protocol-reported byte position for each file.
+    transferred_by_file: HashMap<u64, u64>,
 }
 
 struct RemoteTransfer<P> {
@@ -163,6 +176,12 @@ struct RemoteTransfer<P> {
     adapter_transfer_id: String,
     operation: Operation,
     entries: HashMap<u64, ClipboardManifestEntry>,
+    /// A remote offer is only metadata until the user actually pastes:
+    /// the transfer is announced to the frontend once a paste really
+    /// streams data, never when the user merely copies.
+    announced: bool,
+    /// Greatest validated byte position for each file.
+    transferred_by_file: HashMap<u64, u64>,
 }
 
 struct PendingRange<P> {
@@ -232,6 +251,8 @@ where
             peer: peer.clone(),
             wire_id,
         };
+        // Validate the replacement before touching the current owner. A malformed
+        // clipboard announcement must not make the still-valid offer disappear.
         self.ensure_owner_available(&owner)?;
         if offer.transfer_id != wire_id {
             return Err(TransferStateError::InvalidManifest(
@@ -239,13 +260,30 @@ where
             ));
         }
         validate_wire_manifest(&offer.entries)?;
-        let ui_id = self.allocate_ui_id()?;
-        let operation = manifest.operation.clone();
         if matches!(manifest.operation, Operation::Move) {
             return Err(TransferStateError::InvalidManifest(
                 "move clipboard transfers are not supported by the wire manifest".into(),
             ));
         }
+        /// Every new local copy replaces the previous offer to the same
+        /// peer: otherwise each copy leaves another never-pasteable offer
+        /// behind and the peer accumulates clones.
+        let superseded: Vec<_> = self
+            .local
+            .iter()
+            .filter(|(candidate, transfer)| candidate.peer == peer && !transfer.announced)
+            .map(|(candidate, _)| candidate.clone())
+            .collect();
+        let mut stale_actions = Vec::new();
+        for candidate in superseded {
+            stale_actions.extend(
+                self.cancel_owner(&candidate, None, ClipboardCancelReason::User, true)
+                    .unwrap_or_default(),
+            );
+        }
+        let ui_id = self.allocate_ui_id()?;
+        let operation = manifest.operation.clone();
+        debug_assert!(!matches!(manifest.operation, Operation::Move));
         let entries = offer.entries.clone();
         let adapter_transfer_id = manifest.transfer_id.clone();
         self.insert_mapping(
@@ -264,25 +302,39 @@ where
                 operation: operation.clone(),
                 offer,
                 outgoing: HashMap::new(),
+                announced: false,
+                transferred_by_file: HashMap::new(),
             },
         );
-        Ok(vec![
-            TransferAction::Peer {
-                peer,
-                event: ProtoEvent::ClipboardManifest {
-                    transfer_id: wire_id,
-                    entries: entries.clone(),
-                },
-            },
-            TransferAction::Frontend(TransferFrontendEvent::Offered {
-                ui_id,
-                owner,
-                adapter_id,
-                operation,
+        stale_actions.push(TransferAction::Peer {
+            peer,
+            event: ProtoEvent::ClipboardManifest {
+                transfer_id: wire_id,
                 entries,
-            }),
-        ])
+            },
+        });
+        Ok(stale_actions)
     }
+
+    /// A copy is never a transfer: the frontend only learns about an offer
+    /// once a paste actually streams more than a clipboard preview sniff.
+    fn announce_local(&mut self, owner: &TransferOwner<P>, length: u64) -> Vec<TransferAction<P>> {
+        let Some(transfer) = self.local.get_mut(owner) else {
+            return Vec::new();
+        };
+        if transfer.announced {
+            return Vec::new();
+        }
+        transfer.announced = true;
+        vec![TransferAction::Frontend(TransferFrontendEvent::Offered {
+            ui_id: transfer.ui_id,
+            owner: owner.clone(),
+            adapter_id: transfer.adapter_id.clone(),
+            operation: transfer.operation.clone(),
+            entries: transfer.offer.entries.clone(),
+        })]
+    }
+
     pub(crate) fn inbound_manifest(
         &mut self,
         peer: P,
@@ -298,8 +350,27 @@ where
                 "move clipboard transfers are not supported by the wire manifest".into(),
             ));
         }
+        // Validate the replacement before superseding the current owner. An
+        // invalid or duplicate announcement cannot revoke a usable offer.
         self.ensure_ids_available(&owner, &adapter_id, &adapter_transfer_id)?;
         validate_wire_manifest(&entries)?;
+        // A new clipboard offer from the same peer replaces every previous
+        // offer from that peer. The portal, not the GTK adapter, owns the
+        // published selection, so an old announced offer must not keep a
+        // stale FUSE mount alive.
+        let superseded: Vec<_> = self
+            .remote
+            .keys()
+            .filter(|candidate| candidate.peer == owner.peer)
+            .cloned()
+            .collect();
+        let mut stale_actions = Vec::new();
+        for candidate in superseded {
+            stale_actions.extend(
+                self.cancel_owner(&candidate, None, ClipboardCancelReason::User, false)
+                    .unwrap_or_default(),
+            );
+        }
         let ui_id = self.allocate_ui_id()?;
         let by_id = entries
             .iter()
@@ -321,6 +392,8 @@ where
                 adapter_transfer_id: adapter_transfer_id.clone(),
                 operation: operation.clone(),
                 entries: by_id,
+                announced: false,
+                transferred_by_file: HashMap::new(),
             },
         );
         let remote_entries = entries
@@ -335,23 +408,37 @@ where
                 size: (entry.kind == ClipboardEntryKind::File).then_some(entry.size),
             })
             .collect();
-        Ok(vec![
-            TransferAction::Adapter {
-                adapter_id: adapter_id.clone(),
-                message: AdapterMessage::RemoteManifest(RemoteManifest {
-                    transfer_id: adapter_transfer_id,
-                    operation: operation.clone(),
-                    entries: remote_entries,
-                }),
-            },
-            TransferAction::Frontend(TransferFrontendEvent::Offered {
-                ui_id,
-                owner,
-                adapter_id,
-                operation,
-                entries,
+        stale_actions.push(TransferAction::Adapter {
+            adapter_id: adapter_id.clone(),
+            message: AdapterMessage::RemoteManifest(RemoteManifest {
+                transfer_id: adapter_transfer_id,
+                operation: operation.clone(),
+                entries: remote_entries,
             }),
-        ])
+        });
+        Ok(stale_actions)
+    }
+
+    /// A copy must never look like a transfer: the frontend only learns
+    /// about a remote offer once a real paste streams more than a
+    /// clipboard preview sniff.
+    fn announce_remote(&mut self, owner: &TransferOwner<P>, length: u64) -> Vec<TransferAction<P>> {
+        let Some(transfer) = self.remote.get_mut(owner) else {
+            return Vec::new();
+        };
+        if transfer.announced {
+            return Vec::new();
+        }
+        transfer.announced = true;
+        let mut entries: Vec<_> = transfer.entries.values().cloned().collect();
+        entries.sort_by_key(|entry| entry.file_id);
+        vec![TransferAction::Frontend(TransferFrontendEvent::Offered {
+            ui_id: transfer.ui_id,
+            owner: owner.clone(),
+            adapter_id: transfer.adapter_id.clone(),
+            operation: transfer.operation.clone(),
+            entries,
+        })]
     }
 
     pub(crate) fn adapter_range_request(
@@ -423,7 +510,8 @@ where
                 chunk: Vec::new(),
             },
         );
-        Ok(vec![TransferAction::Peer {
+        let mut actions = self.announce_remote(&owner, length);
+        actions.push(TransferAction::Peer {
             peer: owner.peer,
             event: ProtoEvent::ClipboardFileRequest {
                 transfer_id: owner.wire_id,
@@ -432,7 +520,8 @@ where
                 offset: request.offset,
                 length,
             },
-        }])
+        });
+        Ok(actions)
     }
 
     pub(crate) fn adapter_mount_ready(
@@ -453,10 +542,6 @@ where
             .get(&owner)
             .ok_or_else(|| TransferStateError::UnknownOwner(owner.clone()))?;
         let operation = transfer.operation.clone();
-        self.adapter_to_owner
-            .entry(("gtk-clipboard".to_owned(), ready.transfer_id.clone()))
-            .or_default()
-            .insert(owner);
         Ok(vec![TransferAction::Adapter {
             adapter_id: "gtk-clipboard".to_owned(),
             message: AdapterMessage::PublishFileClipboard(
@@ -470,7 +555,7 @@ where
     }
 
     pub(crate) fn adapter_progress(
-        &self,
+        &mut self,
         adapter_id: &str,
         progress: AdapterProgress,
     ) -> Result<Vec<TransferAction<P>>, TransferStateError<P>> {
@@ -481,14 +566,30 @@ where
                 transfer_id: progress.transfer_id,
             });
         }
-        let completed = progress
-            .completed_bytes
-            .unwrap_or(progress.completed_entries);
-        let total = progress.total_bytes.unwrap_or(progress.total_entries);
+        let completed = progress.completed_bytes.ok_or_else(|| {
+            TransferStateError::InvalidRange("adapter progress lacks byte accounting".into())
+        })?;
+        let total = owners
+            .first()
+            .map(|owner| self.transfer_totals(owner).1)
+            .unwrap_or(0);
+        if progress.total_bytes.is_some_and(|reported| reported != total) {
+            return Err(TransferStateError::InvalidRange(
+                "adapter progress total differs from manifest".into(),
+            ));
+        }
         if completed > total {
             return Err(TransferStateError::InvalidRange(
                 "adapter progress exceeds total".into(),
             ));
+        }
+        for owner in &owners {
+            if let Some(transfer) = self.local.get_mut(owner) {
+                transfer.transferred_by_file.insert(0, completed);
+            }
+            if let Some(transfer) = self.remote.get_mut(owner) {
+                transfer.transferred_by_file.insert(0, completed);
+            }
         }
         Ok(owners
             .into_iter()
@@ -523,17 +624,22 @@ where
             let ui_id = self
                 .transfer_ui_id(&owner)
                 .ok_or_else(|| TransferStateError::UnknownOwner(owner.clone()))?;
+            let (completed, total) = self.transfer_totals(&owner);
             let event = if completion.success {
                 TransferFrontendEvent::Completed {
                     ui_id,
                     owner: owner.clone(),
                     file_id: None,
+                    completed,
+                    total,
                 }
             } else {
                 TransferFrontendEvent::Failed {
                     ui_id,
                     owner: owner.clone(),
                     file_id: None,
+                    completed,
+                    total,
                     error: completion
                         .error
                         .clone()
@@ -563,6 +669,7 @@ where
             let ui_id = self
                 .transfer_ui_id(&owner)
                 .ok_or_else(|| TransferStateError::UnknownOwner(owner.clone()))?;
+            let (completed, total) = self.transfer_totals(&owner);
             actions.push(TransferAction::Peer {
                 peer: owner.peer.clone(),
                 event: ProtoEvent::ClipboardTransferCancel {
@@ -576,6 +683,8 @@ where
                 owner: owner.clone(),
                 file_id: None,
                 reason: ClipboardCancelReason::User,
+                completed,
+                total,
             }));
             self.remove_owner(&owner);
         }
@@ -609,6 +718,7 @@ where
             let Some(ui_id) = self.local.get(&owner).map(|transfer| transfer.ui_id) else {
                 continue;
             };
+            let (completed, total) = self.transfer_totals(&owner);
             actions.push(TransferAction::Peer {
                 peer: owner.peer.clone(),
                 event: ProtoEvent::ClipboardTransferCancel {
@@ -622,6 +732,8 @@ where
                 owner: owner.clone(),
                 file_id: None,
                 reason: ClipboardCancelReason::User,
+                completed,
+                total,
             }));
             self.remove_owner(&owner);
         }
@@ -645,17 +757,23 @@ where
             let ui_id = self
                 .transfer_ui_id(&owner)
                 .ok_or_else(|| TransferStateError::UnknownOwner(owner.clone()))?;
+            let (completed, total) = self.transfer_totals(&owner);
             let event = if unmounted.success {
-                TransferFrontendEvent::Completed {
+                TransferFrontendEvent::Cancelled {
                     ui_id,
                     owner: owner.clone(),
                     file_id: None,
+                    completed,
+                    total,
+                    reason: ClipboardCancelReason::User,
                 }
             } else {
                 TransferFrontendEvent::Failed {
                     ui_id,
                     owner: owner.clone(),
                     file_id: None,
+                    completed,
+                    total,
                     error: unmounted
                         .error
                         .clone()
@@ -713,14 +831,17 @@ where
                 });
             }
         }
-        Ok(vec![TransferAction::ReadSource {
+        let offer = transfer.offer.clone();
+        let mut actions = self.announce_local(&owner, length);
+        actions.push(TransferAction::ReadSource {
             owner,
             file_id,
             request_id,
             offset,
             length,
-            offer: transfer.offer.clone(),
-        }])
+            offer,
+        });
+        Ok(actions)
     }
 
     pub(crate) fn insert_outgoing_file(
@@ -1061,10 +1182,16 @@ where
                     error: None,
                 }),
             },
-            TransferAction::Frontend(TransferFrontendEvent::Completed {
+            TransferAction::Frontend(TransferFrontendEvent::Progress {
                 ui_id: transfer.ui_id,
                 owner: pending.key.owner,
-                file_id: Some(file_id),
+                file_id,
+                completed: pending.received,
+                total: transfer
+                    .entries
+                    .get(&file_id)
+                    .map(|entry| entry.size)
+                    .unwrap_or(pending.received),
             }),
         ];
         Ok(actions)
@@ -1201,6 +1328,13 @@ where
         reason: ClipboardCancelReason,
         notify_peer: bool,
     ) -> Result<Vec<TransferAction<P>>, TransferStateError<P>> {
+        let announced = self
+            .local
+            .get(owner)
+            .map(|t| t.announced)
+            .or_else(|| self.remote.get(owner).map(|t| t.announced))
+            .unwrap_or(false);
+        let (cancel_completed, cancel_total) = self.transfer_totals(owner);
         let (ui_id, adapter_id, adapter_transfer_id) = if let Some(transfer) = self.local.get(owner)
         {
             (
@@ -1249,20 +1383,22 @@ where
         } else {
             self.remove_owner(owner);
         }
-        let mut actions = vec![
-            TransferAction::Adapter {
-                adapter_id,
-                message: AdapterMessage::Cancel {
-                    transfer_id: adapter_transfer_id,
-                },
+        let mut actions = vec![TransferAction::Adapter {
+            adapter_id,
+            message: AdapterMessage::Cancel {
+                transfer_id: adapter_transfer_id,
             },
-            TransferAction::Frontend(TransferFrontendEvent::Cancelled {
+        }];
+        if announced {
+            actions.push(TransferAction::Frontend(TransferFrontendEvent::Cancelled {
                 ui_id,
                 owner: owner.clone(),
                 file_id,
+                completed: cancel_completed,
+                total: cancel_total,
                 reason,
-            }),
-        ];
+            }));
+        }
         if notify_peer {
             actions.insert(
                 0,
@@ -1334,6 +1470,20 @@ where
             .entry((adapter_id, transfer_id))
             .or_default()
             .insert(owner);
+    }
+
+    fn transfer_totals(&self, owner: &TransferOwner<P>) -> (u64, u64) {
+        if let Some(transfer) = self.local.get(owner) {
+            let total = transfer.offer.entries.iter().map(|e| e.size).sum();
+            let completed = transfer.transferred_by_file.values().copied().sum();
+            return (completed, total);
+        }
+        if let Some(transfer) = self.remote.get(owner) {
+            let total = transfer.entries.values().map(|e| e.size).sum();
+            let completed = transfer.transferred_by_file.values().copied().sum();
+            return (completed, total);
+        }
+        (0, 0)
     }
 
     fn transfer_ui_id(&self, owner: &TransferOwner<P>) -> Option<UiTransferId> {

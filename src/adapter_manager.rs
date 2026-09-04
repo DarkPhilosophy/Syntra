@@ -54,6 +54,11 @@ pub(crate) enum ManagerCommand {
     RemoteManifest(RemoteManifest),
     RangeResponse(RangeResponse),
     PublishFileClipboard(PublishFileClipboard),
+    ClipboardData {
+        transfer_id: String,
+        mime_type: String,
+        value: String,
+    },
     Released(Released),
     Unmounted(Unmounted),
     Cancel {
@@ -255,6 +260,23 @@ async fn handle_command(
     events: &mpsc::Sender<ManagerEvent>,
 ) {
     match command {
+        ManagerCommand::ClipboardData {
+            transfer_id,
+            mime_type,
+            value,
+        } => {
+            send_ready(
+                state,
+                &AdapterId::Gtk,
+                Message::ClipboardData {
+                    transfer_id,
+                    mime_type,
+                    value,
+                },
+                events,
+            )
+            .await;
+        }
         ManagerCommand::RemoteManifest(manifest) => {
             let transfer_id = manifest.transfer_id.clone();
             if !valid_transfer_id(&transfer_id) {
@@ -644,7 +666,7 @@ async fn launch(
     let mut child = Command::new(&executable)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
         .map_err(|error| format!("failed to spawn {executable:?}: {error}"))?;
@@ -656,6 +678,10 @@ async fn launch(
         .stdout
         .take()
         .ok_or_else(|| "adapter stdout was not piped".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "adapter stderr was not piped".to_string())?;
     let (writer, mut writes) = mpsc::channel::<Message>(CHANNEL_CAPACITY);
     let (terminate, terminate_rx) = oneshot::channel();
 
@@ -724,6 +750,20 @@ async fn launch(
         }
     });
 
+    let stderr_adapter = adapter.clone();
+    let stderr_task = tokio::spawn(async move {
+        let mut lines = FramedRead::new(stderr, LinesCodec::new_with_max_length(MAX_LINE_LENGTH));
+        while let Some(line) = lines.next().await {
+            match line {
+                Ok(line) => log::warn!("adapter {stderr_adapter:?}: {line}"),
+                Err(error) => {
+                    log::warn!("adapter {stderr_adapter:?} stderr read failed: {error}");
+                    return;
+                }
+            }
+        }
+    });
+
     let wait_adapter = adapter.clone();
     let waiter_task = tokio::spawn(async move {
         supervise_child(&mut child, terminate_rx, wait_adapter, generation, events).await;
@@ -733,7 +773,7 @@ async fn launch(
         generation,
         writer,
         terminate: Some(terminate),
-        tasks: vec![writer_task, reader_task, waiter_task],
+        tasks: vec![writer_task, reader_task, stderr_task, waiter_task],
         ready: false,
     })
 }
