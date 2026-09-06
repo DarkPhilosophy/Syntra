@@ -1,5 +1,5 @@
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const UNIT_NAME: &str = "syntra.service";
 
@@ -76,6 +76,37 @@ pub fn install(binary: &Path) -> Result<(), ServiceError> {
     imp::install(binary)
 }
 
+/// Name of the service executable installed as the background unit.
+#[cfg(windows)]
+pub const DAEMON_EXECUTABLE: &str = "syntra-daemon.exe";
+/// Name of the service executable installed as the background unit.
+#[cfg(not(windows))]
+pub const DAEMON_EXECUTABLE: &str = "syntra-daemon";
+
+/// Locates the daemon that the background unit should run.
+///
+/// The unit must launch `syntra-daemon`, not the dashboard: the dashboard is
+/// a client with a window and has no service mode. It is looked up beside
+/// the running executable so a build tree, a package install and a portable
+/// directory each pick the daemon matching their dashboard.
+pub fn daemon_executable() -> Result<PathBuf, ServiceError> {
+    let directory = std::env::current_exe()?
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| {
+            ServiceError::InvalidBinary("running executable has no parent directory".into())
+        })?;
+    let candidate = directory.join(DAEMON_EXECUTABLE);
+    if !candidate.is_file() {
+        return Err(ServiceError::InvalidBinary(format!(
+            "{DAEMON_EXECUTABLE} was not found next to the application at {}; \
+             install both binaries together",
+            directory.display()
+        )));
+    }
+    Ok(candidate)
+}
+
 pub fn uninstall() -> Result<(), ServiceError> {
     imp::uninstall()
 }
@@ -137,7 +168,7 @@ mod imp {
         fs::create_dir_all(parent)?;
         let escaped_binary = escape_exec_start_path(&binary)?;
         let contents = format!(
-            "[Unit]\nDescription=Syntra background service\nAfter=graphical-session.target\nBindsTo=graphical-session.target\n\n[Service]\nExecStart={escaped_binary} daemon\nRestart=on-failure\nKillSignal=SIGINT\nTimeoutStopSec=15\n\n[Install]\nWantedBy=graphical-session.target\n"
+            "[Unit]\nDescription=Syntra background service\nAfter=graphical-session.target\nBindsTo=graphical-session.target\n\n[Service]\nExecStart={escaped_binary}\nRestart=on-failure\nKillSignal=SIGINT\nTimeoutStopSec=15\n\n[Install]\nWantedBy=graphical-session.target\n"
         );
         write_unit_atomically(&unit_path, contents.as_bytes())?;
         run_manager_action("daemon-reload")

@@ -115,13 +115,17 @@ pub fn install(config: LogConfig, mirror: Mirror) -> Result<LogConfig, InstallEr
             #[cfg(not(unix))]
             let _ = &mirror;
 
+            // Acquire the stderr lock per write, never across the loop.
+            // Holding it for the thread's lifetime deadlocks anything else
+            // that writes to stderr directly: Slint logs image-decode
+            // failures that way, and the UI thread would block forever
+            // before its first frame.
             let stderr = io::stderr();
-            let mut output = stderr.lock();
             while let Ok(entry) = records.recv() {
                 let line = match entry {
                     Entry::Line(line) => line,
                     Entry::Flush(ack) => {
-                        let _ = output.flush();
+                        let _ = stderr.lock().flush();
                         // The sender is waiting on this; a dropped ack simply
                         // releases it.
                         let _ = ack.send(());
@@ -132,7 +136,7 @@ pub fn install(config: LogConfig, mirror: Mirror) -> Result<LogConfig, InstallEr
                 if let Some((socket, path)) = &datagram {
                     let _ = socket.send_to(line.as_bytes(), path);
                 }
-                if output.write_all(line.as_bytes()).is_err() {
+                if stderr.lock().write_all(line.as_bytes()).is_err() {
                     break;
                 }
             }

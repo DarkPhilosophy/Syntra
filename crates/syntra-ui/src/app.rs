@@ -185,13 +185,14 @@ where
     initialize_presentation(&app, &state, Arc::clone(&settings));
     project_locked_state(&app, &state, &settings);
     let diagnostic_store = Arc::new(Mutex::new(crate::diagnostics::DiagnosticStore::default()));
+    // The receiver only raises a dirty flag. A timer does the projection at
+    // a fixed rate, so a burst of log lines costs one model rebuild instead
+    // of one per line — the previous behaviour blocked the UI thread hard
+    // enough to stall resizing and drag-and-drop.
+    let diagnostics_dirty = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let diagnostic_notify = {
-        let window = app.as_weak();
-        let store = Arc::clone(&diagnostic_store);
-        move || {
-            let store = Arc::clone(&store);
-            let _ = window.upgrade_in_event_loop(move |app| project_live_diagnostics(&app, &store));
-        }
+        let dirty = Arc::clone(&diagnostics_dirty);
+        move || dirty.store(true, std::sync::atomic::Ordering::Relaxed)
     };
     let _diagnostic_receiver = match crate::diagnostics::LiveDiagnosticReceiver::start(
         Arc::clone(&diagnostic_store),
@@ -205,6 +206,25 @@ where
             project_live_diagnostics(&app, &diagnostic_store);
             None
         }
+    };
+    let _diagnostics_timer = {
+        let weak = app.as_weak();
+        let store = Arc::clone(&diagnostic_store);
+        let dirty = Arc::clone(&diagnostics_dirty);
+        let timer = Timer::default();
+        timer.start(
+            TimerMode::Repeated,
+            std::time::Duration::from_millis(250),
+            move || {
+                if !dirty.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                if let Some(app) = weak.upgrade() {
+                    project_live_diagnostics(&app, &store);
+                }
+            },
+        );
+        timer
     };
 
     let (request_tx, request_rx) = mpsc::channel::<FrontendRequest>();
@@ -944,13 +964,19 @@ fn install_localizer(
         }
     });
 }
+/// Rows handed to the diagnostics view at once.
+///
+/// The list is a scrolling tail, so projecting more than a screenful plus
+/// scrollback buys nothing and costs a full model rebuild per update.
+const DIAGNOSTIC_VISIBLE_ROWS: usize = 400;
+
 fn project_live_diagnostics(
     app: &AppWindow,
     store: &Arc<Mutex<crate::diagnostics::DiagnosticStore>>,
 ) {
     let Ok(store) = store.lock() else { return };
     let entries = store
-        .filtered()
+        .filtered(DIAGNOSTIC_VISIBLE_ROWS)
         .into_iter()
         .map(|entry| DiagnosticEntry {
             timestamp: entry.timestamp.into(),
@@ -962,19 +988,14 @@ fn project_live_diagnostics(
         })
         .collect::<Vec<_>>();
     let global = app.global::<AppState>();
+    // Approximate the width from byte length rather than scanning every
+    // character of every message; the value only sizes a scroll area.
     let message_columns = entries
         .iter()
-        .map(|entry| {
-            entry
-                .message
-                .chars()
-                .map(|character| if character.is_ascii() { 1 } else { 2 })
-                .sum::<usize>()
-        })
+        .map(|entry| entry.message.len())
         .max()
         .unwrap_or(80)
-        .max(80)
-        .min(i32::MAX as usize) as i32;
+        .clamp(80, 4_000) as i32;
     global.set_diagnostics_message_columns(message_columns);
     global.set_diagnostics(ModelRc::new(VecModel::from(entries)));
     global.set_diagnostics_paused(store.filter.paused);
@@ -1740,10 +1761,11 @@ fn bind_app_state_callbacks(
         });
     }
     global.set_service_supported(cfg!(target_os = "linux"));
+    // Show what the unit will actually run: the daemon, not this window.
     global.set_service_binary_path(
-        std::env::current_exe()
+        crate::platform::service::daemon_executable()
             .map(|path| path.display().to_string())
-            .unwrap_or_default()
+            .unwrap_or_else(|error| error.to_string())
             .into(),
     );
     {
@@ -1763,7 +1785,7 @@ fn bind_app_state_callbacks(
                 let result = (|| {
                     match action.as_str() {
                         "refresh" => {}
-                        "install" => service::install(&std::env::current_exe()?)?,
+                        "install" => service::install(&service::daemon_executable()?)?,
                         "uninstall" => service::uninstall()?,
                         "start" => {
                             #[cfg(target_os = "linux")]

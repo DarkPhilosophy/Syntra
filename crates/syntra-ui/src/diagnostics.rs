@@ -80,7 +80,13 @@ impl DiagnosticStore {
         self.paused_entries = paused.then(|| self.entries.iter().cloned().collect());
     }
 
-    pub fn filtered(&self) -> Vec<LiveDiagnostic> {
+    /// Most recent entries matching the active filter, newest last.
+    ///
+    /// `limit` bounds the result because the view only ever shows a window
+    /// of rows: projecting all [`MAX_DIAGNOSTIC_ENTRIES`] on every arriving
+    /// record made the UI thread do O(n) work per log line, which froze the
+    /// window under normal network chatter.
+    pub fn filtered(&self, limit: usize) -> Vec<LiveDiagnostic> {
         let query = self.filter.query.trim().to_lowercase();
         let matches = |entry: &LiveDiagnostic| {
             (self.filter.level == "all" || entry.level == self.filter.level)
@@ -94,19 +100,27 @@ impl DiagnosticStore {
                     || entry.correlation.to_lowercase().contains(&query)
                     || entry.message.to_lowercase().contains(&query))
         };
-        match &self.paused_entries {
+        // Walk from the newest backwards so the scan stops as soon as the
+        // window is full, instead of filtering the whole ring buffer.
+        let mut newest_first: Vec<LiveDiagnostic> = match &self.paused_entries {
             Some(entries) => entries
                 .iter()
+                .rev()
                 .filter(|entry| matches(entry))
+                .take(limit)
                 .cloned()
                 .collect(),
             None => self
                 .entries
                 .iter()
+                .rev()
                 .filter(|entry| matches(entry))
+                .take(limit)
                 .cloned()
                 .collect(),
-        }
+        };
+        newest_first.reverse();
+        newest_first
     }
 }
 
@@ -405,9 +419,35 @@ mod tests {
         assert_eq!(store.entries.front().unwrap().timestamp, "1");
         store.filter.level = "error".into();
         store.filter.query = "TRANSFER-19".into();
-        assert!(store.filtered().iter().all(|entry| {
+        let filtered = store.filtered(MAX_DIAGNOSTIC_ENTRIES);
+        assert!(!filtered.is_empty());
+        assert!(filtered.iter().all(|entry| {
             entry.level == "error" && entry.correlation.to_lowercase().contains("transfer-19")
         }));
+    }
+
+    /// The view asks for a window, not the whole ring buffer: projecting
+    /// everything on each arriving record is what froze the UI thread.
+    #[test]
+    fn filtering_returns_the_newest_entries_up_to_the_limit() {
+        let mut store = DiagnosticStore::default();
+        for index in 0..50 {
+            store.push(LiveDiagnostic {
+                timestamp: index.to_string(),
+                level: "info".into(),
+                stage: "network".into(),
+                direction: "".into(),
+                correlation: String::new(),
+                message: "tick".into(),
+            });
+        }
+
+        let window = store.filtered(10);
+
+        assert_eq!(window.len(), 10);
+        // Oldest first within the window, ending at the newest record.
+        assert_eq!(window.first().unwrap().timestamp, "40");
+        assert_eq!(window.last().unwrap().timestamp, "49");
     }
 
     #[test]
