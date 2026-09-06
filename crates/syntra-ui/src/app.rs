@@ -46,7 +46,7 @@ const MAX_UPDATE_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
 /// Creates a window without connecting it to a transport.
 pub fn create_app() -> Result<AppWindow, slint::PlatformError> {
     #[cfg(not(target_os = "android"))]
-    crate::file_drop::configure_backend()?;
+    crate::file_drop::configure_backend();
     let app = AppWindow::new()?;
     let avatar_cache =
         std::cell::RefCell::new(std::collections::VecDeque::<(slint::Image, slint::Image)>::new());

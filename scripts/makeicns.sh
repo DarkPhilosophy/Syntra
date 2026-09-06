@@ -15,7 +15,7 @@ usage: $0 [SVG [ICNS [ICONSET]]]
 
 ARGUMENTS
     SVG     The SVG file to convert
-            Defaults to ./syntra-ui/ui/assets/shell/syntra.svg
+            Defaults to ./crates/syntra-ui/ui/assets/shell/syntra.svg
     ICNS    The icns file to create
             Defaults to ./target/icon.icns
     ICONSET The iconset directory to create
@@ -29,7 +29,7 @@ if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
     exit 0
 fi
 
-svg="${1:-./syntra-ui/ui/assets/shell/syntra.svg}"
+svg="${1:-./crates/syntra-ui/ui/assets/shell/syntra.svg}"
 icns="${2:-./target/icon.icns}"
 iconset="${3:-./target/icon.iconset}"
 

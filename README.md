@@ -133,7 +133,7 @@ sudo install -Dm755 target/release/syntra-plugin-gtk-clipboard /usr/local/bin/sy
 sudo install -Dm755 target/release/syntra-plugin-fuse /usr/local/bin/syntra-plugin-fuse
 
 # install app icon and desktop entry
-sudo install -Dm644 syntra-ui/ui/assets/shell/syntra.svg /usr/local/share/icons/hicolor/scalable/apps/syntra.svg
+sudo install -Dm644 crates/syntra-ui/ui/assets/shell/syntra.svg /usr/local/share/icons/hicolor/scalable/apps/syntra.svg
 sudo install -Dm644 io.syntra.Syntra.desktop /usr/local/share/applications/io.syntra.Syntra.desktop
 
 # update icon cache

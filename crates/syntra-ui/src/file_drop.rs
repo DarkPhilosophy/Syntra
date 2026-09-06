@@ -38,15 +38,24 @@ enum BackendConfiguration {
     Failed(String),
 }
 
-/// Selects/configures the Winit backend before the application window is created.
+/// Configures the Winit backend before the application window is created.
 ///
-/// On Linux this forces only the UI event loop onto X11 when `DISPLAY` is
-/// available. It deliberately does not modify the process environment, so the
-/// daemon's input backends continue to use their independently selected session.
-pub fn configure_backend() -> Result<(), slint::PlatformError> {
+/// Native file drop is an enhancement, not a prerequisite: if the backend
+/// cannot be configured the dashboard must still open. Returning an error
+/// here previously aborted start-up, so a broken XWayland cookie produced a
+/// process that exited silently with status 0 and no window.
+///
+/// This deliberately does not modify the process environment, so the
+/// daemon's input backends keep their independently selected session.
+pub fn configure_backend() {
     match &*BACKEND_CONFIGURATION {
-        BackendConfiguration::Configured | BackendConfiguration::Skipped(_) => Ok(()),
-        BackendConfiguration::Failed(error) => Err(slint::PlatformError::Other(error.clone())),
+        BackendConfiguration::Configured => {}
+        BackendConfiguration::Skipped(reason) => {
+            log::info!("{reason}");
+        }
+        BackendConfiguration::Failed(error) => {
+            log::warn!("{error}; continuing without native file drop");
+        }
     }
 }
 
@@ -60,6 +69,16 @@ fn configure_backend_once() -> BackendConfiguration {
     #[cfg(target_os = "linux")]
     {
         use winit::platform::x11::EventLoopBuilderExtX11;
+
+        // Under Wayland the compositor delivers drops natively. Forcing the
+        // event loop onto X11 there would route the whole UI through
+        // XWayland, and fail outright when XWayland is unavailable or its
+        // authority cookie is stale.
+        if std::env::var_os("WAYLAND_DISPLAY").is_some_and(|value| !value.is_empty()) {
+            return BackendConfiguration::Skipped(
+                "native file drop uses the Wayland backend's own drag handling".into(),
+            );
+        }
 
         let display_is_usable = std::env::var_os("DISPLAY").is_some_and(|value| !value.is_empty());
         if !display_is_usable {

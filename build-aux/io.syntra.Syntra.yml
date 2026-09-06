@@ -45,7 +45,7 @@ modules:
       - install -Dm0755 target/debug/syntra /app/bin/syntra
       - install -Dm0755 target/debug/syntra-plugin-gtk-clipboard /app/bin/syntra-plugin-gtk-clipboard
       - install -Dm0755 target/debug/syntra-plugin-fuse /app/bin/syntra-plugin-fuse
-      - install -Dm0644 syntra-ui/ui/assets/shell/syntra.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/syntra.svg
+      - install -Dm0644 crates/syntra-ui/ui/assets/shell/syntra.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/syntra.svg
       - install -Dm0644 io.syntra.Syntra.desktop ${FLATPAK_DEST}/share/applications/${FLATPAK_ID}.desktop
     sources:
       - type: dir
