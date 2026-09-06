@@ -7,7 +7,6 @@ use std::{
     ffi::OsStr,
     io,
     path::{Component, Path, PathBuf},
-    time::Instant,
 };
 use syntra_proto::{
     ClipboardEntryKind, ClipboardManifestEntry, MAX_CLIPBOARD_FILE_CHUNK_SIZE,
@@ -23,17 +22,14 @@ use tokio::{
 pub(crate) type TransferId = u64;
 pub(crate) type FileId = u64;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SizeLimitPolicy {
-    Clipboard,
-    Unbounded,
-}
-
-impl SizeLimitPolicy {
-    fn allows(self, total: u64) -> bool {
-        matches!(self, Self::Unbounded) || total <= MAX_CLIPBOARD_SIZE as u64
-    }
-}
+/// Upper bound on the total bytes an incoming transfer may declare.
+///
+/// `None` accepts any total, which is what every current receive passes:
+/// manual transfers are explicitly accepted by the user, so a surprise cap
+/// would reject a download they asked for. Expressed as an option rather
+/// than an enum of named policies because a policy enum invites variants
+/// that nothing ever selects.
+pub(crate) type SizeLimit = Option<u64>;
 
 #[derive(Debug, Error)]
 pub(crate) enum TransferError {
@@ -283,7 +279,6 @@ impl FileOffer {
             size: entry.size,
             identity: identity.clone(),
             hasher,
-            started: Instant::now(),
             cancelled: false,
         })
     }
@@ -294,7 +289,6 @@ pub(crate) struct OutgoingFile {
     offset: u64,
     size: u64,
     identity: SourceIdentity,
-    started: Instant,
     hasher: Sha256,
     cancelled: bool,
 }
@@ -424,21 +418,7 @@ impl IncomingTransfer {
         transfer_id: TransferId,
         entries: Vec<ClipboardManifestEntry>,
         destination: PathBuf,
-    ) -> Result<Self, TransferError> {
-        Self::new_with_size_policy(
-            transfer_id,
-            entries,
-            destination,
-            SizeLimitPolicy::Clipboard,
-        )
-        .await
-    }
-
-    pub(crate) async fn new_with_size_policy(
-        transfer_id: TransferId,
-        entries: Vec<ClipboardManifestEntry>,
-        destination: PathBuf,
-        size_limit: SizeLimitPolicy,
+        size_limit: SizeLimit,
     ) -> Result<Self, TransferError> {
         if entries.is_empty() || entries.len() > MAX_CLIPBOARD_MANIFEST_ENTRIES {
             return Err(TransferError::TooManyEntries);
@@ -465,7 +445,7 @@ impl IncomingTransfer {
             total = total
                 .checked_add(entry.size)
                 .ok_or(TransferError::TooLarge)?;
-            if !size_limit.allows(total) {
+            if size_limit.is_some_and(|max| total > max) {
                 return Err(TransferError::TooLarge);
             }
             by_id.insert(entry.file_id, entry);
@@ -631,24 +611,6 @@ impl IncomingTransfer {
         Ok(())
     }
 
-    pub(crate) async fn cancel(&mut self) {
-        if self.cancelled {
-            return;
-        }
-        self.cancelled = true;
-        self.files.clear();
-        let files: Vec<_> = self.created_files.drain().collect();
-        for (path, identity) in files {
-            if owns_created_file(&path, &identity) {
-                let _ = fs::remove_file(path).await;
-            }
-        }
-        let mut dirs: Vec<_> = self.created_dirs.drain().collect();
-        dirs.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
-        for path in dirs {
-            let _ = fs::remove_dir(path).await;
-        }
-    }
     fn ensure_active(&self) -> Result<(), TransferError> {
         if self.cancelled {
             Err(TransferError::Cancelled)
@@ -893,7 +855,7 @@ mod tests {
 
     async fn partial_transfer(directory: &Path, name: &str) -> IncomingTransfer {
         let mut transfer =
-            IncomingTransfer::new(1, vec![file_entry(name, 7)], directory.to_path_buf())
+            IncomingTransfer::new(1, vec![file_entry(name, 7)], directory.to_path_buf(), None)
                 .await
                 .unwrap();
         transfer.prepare().await.unwrap();
@@ -901,22 +863,8 @@ mod tests {
         transfer
     }
 
-    #[tokio::test]
-    async fn cancel_preserves_file_that_replaced_created_partial() {
-        let directory = temp_dir("cancel-replacement");
-        let target = directory.join("received.bin");
-        let displaced = directory.join("displaced-partial.bin");
-        let mut transfer = partial_transfer(&directory, "received.bin").await;
-
-        transfer.files.clear();
-        std_fs::rename(&target, &displaced).unwrap();
-        std_fs::write(&target, b"unrelated replacement").unwrap();
-        transfer.cancel().await;
-
-        assert_eq!(std_fs::read(&target).unwrap(), b"unrelated replacement");
-        std_fs::remove_dir_all(directory).unwrap();
-    }
-
+    /// A file that replaced our partial download belongs to someone else, so
+    /// cleanup must leave it alone.
     #[tokio::test]
     async fn drop_preserves_file_that_replaced_created_partial() {
         let directory = temp_dir("drop-replacement");
@@ -933,15 +881,17 @@ mod tests {
         std_fs::remove_dir_all(directory).unwrap();
     }
 
+    /// Cleanup must remove the partial file it created without disturbing
+    /// anything else already in the destination directory.
     #[tokio::test]
-    async fn cancel_removes_owned_partial_without_touching_neighbor() {
-        let directory = temp_dir("cancel-owned");
+    async fn dropping_removes_owned_partial_without_touching_neighbor() {
+        let directory = temp_dir("drop-owned");
         let target = directory.join("received.bin");
         let neighbor = directory.join("neighbor.bin");
         std_fs::write(&neighbor, b"keep me").unwrap();
-        let mut transfer = partial_transfer(&directory, "received.bin").await;
+        let transfer = partial_transfer(&directory, "received.bin").await;
 
-        transfer.cancel().await;
+        drop(transfer);
 
         assert!(!target.exists());
         assert_eq!(std_fs::read(&neighbor).unwrap(), b"keep me");

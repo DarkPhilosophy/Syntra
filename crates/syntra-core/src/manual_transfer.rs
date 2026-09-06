@@ -1,6 +1,4 @@
-use crate::file_transfer::{
-    FileOffer, IncomingTransfer, OutgoingFile, SizeLimitPolicy, TransferError,
-};
+use crate::file_transfer::{FileOffer, IncomingTransfer, OutgoingFile, TransferError};
 use std::{
     collections::{HashMap, VecDeque},
     fmt::Debug,
@@ -65,6 +63,23 @@ struct Record<P> {
 pub(crate) struct ManualTransfers<P: Clone + Eq + Hash + Debug> {
     records: HashMap<RecordKey, Record<P>>,
     terminal: VecDeque<RecordKey>,
+}
+
+/// A file a peer has offered to send, before the user decides.
+///
+/// Groups what arrives in one `ManualFileOffer`; the fields were previously
+/// threaded through as five positional parameters, two of them `String`.
+struct OfferedFile<P> {
+    /// Peer that made the offer.
+    peer: P,
+    /// Certificate fingerprint identifying that peer.
+    fingerprint: String,
+    /// Transfer id, unique per peer.
+    id: u64,
+    /// File name as proposed by the sender; not yet validated.
+    name: String,
+    /// Declared size in bytes; not yet checked against the receive settings.
+    size: u64,
 }
 
 impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
@@ -182,11 +197,13 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
         {
             return self
                 .receive_offer(
-                    peer,
-                    fingerprint,
-                    transfer_id,
-                    file_name,
-                    size,
+                    OfferedFile {
+                        peer,
+                        fingerprint,
+                        id: transfer_id,
+                        name: file_name,
+                        size,
+                    },
                     settings,
                     now,
                 )
@@ -252,14 +269,17 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
 
     async fn receive_offer(
         &mut self,
-        peer: P,
-        fingerprint: String,
-        id: u64,
-        name: String,
-        size: u64,
+        offer: OfferedFile<P>,
         settings: &FileReceiveSettings,
         now: Instant,
     ) -> Vec<ManualAction<P>> {
+        let OfferedFile {
+            peer,
+            fingerprint,
+            id,
+            name,
+            size,
+        } = offer;
         if id == 0 || syntra_proto::validate_manual_file_name(&name).is_err() {
             return vec![peer_failure(peer, id, "invalid file offer")];
         }
@@ -372,11 +392,12 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
                 kind: ClipboardEntryKind::File,
                 size: record.size,
             };
-            let mut incoming = IncomingTransfer::new_with_size_policy(
+            let mut incoming = IncomingTransfer::new(
                 record.id,
                 vec![entry],
                 directory,
-                SizeLimitPolicy::Unbounded,
+                // The user explicitly accepted this transfer, so no cap applies.
+                None,
             )
             .await?;
             incoming.prepare().await?;

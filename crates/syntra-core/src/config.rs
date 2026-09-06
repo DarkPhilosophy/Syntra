@@ -5,7 +5,7 @@ use notify::event::ModifyKind;
 use notify::{EventKind, RecommendedWatcher, Watcher};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::env::{self, VarError};
+use std::env::VarError;
 use std::fmt::Display;
 use std::fs::{self, File};
 use std::io::Write;
@@ -23,8 +23,6 @@ use syntra_input_event::scancode::{
     self,
     Linux::{KeyLeftAlt, KeyLeftCtrl, KeyLeftMeta, KeyLeftShift},
 };
-
-use shadow_rs::shadow;
 
 // `shadow!` expands to a module of generated build constants. It is not code
 // we author, so `missing_docs` cannot be satisfied here; the allow is scoped

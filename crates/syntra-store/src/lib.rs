@@ -705,19 +705,21 @@ fn immutable_event(record: &HistoryRecord) -> ImportedHistoryEvent {
     }
 }
 
-fn encode_content(
-    content: &HistoryContent,
-) -> Result<
-    (
-        Option<String>,
-        Option<Vec<u8>>,
-        Option<String>,
-        Option<u32>,
-        Option<u32>,
-        Option<String>,
-    ),
-    HistoryError,
-> {
+/// The nullable columns one history record occupies.
+///
+/// In order: text, image bytes, media type, width, height, file name. Each
+/// content kind fills a different subset, which is why every column is
+/// optional.
+type EncodedContent = (
+    Option<String>,
+    Option<Vec<u8>>,
+    Option<String>,
+    Option<u32>,
+    Option<u32>,
+    Option<String>,
+);
+
+fn encode_content(content: &HistoryContent) -> Result<EncodedContent, HistoryError> {
     Ok(match content {
         HistoryContent::Text(value) => (Some(value.clone()), None, None, None, None, None),
         HistoryContent::Image {

@@ -92,15 +92,32 @@ async fn connect_any(
     }
 }
 
+/// State every connection task shares with [`SyntraConnection`].
+///
+/// These handles were previously threaded through each spawned task one
+/// parameter at a time, which made the signatures grow with the struct.
+/// Cloning shares the same maps: a task must observe connections another
+/// task established.
+#[derive(Clone)]
+pub(crate) struct ConnectionShared {
+    client_manager: ClientManager,
+    /// Live DTLS connections, keyed by peer address.
+    conns: Rc<Mutex<HashMap<SocketAddr, Arc<dyn Conn + Send + Sync>>>>,
+    /// Certificate fingerprint observed for each connected address.
+    peer_fingerprints: Rc<Mutex<HashMap<SocketAddr, String>>>,
+    /// Handles with a connection attempt already in flight, so a second
+    /// attempt is not started for the same client.
+    connecting: Rc<Mutex<HashSet<ClientHandle>>>,
+    /// Events delivered back to the service.
+    tx: Sender<(ClientHandle, String, ProtoEvent)>,
+    /// Addresses that answered a ping since the last check.
+    ping_response: Rc<RefCell<HashSet<SocketAddr>>>,
+}
+
 pub(crate) struct SyntraConnection {
     cert: Certificate,
-    client_manager: ClientManager,
-    conns: Rc<Mutex<HashMap<SocketAddr, Arc<dyn Conn + Send + Sync>>>>,
-    peer_fingerprints: Rc<Mutex<HashMap<SocketAddr, String>>>,
-    connecting: Rc<Mutex<HashSet<ClientHandle>>>,
+    shared: ConnectionShared,
     recv_rx: Receiver<(ClientHandle, String, ProtoEvent)>,
-    recv_tx: Sender<(ClientHandle, String, ProtoEvent)>,
-    ping_response: Rc<RefCell<HashSet<SocketAddr>>>,
 }
 
 impl SyntraConnection {
@@ -108,20 +125,22 @@ impl SyntraConnection {
         let (recv_tx, recv_rx) = channel();
         Self {
             cert,
-            client_manager,
-            conns: Default::default(),
-            peer_fingerprints: Default::default(),
-            connecting: Default::default(),
+            shared: ConnectionShared {
+                client_manager,
+                conns: Default::default(),
+                peer_fingerprints: Default::default(),
+                connecting: Default::default(),
+                tx: recv_tx,
+                ping_response: Default::default(),
+            },
             recv_rx,
-            recv_tx,
-            ping_response: Default::default(),
         }
     }
 
     pub(crate) async fn recv(&mut self) -> (ClientHandle, String, ProtoEvent) {
         loop {
             let event = self.recv_rx.recv().await.expect("channel closed");
-            if self.client_manager.contains(event.0) {
+            if self.shared.client_manager.contains(event.0) {
                 return event;
             }
         }
@@ -132,38 +151,33 @@ impl SyntraConnection {
     /// This makes pairing and peer-version discovery independent of reaching
     /// an input-capture barrier.
     pub(crate) async fn connect(&self, handle: ClientHandle) {
-        if !self.client_manager.contains(handle)
-            || self.client_manager.active_addr(handle).is_some()
+        if !self.shared.client_manager.contains(handle)
+            || self.shared.client_manager.active_addr(handle).is_some()
         {
             return;
         }
 
-        let mut connecting = self.connecting.lock().await;
+        let mut connecting = self.shared.connecting.lock().await;
         if !connecting.insert(handle) {
             return;
         }
         spawn_local(connect_to_handle(
-            self.client_manager.clone(),
+            self.shared.clone(),
             self.cert.clone(),
             handle,
-            self.conns.clone(),
-            self.peer_fingerprints.clone(),
-            self.connecting.clone(),
-            self.recv_tx.clone(),
-            self.ping_response.clone(),
         ));
     }
 
     /// The peer has an authenticated transport, independently of whether
     /// either portal currently allows remote input.
     pub(crate) fn peer_connected(&self, handle: ClientHandle) -> bool {
-        self.client_manager.active_addr(handle).is_some()
+        self.shared.client_manager.active_addr(handle).is_some()
     }
 
     /// The destination explicitly confirmed that both receiving input and
     /// returning control are currently available.
     pub(crate) fn remote_ready(&self, handle: ClientHandle) -> bool {
-        self.peer_connected(handle) && self.client_manager.remote_ready(handle)
+        self.peer_connected(handle) && self.shared.client_manager.remote_ready(handle)
     }
 
     pub(crate) async fn send(
@@ -174,9 +188,9 @@ impl SyntraConnection {
         log::trace!("{event} >->->->->-");
         let requires_remote_ready = matches!(&event, ProtoEvent::Input(_) | ProtoEvent::Enter(_));
         let buf = event.encode()?;
-        if let Some(addr) = self.client_manager.active_addr(handle) {
+        if let Some(addr) = self.shared.client_manager.active_addr(handle) {
             let conn = {
-                let conns = self.conns.lock().await;
+                let conns = self.shared.conns.lock().await;
                 conns.get(&addr).cloned()
             };
             if let Some(conn) = conn {
@@ -186,18 +200,19 @@ impl SyntraConnection {
                 if let Err(e) = conn.send(&buf).await {
                     log::warn!("client {handle} failed to send: {e}");
                     if let Some(fingerprint) = disconnect(
-                        &self.client_manager,
+                        &self.shared.client_manager,
                         handle,
                         addr,
                         &conn,
-                        &self.conns,
-                        &self.peer_fingerprints,
+                        &self.shared.conns,
+                        &self.shared.peer_fingerprints,
                     )
                     .await
                     {
                         // Announce the dead transport exactly once so bound
                         // transfers are dropped instead of stalling.
-                        self.recv_tx
+                        self.shared
+                            .tx
                             .send((handle, fingerprint, ProtoEvent::Pong(false)))
                             .expect("channel closed");
                     }
@@ -215,15 +230,20 @@ impl SyntraConnection {
 }
 
 async fn connect_to_handle(
-    client_manager: ClientManager,
+    shared: ConnectionShared,
     cert: Certificate,
     handle: ClientHandle,
-    conns: Rc<Mutex<HashMap<SocketAddr, Arc<dyn Conn + Send + Sync>>>>,
-    peer_fingerprints: Rc<Mutex<HashMap<SocketAddr, String>>>,
-    connecting: Rc<Mutex<HashSet<ClientHandle>>>,
-    tx: Sender<(ClientHandle, String, ProtoEvent)>,
-    ping_response: Rc<RefCell<HashSet<SocketAddr>>>,
 ) -> Result<(), SyntraConnectionError> {
+    // `shared` is moved into the receive loop below; the fields used here are
+    // taken from a clone so both remain available.
+    let ConnectionShared {
+        client_manager,
+        conns,
+        peer_fingerprints,
+        connecting,
+        ping_response,
+        ..
+    } = shared.clone();
     log::info!("client {handle} connecting ...");
     // sending did not work, figure out active conn.
     if let Some(addrs) = client_manager.get_ips(handle) {
@@ -284,17 +304,7 @@ async fn connect_to_handle(
         spawn_local(ping_pong(addr, conn.clone(), ping_response.clone()));
 
         // receiver
-        spawn_local(receive_loop(
-            client_manager,
-            handle,
-            addr,
-            conn,
-            conns,
-            peer_fingerprints,
-            fingerprint,
-            tx,
-            ping_response.clone(),
-        ));
+        spawn_local(receive_loop(shared, handle, addr, conn, fingerprint));
         return Ok(());
     }
     connecting.lock().await.remove(&handle);
@@ -340,16 +350,20 @@ fn pong_is_edge(
         || client_manager.active_addr(handle) != Some(addr)
 }
 async fn receive_loop(
-    client_manager: ClientManager,
+    shared: ConnectionShared,
     handle: ClientHandle,
     addr: SocketAddr,
     conn: Arc<dyn Conn + Send + Sync>,
-    conns: Rc<Mutex<HashMap<SocketAddr, Arc<dyn Conn + Send + Sync>>>>,
-    peer_fingerprints: Rc<Mutex<HashMap<SocketAddr, String>>>,
     fingerprint: String,
-    tx: Sender<(ClientHandle, String, ProtoEvent)>,
-    ping_response: Rc<RefCell<HashSet<SocketAddr>>>,
 ) {
+    let ConnectionShared {
+        client_manager,
+        conns,
+        peer_fingerprints,
+        tx,
+        ping_response,
+        ..
+    } = shared;
     let mut buf = [0u8; MAX_DATAGRAM_SIZE];
     while let Ok(len) = conn.recv(&mut buf).await {
         let current = conns
@@ -425,51 +439,6 @@ async fn receive_loop(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn pong_edge_detects_state_and_endpoint_changes() {
-        let manager = ClientManager::default();
-        let handle = manager.add_client();
-        let first: SocketAddr = "192.0.2.10:5353".parse().unwrap();
-        let second: SocketAddr = "192.0.2.11:5353".parse().unwrap();
-
-        assert!(pong_is_edge(&manager, handle, first, true));
-        manager.set_active_addr(handle, Some(first));
-        manager.set_alive(handle, true);
-        manager.set_remote_ready(handle, true);
-        assert!(!pong_is_edge(&manager, handle, first, true));
-        assert!(pong_is_edge(&manager, handle, second, true));
-        assert!(pong_is_edge(&manager, handle, first, false));
-        manager.set_alive(handle, false);
-        assert!(pong_is_edge(&manager, handle, first, true));
-    }
-
-    #[tokio::test]
-    async fn queued_deleted_peer_events_never_reach_replacement_client() {
-        let manager = ClientManager::default();
-        let deleted = manager.add_client();
-        let certificate = Certificate::generate_self_signed(["test".to_owned()]).unwrap();
-        let mut connection = SyntraConnection::new(certificate, manager.clone());
-        connection
-            .recv_tx
-            .send((deleted, "old-peer".into(), ProtoEvent::Pong(true)))
-            .unwrap();
-        manager.remove_client(deleted);
-        let replacement = manager.add_client();
-        connection
-            .recv_tx
-            .send((replacement, "new-peer".into(), ProtoEvent::Pong(false)))
-            .unwrap();
-        let (handle, fingerprint, event) = connection.recv().await;
-        assert_eq!(handle, replacement);
-        assert_eq!(fingerprint, "new-peer");
-        assert!(matches!(event, ProtoEvent::Pong(false)));
-    }
-}
-
 async fn peer_certificate_fingerprint(conn: &Arc<dyn Conn + Send + Sync>) -> Option<String> {
     let dtls_conn: &DTLSConn = conn.as_any().downcast_ref()?;
     let state = dtls_conn.connection_state().await;
@@ -506,4 +475,51 @@ async fn disconnect(
     let active: Vec<SocketAddr> = conns.keys().copied().collect();
     log::info!("active connections: {active:?}");
     peer_fingerprints.lock().await.remove(&addr)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pong_edge_detects_state_and_endpoint_changes() {
+        let manager = ClientManager::default();
+        let handle = manager.add_client();
+        let first: SocketAddr = "192.0.2.10:5353".parse().unwrap();
+        let second: SocketAddr = "192.0.2.11:5353".parse().unwrap();
+
+        assert!(pong_is_edge(&manager, handle, first, true));
+        manager.set_active_addr(handle, Some(first));
+        manager.set_alive(handle, true);
+        manager.set_remote_ready(handle, true);
+        assert!(!pong_is_edge(&manager, handle, first, true));
+        assert!(pong_is_edge(&manager, handle, second, true));
+        assert!(pong_is_edge(&manager, handle, first, false));
+        manager.set_alive(handle, false);
+        assert!(pong_is_edge(&manager, handle, first, true));
+    }
+
+    #[tokio::test]
+    async fn queued_deleted_peer_events_never_reach_replacement_client() {
+        let manager = ClientManager::default();
+        let deleted = manager.add_client();
+        let certificate = Certificate::generate_self_signed(["test".to_owned()]).unwrap();
+        let mut connection = SyntraConnection::new(certificate, manager.clone());
+        connection
+            .shared
+            .tx
+            .send((deleted, "old-peer".into(), ProtoEvent::Pong(true)))
+            .unwrap();
+        manager.remove_client(deleted);
+        let replacement = manager.add_client();
+        connection
+            .shared
+            .tx
+            .send((replacement, "new-peer".into(), ProtoEvent::Pong(false)))
+            .unwrap();
+        let (handle, fingerprint, event) = connection.recv().await;
+        assert_eq!(handle, replacement);
+        assert_eq!(fingerprint, "new-peer");
+        assert!(matches!(event, ProtoEvent::Pong(false)));
+    }
 }

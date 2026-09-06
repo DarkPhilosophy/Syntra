@@ -18,6 +18,10 @@ memmap = "0.7"
 tempfile = "3.25.0"
 thiserror = "2.0.0"
 tokio = { version = "1.32.0", features = [
+    # `fs` is required by the libei backend, which reads portal file
+    # clipboard selections; without it the crate only builds when another
+    # workspace member happens to enable the feature.
+    "fs",
     "io-util",
     "io-std",
     "macros",

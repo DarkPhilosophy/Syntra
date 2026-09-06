@@ -8,8 +8,8 @@ use std::{
     time::Duration,
 };
 use syntra_plugin_api::{
-    GNOME_COPIED_FILES_MIME, Message, MountReady, PROTOCOL_VERSION, PublishFileClipboard,
-    RangeResponse, Released, RemoteManifest, URI_LIST_MIME, Unmounted,
+    GNOME_COPIED_FILES_MIME, Message, MountReady, PROTOCOL_VERSION, RangeResponse, Released,
+    RemoteManifest, URI_LIST_MIME, Unmounted,
 };
 use thiserror::Error;
 use tokio::{
@@ -53,7 +53,6 @@ impl AdapterPaths {
 pub(crate) enum ManagerCommand {
     RemoteManifest(RemoteManifest),
     RangeResponse(RangeResponse),
-    PublishFileClipboard(PublishFileClipboard),
     ClipboardData {
         transfer_id: String,
         mime_type: String,
@@ -70,8 +69,8 @@ pub(crate) enum ManagerCommand {
 
 #[derive(Debug)]
 pub(crate) enum ManagerEvent {
-    Started(AdapterId),
-    Ready(AdapterId),
+    Started,
+    Ready,
     Message {
         adapter: AdapterId,
         message: Message,
@@ -79,7 +78,6 @@ pub(crate) enum ManagerEvent {
     Cancelled {
         adapter: AdapterId,
         transfer_id: String,
-        reason: String,
     },
     Rejected {
         adapter: Option<AdapterId>,
@@ -91,18 +89,35 @@ pub(crate) enum ManagerEvent {
     },
 }
 
+/// Why supervising an out-of-process plugin failed.
+///
+/// Public because it is reachable through
+/// [`ServiceError::Adapter`](crate::service::ServiceError::Adapter); a caller
+/// that matches on it has to be able to name it.
 #[derive(Debug, Error)]
-pub(crate) enum ManagerError {
+pub enum ManagerError {
+    /// The plugin executable is missing or not runnable.
+    ///
+    /// Not fatal: the daemon logs it and continues without that capability.
     #[error("{name} adapter executable {path:?} is invalid: {source}")]
     InvalidExecutable {
+        /// Human-readable plugin name, used in the message.
         name: &'static str,
+        /// Path that was probed.
         path: PathBuf,
+        /// Underlying filesystem error.
         source: io::Error,
     },
+    /// The supervisor is not draining commands fast enough.
+    ///
+    /// Commands are dropped rather than queued without bound, so a wedged
+    /// plugin cannot stall the service event loop.
     #[error("adapter manager command queue is full")]
     QueueFull,
+    /// The supervisor task has exited; no plugin is reachable.
     #[error("adapter manager has stopped")]
     Stopped,
+    /// The supervisor task panicked or was cancelled.
     #[error("adapter manager task failed: {0}")]
     Join(#[from] tokio::task::JoinError),
 }
@@ -341,25 +356,6 @@ async fn handle_command(
             }
             send_ready(state, &adapter, Message::RangeResponse(response), events).await;
         }
-        ManagerCommand::PublishFileClipboard(publish) => {
-            if !valid_transfer_id(&publish.transfer_id) || publish.uris.is_empty() {
-                reject(
-                    events,
-                    Some(AdapterId::Gtk),
-                    "invalid clipboard publication",
-                )
-                .await;
-                return;
-            }
-            state.gtk_transfers.insert(publish.transfer_id.clone());
-            send_ready(
-                state,
-                &AdapterId::Gtk,
-                Message::PublishFileClipboard(publish),
-                events,
-            )
-            .await;
-        }
         ManagerCommand::Released(released) => {
             if !state.gtk_transfers.remove(&released.transfer_id) {
                 reject(
@@ -446,7 +442,7 @@ async fn handle_process_event(
                 if let Some(runtime) = state.processes.get_mut(&adapter) {
                     runtime.ready = true;
                 }
-                emit(events, ManagerEvent::Ready(adapter.clone())).await;
+                emit(events, ManagerEvent::Ready).await;
                 if let Some(pending) = state.pending_messages.remove(&adapter) {
                     send_ready(state, &adapter, pending, events).await;
                 }
@@ -649,7 +645,7 @@ async fn spawn_adapter(
     )
     .await?;
     state.processes.insert(adapter.clone(), runtime);
-    emit(events, ManagerEvent::Started(adapter)).await;
+    emit(events, ManagerEvent::Started).await;
     Ok(())
 }
 
@@ -808,7 +804,7 @@ async fn process_exit(
     let terminal = matches!(adapter, AdapterId::Fuse { .. }) && state.terminal.remove(&adapter);
     stop_adapter(state, &adapter).await;
     if !terminal {
-        cancel_owned(state, &adapter, &reason, events).await;
+        cancel_owned(state, &adapter, events).await;
     }
     emit(
         events,
@@ -837,7 +833,7 @@ async fn fail_adapter(
     events: &mpsc::Sender<ManagerEvent>,
 ) {
     stop_adapter(state, adapter).await;
-    cancel_owned(state, adapter, reason, events).await;
+    cancel_owned(state, adapter, events).await;
     emit(
         events,
         ManagerEvent::Exited {
@@ -848,12 +844,7 @@ async fn fail_adapter(
     .await;
 }
 
-async fn cancel_owned(
-    state: &mut State,
-    adapter: &AdapterId,
-    reason: &str,
-    events: &mpsc::Sender<ManagerEvent>,
-) {
+async fn cancel_owned(state: &mut State, adapter: &AdapterId, events: &mpsc::Sender<ManagerEvent>) {
     let transfers: Vec<String> = match adapter {
         AdapterId::Gtk => state.gtk_transfers.drain().collect(),
         AdapterId::Fuse { transfer_id } => vec![transfer_id.clone()],
@@ -867,7 +858,6 @@ async fn cancel_owned(
             ManagerEvent::Cancelled {
                 adapter: adapter.clone(),
                 transfer_id,
-                reason: reason.to_string(),
             },
         )
         .await;

@@ -44,7 +44,7 @@ pub(crate) enum TransferAction<P> {
         adapter_id: AdapterId,
         message: AdapterMessage,
     },
-    Frontend(TransferFrontendEvent<P>),
+    Frontend(TransferFrontendEvent),
     ReadSource {
         owner: TransferOwner<P>,
         file_id: u64,
@@ -55,40 +55,32 @@ pub(crate) enum TransferAction<P> {
     },
 }
 
+/// Transfer progress reported to clients.
+///
+/// Carries no owner: a client addresses a transfer by its stable
+/// [`UiTransferId`], and deciding which peer or plugin a transfer belongs to
+/// is the state machine's business, not the presentation's.
 #[derive(Clone, Debug)]
-pub(crate) enum TransferFrontendEvent<P> {
-    Offered {
-        ui_id: UiTransferId,
-        owner: TransferOwner<P>,
-        adapter_id: AdapterId,
-        operation: Operation,
-        entries: Vec<ClipboardManifestEntry>,
-    },
+pub(crate) enum TransferFrontendEvent {
     Progress {
         ui_id: UiTransferId,
-        owner: TransferOwner<P>,
-        file_id: u64,
         completed: u64,
         total: u64,
     },
     Completed {
         ui_id: UiTransferId,
-        owner: TransferOwner<P>,
         file_id: Option<u64>,
         completed: u64,
         total: u64,
     },
     Cancelled {
         ui_id: UiTransferId,
-        owner: TransferOwner<P>,
         file_id: Option<u64>,
         completed: u64,
         total: u64,
-        reason: ClipboardCancelReason,
     },
     Failed {
         ui_id: UiTransferId,
-        owner: TransferOwner<P>,
         file_id: Option<u64>,
         completed: u64,
         total: u64,
@@ -146,21 +138,18 @@ pub(crate) enum TransferStateError<P: Debug> {
         owner: TransferOwner<P>,
         file_id: u64,
     },
-    #[error("completion digest cannot be verified for a range beginning at offset {offset}")]
-    UnverifiableDigest { offset: u64 },
     #[error("event is not a file-transfer protocol event")]
     UnsupportedProtocolEvent,
 }
 
+/// A local file offer this device is serving to a peer.
+///
 /// A clipboard offer is pure metadata: only a real data request marks it as
 /// an actual transfer.
-
-struct LocalTransfer<P> {
+struct LocalTransfer {
     ui_id: UiTransferId,
-    owner: TransferOwner<P>,
     adapter_id: AdapterId,
     adapter_transfer_id: String,
-    operation: Operation,
     offer: FileOffer,
     outgoing: HashMap<(u64, u64), OutgoingFile>,
     /// A local offer is only metadata until the peer actually pastes.
@@ -169,9 +158,8 @@ struct LocalTransfer<P> {
     transferred_by_file: HashMap<u64, u64>,
 }
 
-struct RemoteTransfer<P> {
+struct RemoteTransfer {
     ui_id: UiTransferId,
-    owner: TransferOwner<P>,
     adapter_id: AdapterId,
     adapter_transfer_id: String,
     operation: Operation,
@@ -194,8 +182,8 @@ struct PendingRange<P> {
 
 pub(crate) struct TransferState<P> {
     next_ui_id: UiTransferId,
-    local: HashMap<TransferOwner<P>, LocalTransfer<P>>,
-    remote: HashMap<TransferOwner<P>, RemoteTransfer<P>>,
+    local: HashMap<TransferOwner<P>, LocalTransfer>,
+    remote: HashMap<TransferOwner<P>, RemoteTransfer>,
     pending: HashMap<(TransferOwner<P>, u64, u64), PendingRange<P>>,
     adapter_to_owner: HashMap<(AdapterId, String), HashSet<TransferOwner<P>>>,
     source_pending: HashMap<(TransferOwner<P>, u64, u64), (u64, u64)>,
@@ -222,10 +210,6 @@ where
 {
     pub(crate) fn new() -> Self {
         Self::default()
-    }
-
-    pub(crate) fn owner_for_ui(&self, ui_id: UiTransferId) -> Option<&TransferOwner<P>> {
-        self.ui_to_owner.get(&ui_id)
     }
 
     pub(crate) fn owners_for_adapter(
@@ -265,9 +249,9 @@ where
                 "move clipboard transfers are not supported by the wire manifest".into(),
             ));
         }
-        /// Every new local copy replaces the previous offer to the same
-        /// peer: otherwise each copy leaves another never-pasteable offer
-        /// behind and the peer accumulates clones.
+        // Every new local copy replaces the previous offer to the same peer:
+        // otherwise each copy leaves another never-pasteable offer behind and
+        // the peer accumulates clones.
         let superseded: Vec<_> = self
             .local
             .iter()
@@ -282,7 +266,6 @@ where
             );
         }
         let ui_id = self.allocate_ui_id()?;
-        let operation = manifest.operation.clone();
         debug_assert!(!matches!(manifest.operation, Operation::Move));
         let entries = offer.entries.clone();
         let adapter_transfer_id = manifest.transfer_id.clone();
@@ -296,10 +279,8 @@ where
             owner.clone(),
             LocalTransfer {
                 ui_id,
-                owner: owner.clone(),
                 adapter_id: adapter_id.clone(),
                 adapter_transfer_id,
-                operation: operation.clone(),
                 offer,
                 outgoing: HashMap::new(),
                 announced: false,
@@ -316,23 +297,12 @@ where
         Ok(stale_actions)
     }
 
-    /// A copy is never a transfer: the frontend only learns about an offer
-    /// once a paste actually streams more than a clipboard preview sniff.
-    fn announce_local(&mut self, owner: &TransferOwner<P>, length: u64) -> Vec<TransferAction<P>> {
-        let Some(transfer) = self.local.get_mut(owner) else {
-            return Vec::new();
-        };
-        if transfer.announced {
-            return Vec::new();
+    /// Marks a local offer announced. See [`Self::announce_remote`].
+    fn announce_local(&mut self, owner: &TransferOwner<P>, _length: u64) -> Vec<TransferAction<P>> {
+        if let Some(transfer) = self.local.get_mut(owner) {
+            transfer.announced = true;
         }
-        transfer.announced = true;
-        vec![TransferAction::Frontend(TransferFrontendEvent::Offered {
-            ui_id: transfer.ui_id,
-            owner: owner.clone(),
-            adapter_id: transfer.adapter_id.clone(),
-            operation: transfer.operation.clone(),
-            entries: transfer.offer.entries.clone(),
-        })]
+        Vec::new()
     }
 
     pub(crate) fn inbound_manifest(
@@ -387,7 +357,6 @@ where
             owner.clone(),
             RemoteTransfer {
                 ui_id,
-                owner: owner.clone(),
                 adapter_id: adapter_id.clone(),
                 adapter_transfer_id: adapter_transfer_id.clone(),
                 operation: operation.clone(),
@@ -419,26 +388,21 @@ where
         Ok(stale_actions)
     }
 
-    /// A copy must never look like a transfer: the frontend only learns
-    /// about a remote offer once a real paste streams more than a
-    /// clipboard preview sniff.
-    fn announce_remote(&mut self, owner: &TransferOwner<P>, length: u64) -> Vec<TransferAction<P>> {
-        let Some(transfer) = self.remote.get_mut(owner) else {
-            return Vec::new();
-        };
-        if transfer.announced {
-            return Vec::new();
+    /// Marks a remote offer announced.
+    ///
+    /// A copy must never look like a transfer, so there is no frontend event
+    /// here: a transfer row appears only once a real paste streams bytes.
+    /// The flag exists solely to keep that first progress event from being
+    /// emitted twice.
+    fn announce_remote(
+        &mut self,
+        owner: &TransferOwner<P>,
+        _length: u64,
+    ) -> Vec<TransferAction<P>> {
+        if let Some(transfer) = self.remote.get_mut(owner) {
+            transfer.announced = true;
         }
-        transfer.announced = true;
-        let mut entries: Vec<_> = transfer.entries.values().cloned().collect();
-        entries.sort_by_key(|entry| entry.file_id);
-        vec![TransferAction::Frontend(TransferFrontendEvent::Offered {
-            ui_id: transfer.ui_id,
-            owner: owner.clone(),
-            adapter_id: transfer.adapter_id.clone(),
-            operation: transfer.operation.clone(),
-            entries,
-        })]
+        Vec::new()
     }
 
     pub(crate) fn adapter_range_request(
@@ -600,8 +564,6 @@ where
                 self.transfer_ui_id(&owner).map(|ui_id| {
                     TransferAction::Frontend(TransferFrontendEvent::Progress {
                         ui_id,
-                        owner,
-                        file_id: 0,
                         completed,
                         total,
                     })
@@ -631,7 +593,6 @@ where
             let event = if completion.success {
                 TransferFrontendEvent::Completed {
                     ui_id,
-                    owner: owner.clone(),
                     file_id: None,
                     completed,
                     total,
@@ -639,7 +600,6 @@ where
             } else {
                 TransferFrontendEvent::Failed {
                     ui_id,
-                    owner: owner.clone(),
                     file_id: None,
                     completed,
                     total,
@@ -683,9 +643,7 @@ where
             });
             actions.push(TransferAction::Frontend(TransferFrontendEvent::Cancelled {
                 ui_id,
-                owner: owner.clone(),
                 file_id: None,
-                reason: ClipboardCancelReason::User,
                 completed,
                 total,
             }));
@@ -732,9 +690,7 @@ where
             });
             actions.push(TransferAction::Frontend(TransferFrontendEvent::Cancelled {
                 ui_id,
-                owner: owner.clone(),
                 file_id: None,
-                reason: ClipboardCancelReason::User,
                 completed,
                 total,
             }));
@@ -764,16 +720,13 @@ where
             let event = if unmounted.success {
                 TransferFrontendEvent::Cancelled {
                     ui_id,
-                    owner: owner.clone(),
                     file_id: None,
                     completed,
                     total,
-                    reason: ClipboardCancelReason::User,
                 }
             } else {
                 TransferFrontendEvent::Failed {
                     ui_id,
-                    owner: owner.clone(),
                     file_id: None,
                     completed,
                     total,
@@ -891,24 +844,6 @@ where
         Ok(())
     }
 
-    pub(crate) fn take_outgoing_file(
-        &mut self,
-        owner: &TransferOwner<P>,
-        file_id: u64,
-        request_id: u64,
-    ) -> Result<OutgoingFile, TransferStateError<P>> {
-        self.local
-            .get_mut(owner)
-            .ok_or_else(|| TransferStateError::UnknownOwner(owner.clone()))?
-            .outgoing
-            .remove(&(file_id, request_id))
-            .ok_or_else(|| TransferStateError::UnknownRequest {
-                owner: owner.clone(),
-                file_id,
-                request_id,
-            })
-    }
-
     pub(crate) fn source_chunk(
         &self,
         owner: &TransferOwner<P>,
@@ -921,7 +856,9 @@ where
             .local
             .get(owner)
             .ok_or_else(|| TransferStateError::UnknownOwner(owner.clone()))?;
-        let file = transfer
+        // The value is not needed; the lookup is the validation that this
+        // request was actually reserved for this file.
+        transfer
             .outgoing
             .get(&(file_id, request_id))
             .ok_or_else(|| TransferStateError::UnknownRequest {
@@ -1040,8 +977,6 @@ where
             .ok_or(ProtocolError::LengthOverflow)?;
         let progress = TransferAction::Frontend(TransferFrontendEvent::Progress {
             ui_id: transfer.ui_id,
-            owner: owner.clone(),
-            file_id,
             completed: end,
             total,
         });
@@ -1105,8 +1040,6 @@ where
         Ok(vec![TransferAction::Frontend(
             TransferFrontendEvent::Progress {
                 ui_id: transfer.ui_id,
-                owner,
-                file_id,
                 completed,
                 total,
             },
@@ -1187,8 +1120,6 @@ where
             },
             TransferAction::Frontend(TransferFrontendEvent::Progress {
                 ui_id: transfer.ui_id,
-                owner: pending.key.owner,
-                file_id,
                 completed: pending.received,
                 total: transfer
                     .entries
@@ -1224,23 +1155,6 @@ where
             .get(&ui_id)
             .cloned()
             .ok_or(TransferStateError::DuplicateUiId(ui_id))?;
-        self.cancel_owner(&owner, file_id, reason, true)
-    }
-    pub(crate) fn cancel_adapter(
-        &mut self,
-        adapter_id: &str,
-        transfer_id: &str,
-        file_id: Option<u64>,
-        reason: ClipboardCancelReason,
-    ) -> Result<Vec<TransferAction<P>>, TransferStateError<P>> {
-        let owner = self
-            .owners_for_adapter(adapter_id, transfer_id)
-            .into_iter()
-            .next()
-            .ok_or_else(|| TransferStateError::UnknownAdapterTransfer {
-                adapter_id: adapter_id.to_owned(),
-                transfer_id: transfer_id.to_owned(),
-            })?;
         self.cancel_owner(&owner, file_id, reason, true)
     }
 
@@ -1395,11 +1309,9 @@ where
         if announced {
             actions.push(TransferAction::Frontend(TransferFrontendEvent::Cancelled {
                 ui_id,
-                owner: owner.clone(),
                 file_id,
                 completed: cancel_completed,
                 total: cancel_total,
-                reason,
             }));
         }
         if notify_peer {

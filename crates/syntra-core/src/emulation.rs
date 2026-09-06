@@ -68,9 +68,12 @@ pub(crate) enum EmulationEvent {
         addr: SocketAddr,
         commit: [u8; 8],
     },
+    /// Clipboard content replayed from an authenticated peer.
+    ///
+    /// Neither the peer address nor the wire transfer id is carried: the
+    /// content is applied to the local clipboard regardless of which peer
+    /// sent it, and routing was already decided upstream.
     Clipboard {
-        addr: SocketAddr,
-        transfer_id: u64,
         content: ClipboardContent,
     },
     FileClipboard {
@@ -362,7 +365,7 @@ impl ListenTask {
                                             }
                                         };
                                         if let Some(content) = content {
-                                            self.event_tx.send(EmulationEvent::Clipboard { addr, transfer_id, content }).expect("channel closed");
+                                            self.event_tx.send(EmulationEvent::Clipboard { content }).expect("channel closed");
                                         }
                                     }
                                 }
@@ -854,6 +857,29 @@ fn decode_native_image(mime_type: &str, data: Vec<u8>) -> Result<(u32, u32, Vec<
     Ok((width, height, decoded.into_rgba8().into_raw()))
 }
 
+struct ReadyGuard {
+    ready: Rc<Cell<bool>>,
+    event_tx: Sender<EmulationEvent>,
+}
+
+impl ReadyGuard {
+    fn new(ready: Rc<Cell<bool>>, event_tx: Sender<EmulationEvent>) -> Self {
+        event_tx
+            .send(EmulationEvent::EmulationEnabled)
+            .expect("channel closed");
+        Self { ready, event_tx }
+    }
+}
+
+impl Drop for ReadyGuard {
+    fn drop(&mut self) {
+        self.ready.set(false);
+        self.event_tx
+            .send(EmulationEvent::EmulationDisabled)
+            .expect("channel closed");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::decode_native_image;
@@ -880,28 +906,5 @@ mod tests {
             .write_image(image.as_raw(), 4097, 2049, image::ColorType::Rgba8.into())
             .unwrap();
         assert!(decode_native_image("image/png", encoded).is_err());
-    }
-}
-
-struct ReadyGuard {
-    ready: Rc<Cell<bool>>,
-    event_tx: Sender<EmulationEvent>,
-}
-
-impl ReadyGuard {
-    fn new(ready: Rc<Cell<bool>>, event_tx: Sender<EmulationEvent>) -> Self {
-        event_tx
-            .send(EmulationEvent::EmulationEnabled)
-            .expect("channel closed");
-        Self { ready, event_tx }
-    }
-}
-
-impl Drop for ReadyGuard {
-    fn drop(&mut self) {
-        self.ready.set(false);
-        self.event_tx
-            .send(EmulationEvent::EmulationDisabled)
-            .expect("channel closed");
     }
 }

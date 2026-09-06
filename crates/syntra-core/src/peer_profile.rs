@@ -61,17 +61,38 @@ pub(crate) struct Reassembler {
     peers: HashMap<String, Partial>,
 }
 
+/// Header fields of a `ProfileStart` message.
+///
+/// Grouped because they arrive together on the wire and are validated as a
+/// unit; passing them individually made every call a row of bare integers
+/// whose order was easy to transpose.
+pub(crate) struct ProfileHeader {
+    /// Avatar width in pixels; zero when no avatar is sent.
+    pub(crate) width: u32,
+    /// Avatar height in pixels; zero when no avatar is sent.
+    pub(crate) height: u32,
+    /// Total avatar byte length across all chunks.
+    pub(crate) total_len: u32,
+    /// Number of chunks the avatar is split into.
+    pub(crate) chunks: u32,
+    /// Human-readable device name.
+    pub(crate) display_name: String,
+}
+
 impl Reassembler {
     pub(crate) fn start(
         &mut self,
         fingerprint: &str,
         request_id: u64,
-        width: u32,
-        height: u32,
-        total_len: u32,
-        chunks: u32,
-        display_name: String,
+        header: ProfileHeader,
     ) -> Result<Option<DeviceProfile>, String> {
+        let ProfileHeader {
+            width,
+            height,
+            total_len,
+            chunks,
+            display_name,
+        } = header;
         self.expire(Instant::now());
         if request_id == 0 || display_name.len() > 128 || width > 128 || height > 128 {
             return Err("invalid profile metadata".into());
@@ -268,11 +289,13 @@ mod tests {
             .start(
                 "cert",
                 request_id,
-                width,
-                height,
-                total_len,
-                chunks,
-                display_name.clone(),
+                ProfileHeader {
+                    width,
+                    height,
+                    total_len,
+                    chunks,
+                    display_name: display_name.clone(),
+                },
             )
             .unwrap();
         let ProtoEvent::ProfileChunk { index, data, .. } = frames[1].clone() else {
@@ -285,11 +308,13 @@ mod tests {
             .start(
                 "cert",
                 request_id,
-                width,
-                height,
-                total_len,
-                chunks,
-                display_name,
+                ProfileHeader {
+                    width,
+                    height,
+                    total_len,
+                    chunks,
+                    display_name,
+                },
             )
             .unwrap();
         receiver
@@ -322,14 +347,61 @@ mod tests {
     fn invalid_dimensions_and_partial_budget_are_bounded() {
         let mut r = Reassembler::default();
         assert!(
-            r.start("x", 1, u32::MAX, 128, u32::MAX, u32::MAX, "x".into())
-                .is_err()
+            r.start(
+                "x",
+                1,
+                ProfileHeader {
+                    width: u32::MAX,
+                    height: 128,
+                    total_len: u32::MAX,
+                    chunks: u32::MAX,
+                    display_name: "x".into()
+                }
+            )
+            .is_err()
         );
         for i in 0..MAX_PARTIALS {
-            r.start(&i.to_string(), 1, 1, 1, 4, 1, "x".into()).unwrap();
+            r.start(
+                &i.to_string(),
+                1,
+                ProfileHeader {
+                    width: 1,
+                    height: 1,
+                    total_len: 4,
+                    chunks: 1,
+                    display_name: "x".into(),
+                },
+            )
+            .unwrap();
         }
-        assert!(r.start("overflow", 1, 1, 1, 4, 1, "x".into()).is_err());
+        assert!(
+            r.start(
+                "overflow",
+                1,
+                ProfileHeader {
+                    width: 1,
+                    height: 1,
+                    total_len: 4,
+                    chunks: 1,
+                    display_name: "x".into()
+                }
+            )
+            .is_err()
+        );
         r.expire(Instant::now() + TTL);
-        assert!(r.start("fresh", 2, 1, 1, 4, 1, "x".into()).is_ok());
+        assert!(
+            r.start(
+                "fresh",
+                2,
+                ProfileHeader {
+                    width: 1,
+                    height: 1,
+                    total_len: 4,
+                    chunks: 1,
+                    display_name: "x".into()
+                }
+            )
+            .is_ok()
+        );
     }
 }

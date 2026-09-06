@@ -82,15 +82,74 @@ enum LibeiNotifyEvent {
     Destroy(Position),
 }
 
+/// How long to wait for a capture session to acknowledge a release request.
+///
+/// Past this the session is assumed wedged and the portal session is torn
+/// down: leaving the pointer captured is worse than losing the session.
+const RELEASE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Cross-task handshake for handing the pointer back to the local desktop.
+///
+/// Releasing spans two tasks: whoever asks, and the capture session that
+/// must acknowledge. Keeping the three primitives together makes the
+/// ordering rule expressible as a method rather than a comment repeated at
+/// each call site.
+#[derive(Clone, Default)]
+struct ReleaseSignal {
+    /// Raised to ask the capture session to hand control back.
+    requested: Arc<Notify>,
+    /// Whether a session currently holds the pointer.
+    capturing: Arc<AtomicBool>,
+    /// Raised once the session has actually let go.
+    completed: Arc<Notify>,
+}
+
+impl ReleaseSignal {
+    /// Whether a capture session currently holds the pointer.
+    fn is_capturing(&self) -> bool {
+        self.capturing.load(Ordering::SeqCst)
+    }
+
+    /// Records whether a session holds the pointer.
+    fn set_capturing(&self, capturing: bool) {
+        self.capturing.store(capturing, Ordering::SeqCst);
+    }
+
+    /// Resolves when a release has been requested.
+    fn requested(&self) -> impl std::future::Future<Output = ()> + '_ {
+        self.requested.notified()
+    }
+
+    /// Marks the pointer released and wakes whoever is waiting.
+    fn complete(&self) {
+        self.set_capturing(false);
+        self.completed.notify_one();
+    }
+
+    /// Asks the session to release and waits for it, up to `timeout`.
+    ///
+    /// The completion future is created *before* the capturing check on
+    /// purpose: subscribing afterwards could miss a notification sent in
+    /// between, and the caller would wait for the full timeout.
+    ///
+    /// Returns `false` if the session did not acknowledge in time.
+    async fn release(&self, timeout: std::time::Duration) -> bool {
+        let completed = self.completed.notified();
+        if !self.is_capturing() {
+            return true;
+        }
+        self.requested.notify_waiters();
+        tokio::time::timeout(timeout, completed).await.is_ok()
+    }
+}
+
 #[allow(dead_code)]
 pub struct LibeiInputCapture {
     syntra_input_capture: Pin<Box<InputCapture>>,
     capture_task: JoinHandle<Result<(), CaptureError>>,
     event_rx: Receiver<(Position, CaptureEvent)>,
     notify_capture: Sender<LibeiNotifyEvent>,
-    notify_release: Arc<Notify>,
-    capturing: Arc<AtomicBool>,
-    release_complete: Arc<Notify>,
+    release: ReleaseSignal,
     cancellation_token: CancellationToken,
     terminated: bool,
 }
@@ -307,18 +366,14 @@ impl LibeiInputCapture {
 
         let (event_tx, event_rx) = mpsc::channel(1);
         let (notify_capture, notify_rx) = mpsc::channel(1);
-        let notify_release = Arc::new(Notify::new());
-        let capturing = Arc::new(AtomicBool::new(false));
-        let release_complete = Arc::new(Notify::new());
+        let release = ReleaseSignal::default();
 
         let cancellation_token = CancellationToken::new();
 
         let capture = do_capture(
             input_capture_ptr,
             notify_rx,
-            notify_release.clone(),
-            capturing.clone(),
-            release_complete.clone(),
+            release.clone(),
             first_session,
             event_tx,
             cancellation_token.clone(),
@@ -330,9 +385,7 @@ impl LibeiInputCapture {
             event_rx,
             capture_task,
             notify_capture,
-            notify_release,
-            capturing,
-            release_complete,
+            release,
             cancellation_token,
             terminated: false,
         };
@@ -344,9 +397,7 @@ impl LibeiInputCapture {
 async fn do_capture(
     syntra_input_capture: *const InputCapture,
     mut capture_event: Receiver<LibeiNotifyEvent>,
-    notify_release: Arc<Notify>,
-    capturing: Arc<AtomicBool>,
-    release_complete: Arc<Notify>,
+    release: ReleaseSignal,
     session: Option<(Session<InputCapture>, BitFlags<Capabilities>, bool)>,
     event_tx: Sender<(Position, CaptureEvent)>,
     cancellation_token: CancellationToken,
@@ -397,15 +448,15 @@ async fn do_capture(
             };
 
             let capture_session = do_capture_session(
-                syntra_input_capture,
-                &mut session,
-                clipboard_enabled,
+                PortalSession {
+                    portal: syntra_input_capture,
+                    session: &mut session,
+                    clipboard_enabled,
+                },
                 &event_tx,
                 &active_clients,
                 &mut next_barrier_id,
-                &notify_release,
-                &capturing,
-                &release_complete,
+                &release,
                 (cancel_session.clone(), cancel_update.clone()),
             );
 
@@ -473,18 +524,28 @@ async fn read_portal_file_clipboard(
     Some(((*mime_type).to_string(), data))
 }
 
-async fn do_capture_session(
-    syntra_input_capture: &InputCapture,
-    session: &mut Session<InputCapture>,
+/// The portal handle and the session opened on it, which are always used
+/// together and share a lifetime.
+struct PortalSession<'a> {
+    portal: &'a InputCapture,
+    session: &'a mut Session<InputCapture>,
+    /// Whether this session also observes the clipboard.
     clipboard_enabled: bool,
+}
+
+async fn do_capture_session(
+    portal_session: PortalSession<'_>,
     event_tx: &Sender<(Position, CaptureEvent)>,
     active_clients: &[Position],
     next_barrier_id: &mut NonZeroU32,
-    notify_release: &Notify,
-    capturing: &AtomicBool,
-    release_complete: &Notify,
+    release: &ReleaseSignal,
     cancel: (CancellationToken, CancellationToken),
 ) -> Result<(), CaptureError> {
+    let PortalSession {
+        portal: syntra_input_capture,
+        session,
+        clipboard_enabled,
+    } = portal_session;
     let (cancel_session, cancel_update) = cancel;
     // current client
     let current_pos = Rc::new(Cell::new(None));
@@ -574,14 +635,14 @@ async fn do_capture_session(
                         },
                     };
                     current_pos.replace(Some(pos));
-                    capturing.store(true, Ordering::SeqCst);
+                    release.set_capturing(true);
 
                     // client entered => send event
                     event_tx.send((pos, CaptureEvent::Begin)).await.expect("no channel");
 
                     loop {
                         tokio::select! {
-                            _ = notify_release.notified() => {
+                            _ = release.requested() => {
                                 log::debug!("release session requested");
                                 break;
                             },
@@ -630,12 +691,11 @@ async fn do_capture_session(
 
                     let release_result =
                         release_capture(syntra_input_capture, session, activated, pos).await;
-                    capturing.store(false, Ordering::SeqCst);
-                    release_complete.notify_one();
+                    release.complete();
                     release_result?;
 
                 }
-                _ = notify_release.notified() => { /* capture release -> we are not capturing anyway, so ignore */
+                _ = release.requested() => { /* capture release -> we are not capturing anyway, so ignore */
                     log::debug!("release session requested");
                 },
                 _ = release_session.notified() => { /* release session */
@@ -665,8 +725,7 @@ async fn do_capture_session(
     cancel_update.cancel();
     // Unblock a concurrent release even if the portal/EIS session died
     // before it could process the explicit release request.
-    capturing.store(false, Ordering::SeqCst);
-    release_complete.notify_one();
+    release.complete();
 
     log::debug!("both session and ei task finished!");
     a?;
@@ -804,17 +863,11 @@ impl SyntraInputCapture for LibeiInputCapture {
     }
 
     async fn release(&mut self) -> Result<(), CaptureError> {
-        let completed = self.release_complete.notified();
-        if !self.capturing.load(Ordering::SeqCst) {
-            return Ok(());
-        }
-        self.notify_release.notify_waiters();
-        if tokio::time::timeout(std::time::Duration::from_secs(1), completed)
-            .await
-            .is_err()
-        {
+        if !self.release.release(RELEASE_TIMEOUT).await {
+            // A session that will not hand the pointer back would strand the
+            // local desktop, so tear the portal session down instead.
             log::error!("input capture release timed out; terminating portal session");
-            self.capturing.store(false, Ordering::SeqCst);
+            self.release.set_capturing(false);
             self.cancellation_token.cancel();
         }
         Ok(())
