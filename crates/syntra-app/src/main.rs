@@ -37,8 +37,16 @@ fn main() {
     };
     let _guard = runtime.enter();
 
+    let startup = match parse_startup() {
+        Ok(startup) => startup,
+        Err(message) => {
+            eprintln!("{message}");
+            process::exit(2);
+        }
+    };
+
     let daemon = ensure_daemon();
-    let result = syntra_ui::app::run();
+    let result = syntra_ui::app::run_with_startup(startup);
     drop(daemon);
     if let Err(error) = result {
         log::error!("{error}");
@@ -47,6 +55,33 @@ fn main() {
         process::exit(1);
     }
     log::logger().flush();
+}
+
+/// Parses the dashboard's only command-line option.
+///
+/// Kept hand-written rather than pulling in an argument parser: the
+/// dashboard has one flag, and everything else is configured through the
+/// daemon or the settings page.
+fn parse_startup() -> Result<syntra_ui::app::StartupMode, String> {
+    let mut startup = syntra_ui::app::StartupMode::Window;
+    for argument in std::env::args().skip(1) {
+        match argument.as_str() {
+            "--background" | "-b" => startup = syntra_ui::app::StartupMode::Background,
+            "--help" | "-h" => {
+                println!(
+                    "Syntra dashboard\n\n\
+                     Usage: syntra [OPTIONS]\n\n\
+                     Options:\n  \
+                       -b, --background  Start without a window, reachable from the tray\n  \
+                       -h, --help        Show this message\n\n\
+                     The background service is `syntra-daemon`; this binary is its dashboard."
+                );
+                std::process::exit(0);
+            }
+            other => return Err(format!("unknown option `{other}`; try --help")),
+        }
+    }
+    Ok(startup)
 }
 
 /// Makes a best effort to have a daemon available, without ever blocking startup.

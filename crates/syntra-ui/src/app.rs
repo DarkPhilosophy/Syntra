@@ -138,9 +138,26 @@ fn schedule_launch_ready(app: &AppWindow) -> Option<Timer> {
 /// background, so the daemon may be started, stopped or upgraded at any time
 /// while the dashboard stays open.
 pub fn run() -> Result<(), Box<dyn Error>> {
+    run_with_startup(StartupMode::Window)
+}
+
+/// How the dashboard presents itself when it starts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StartupMode {
+    /// Open the window immediately.
+    Window,
+    /// Start without a window, reachable from the tray.
+    ///
+    /// Falls back to opening the window when no tray is available, so
+    /// `--background` can never produce a process the user cannot reach.
+    Background,
+}
+
+/// Runs the dashboard, opening the window only in [`StartupMode::Window`].
+pub fn run_with_startup(startup: StartupMode) -> Result<(), Box<dyn Error>> {
     let source = IpcEventSource::detached();
     let sink = IpcRequestSink(Arc::clone(&source.writer));
-    run_with_transport(source, sink)
+    run_with_transport_startup(source, sink, startup)
 }
 
 /// Runs the dashboard against an already-established daemon connection.
@@ -162,6 +179,19 @@ pub fn run_with_ipc(
 /// Android uses this entry with its in-process channels; desktop IPC is adapted by
 /// [`run_with_ipc`]. Both paths deliberately share the same projection and callbacks.
 pub fn run_with_transport<S, W>(source: S, sink: W) -> Result<(), Box<dyn Error>>
+where
+    S: EventSource + Send + 'static,
+    W: RequestSink + Send + 'static,
+{
+    run_with_transport_startup(source, sink, StartupMode::Window)
+}
+
+/// As [`run_with_transport`], but able to start without showing the window.
+pub fn run_with_transport_startup<S, W>(
+    source: S,
+    sink: W,
+    startup: StartupMode,
+) -> Result<(), Box<dyn Error>>
 where
     S: EventSource + Send + 'static,
     W: RequestSink + Send + 'static,
@@ -396,7 +426,13 @@ where
     );
     app.invoke_local_profile_changed();
     let _launch_ready_timer = schedule_launch_ready(&app);
-    app.show()?;
+    // Without a tray there is no way back to a hidden window, so a
+    // background start would strand the user; open the window instead.
+    if startup == StartupMode::Window || tray.is_none() {
+        app.show()?;
+    } else {
+        log::info!("started in the background; use the tray icon to open Syntra");
+    }
     #[cfg(not(target_os = "android"))]
     let _file_drop_guard = crate::manual_ui::bind(&app, request_tx.clone(), Arc::clone(&state));
     slint::run_event_loop_until_quit()?;
