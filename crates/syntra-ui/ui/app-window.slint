@@ -2,7 +2,7 @@ import { AppState } from "app-state.slint";
 import { Translations } from "localization.slint";
 import { Theme } from "theme.slint";
 export { AppState, Translations, Theme }
-import { TitleBar } from "components/titlebar.slint";
+import { TitleBar, SidebarBrand } from "components/titlebar.slint";
 import { OverviewPage } from "pages/overview.slint";
 import { InputPage } from "pages/input.slint";
 import { DevicesPage } from "pages/devices.slint";
@@ -57,33 +57,26 @@ export component AppWindow inherits Window {
     callback begin-window-drag();
     property <length> rail-width: sidebar-expanded ? Theme.sidebar-expanded-width : Theme.sidebar-collapsed-width;
 
-    VerticalLayout {
+    // The sidebar runs the full height of the window and carries the
+    // application mark at its top; the title bar occupies only the region to
+    // its right, so the two never overlap.
+    HorizontalLayout {
         spacing: 0;
-        TitleBar {
-            horizontal-stretch: 1;
-            maximized: root.window-maximized;
-            hide-to-tray-enabled: root.hide-to-tray-enabled;
-            sidebar-expanded: root.sidebar-expanded;
-            toggle-sidebar => { root.toggle-sidebar(); }
-            hide-to-tray => { root.hide-to-tray(); }
-            minimize-window => { root.minimize-window(); }
-            toggle-maximize-window => { root.toggle-maximize-window(); }
-            close-window => { root.close-window(); }
-            begin-window-drag => { root.begin-window-drag(); }
-        }
-        HorizontalLayout {
-            spacing: 0;
-            Rectangle {
-                width: rail-width;
-                clip: true;
-                background: Theme.sidebar;
-                animate width { duration: Theme.motion-enabled ? Theme.motion-normal : 0ms; }
+        Rectangle {
+            width: rail-width;
+            clip: true;
+            background: Theme.sidebar;
+            animate width { duration: Theme.motion-enabled ? Theme.motion-normal : 0ms; }
+            VerticalLayout {
+                spacing: 0;
+                SidebarBrand {
+                    compact: !root.sidebar-expanded;
+                    toggle-maximize-window => { root.toggle-maximize-window(); }
+                    begin-window-drag => { root.begin-window-drag(); }
+                }
                 Rectangle {
-                    x: 0;
-                    y: 0;
+                    vertical-stretch: 1;
                     clip: true;
-                    width: parent.width;
-                    height: max(0px, parent.height - profile.height - 2 * Theme.small-spacing);
                     ScrollView {
                         x: 0;
                         y: 0;
@@ -119,9 +112,6 @@ export component AppWindow inherits Window {
                 }
                 }
                 profile := Rectangle {
-                    x: Theme.small-spacing;
-                    y: parent.height - self.height - Theme.small-spacing;
-                    width: parent.width - 2 * Theme.small-spacing;
                     height: max(64px, Theme.control-height + 2 * Theme.small-spacing);
                     background: Theme.surface;
                     border-radius: Theme.small-radius;
@@ -134,8 +124,23 @@ export component AppWindow inherits Window {
                     TouchArea { clicked => { root.selected-page = "devices"; root.navigate("devices"); } }
                 }
             }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 0;
+            TitleBar {
+                maximized: root.window-maximized;
+                hide-to-tray-enabled: root.hide-to-tray-enabled;
+                sidebar-expanded: root.sidebar-expanded;
+                toggle-sidebar => { root.toggle-sidebar(); }
+                hide-to-tray => { root.hide-to-tray(); }
+                minimize-window => { root.minimize-window(); }
+                toggle-maximize-window => { root.toggle-maximize-window(); }
+                close-window => { root.close-window(); }
+                begin-window-drag => { root.begin-window-drag(); }
+            }
             Rectangle {
-                horizontal-stretch: 1;
+                vertical-stretch: 1;
                 background: Theme.background;
                 if selected-page == "history": HistoryPage {
                     records: AppState.history-records;

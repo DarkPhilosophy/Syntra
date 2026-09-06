@@ -311,8 +311,14 @@ impl PositionSource {
                 .map_err(|_| "X11 window identifier does not fit in 32 bits".to_string())?,
             RawWindowHandle::Xcb(handle) => handle.window.get(),
             RawWindowHandle::Wayland(_) => {
+                // Not a defect here: winit 0.30 declares DroppedFile and
+                // HoveredFile but its Wayland backend binds no data device,
+                // so no drop ever arrives. Say what to do instead rather
+                // than reporting a bare failure.
                 return Err(
-                    "native file drop is unavailable on a native Wayland Slint window; use X11/XWayland"
+                    "Dragging files onto the window is not supported on Wayland. \
+                     Copy the files in your file manager instead, and they will \
+                     be offered to the selected device."
                         .into(),
                 );
             }

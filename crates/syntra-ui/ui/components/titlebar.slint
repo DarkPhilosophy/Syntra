@@ -17,6 +17,61 @@ component TitleButton inherits Rectangle {
     btn-touch := TouchArea { enabled: root.enabled; clicked => { root.clicked(); } }
 }
 
+// Empty title-bar space: drags the window, and toggles maximised on a
+// double click.
+//
+// The drag starts on MOVEMENT, never on press. Asking the compositor for an
+// interactive move on every pointer-down takes a pointer grab that a plain
+// click never releases, which froze the whole window: no scrolling, no
+// clicks, no sidebar toggle.
+component DragRegion inherits TouchArea {
+    callback drag-started();
+    callback maximize-requested();
+
+    // Where the press began, so movement can be measured from it.
+    property <length> press-x;
+    property <length> press-y;
+    property <bool> dragging;
+    // Distance a pointer may wander before a press counts as a drag rather
+    // than a click; below this a shaky hand would lose the click.
+    property <length> drag-threshold: 4px;
+
+    double-click-timer := Timer {
+        interval: 300ms;
+        running: false;
+        triggered => { self.running = false; }
+    }
+
+    pointer-event(event) => {
+        if (event.kind == PointerEventKind.down) {
+            self.press-x = self.mouse-x;
+            self.press-y = self.mouse-y;
+            self.dragging = false;
+        }
+    }
+    moved => {
+        if (!self.dragging && self.pressed
+            && (abs(self.mouse-x - self.press-x) > self.drag-threshold
+                || abs(self.mouse-y - self.press-y) > self.drag-threshold)) {
+            self.dragging = true;
+            self.drag-started();
+        }
+    }
+    clicked => {
+        // A completed drag is not a click, and must not maximise the window.
+        if (!self.dragging) {
+            if (double-click-timer.running) {
+                double-click-timer.running = false;
+                self.maximize-requested();
+            } else {
+                double-click-timer.running = true;
+            }
+        }
+    }
+}
+
+// The title bar occupies the region to the RIGHT of the sidebar, which runs
+// the full height of the window and carries the application mark at its top.
 export component TitleBar inherits Rectangle {
     in property <bool> maximized;
     in property <bool> hide-to-tray-enabled;
@@ -30,109 +85,89 @@ export component TitleBar inherits Rectangle {
     height: 52px;
     background: Theme.titlebar;
 
-    // The timer keeps the first click available for native window dragging,
-    // then recognises a second click in the platform double-click interval.
-    double-click-timer := Timer {
-        interval: 300ms;
-        triggered => { self.running = false; }
-    }
-
-    Rectangle {
-        x: 0;
-        y: 0;
-        width: min(Theme.large-spacing + 164px, parent.width - 220px);
-        height: parent.height;
-        background: transparent;
-
-        Image {
-            source: @image-url("../assets/shell/syntra.svg");
-            width: 40px;
-            height: 40px;
-            x: Theme.large-spacing;
-            y: (parent.height - self.height) / 2;
-            image-fit: contain;
-        }
-        Text {
-            x: Theme.large-spacing + 50px;
-            y: 0;
-            width: max(0px, parent.width - self.x);
-            height: parent.height;
-            text: Translations.tr("app-title");
-            color: Theme.text;
-            font-size: 22px;
-            font-weight: 600;
-            vertical-alignment: center;
-            overflow: elide;
-        }
-        TouchArea {
-            pointer-event(event) => {
-                if event.kind == PointerEventKind.down {
-                    root.begin-window-drag();
-                }
-            }
-            clicked => {
-                if (double-click-timer.running) {
-                    double-click-timer.running = false;
-                    root.toggle-maximize-window();
-                } else {
-                    double-click-timer.running = true;
-                }
-            }
-        }
-    }
-    TitleButton {
-        x: min(Theme.large-spacing + 164px, parent.width - 220px);
-        y: (parent.height - self.height) / 2;
-        icon: root.sidebar-expanded ? @image-url("../assets/shell/chevron.svg") : @image-url("../assets/shell/expand.svg");
-        label: root.sidebar-expanded ? Translations.tr("nav-collapse") : Translations.tr("nav-expand");
-        clicked => { root.toggle-sidebar(); }
-    }
-    TouchArea {
-        x: min(Theme.large-spacing + 164px, parent.width - 220px) + 44px;
-        y: 0;
-        width: max(0px, parent.width - 176px - self.x);
-        height: parent.height;
-        pointer-event(event) => {
-            if event.kind == PointerEventKind.down {
-                root.begin-window-drag();
-            }
-        }
-        clicked => {
-            if (double-click-timer.running) {
-                double-click-timer.running = false;
-                root.toggle-maximize-window();
-            } else {
-                double-click-timer.running = true;
-            }
-        }
-    }
     HorizontalLayout {
-        x: parent.width - 176px;
-        y: (parent.height - self.height) / 2;
-        width: 176px;
-        height: 44px;
-        spacing: 0;
+        padding-left: Theme.small-spacing;
+        padding-right: 0px;
+        spacing: 0px;
+
         TitleButton {
+            y: (parent.height - self.height) / 2;
+            icon: root.sidebar-expanded ? @image-url("../assets/shell/chevron.svg") : @image-url("../assets/shell/expand.svg");
+            label: root.sidebar-expanded ? Translations.tr("nav-collapse") : Translations.tr("nav-expand");
+            clicked => { root.toggle-sidebar(); }
+        }
+
+        // Takes whatever is left, so the drag area shrinks with the window
+        // rather than forcing a minimum width.
+        DragRegion {
+            horizontal-stretch: 1;
+            drag-started => { root.begin-window-drag(); }
+            maximize-requested => { root.toggle-maximize-window(); }
+        }
+
+        TitleButton {
+            y: (parent.height - self.height) / 2;
             icon: @image-url("../assets/shell/hide-to-tray.svg");
             label: Translations.tr("window-hide-to-tray");
             enabled: hide-to-tray-enabled;
             clicked => { root.hide-to-tray(); }
         }
         TitleButton {
+            y: (parent.height - self.height) / 2;
             icon: @image-url("../assets/shell/minimize.svg");
             label: Translations.tr("window-minimize");
             clicked => { root.minimize-window(); }
         }
         TitleButton {
+            y: (parent.height - self.height) / 2;
             icon: maximized ? @image-url("../assets/shell/restore.svg") : @image-url("../assets/shell/maximize.svg");
             label: maximized ? Translations.tr("window-restore") : Translations.tr("window-maximize");
             clicked => { root.toggle-maximize-window(); }
         }
         TitleButton {
+            y: (parent.height - self.height) / 2;
             icon: @image-url("../assets/shell/close.svg");
             label: Translations.tr("window-close");
             danger: true;
             clicked => { root.close-window(); }
         }
+    }
+}
+
+// The application mark, shown at the top of the sidebar. Dragging it moves
+// the window too, since it is part of the window chrome.
+export component SidebarBrand inherits Rectangle {
+    in property <bool> compact;
+    callback toggle-maximize-window();
+    callback begin-window-drag();
+    height: 52px;
+    background: Theme.titlebar;
+
+    HorizontalLayout {
+        padding-left: root.compact ? 0px : Theme.spacing;
+        spacing: Theme.small-spacing;
+        alignment: root.compact ? center : start;
+
+        Image {
+            source: @image-url("../assets/shell/syntra.svg");
+            width: 40px;
+            height: 40px;
+            y: (parent.height - self.height) / 2;
+            image-fit: contain;
+        }
+        if !root.compact : Text {
+            text: Translations.tr("app-title");
+            color: Theme.text;
+            font-size: 22px;
+            font-weight: 600;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+    }
+
+    DragRegion {
+        drag-started => { root.begin-window-drag(); }
+        maximize-requested => { root.toggle-maximize-window(); }
     }
 }

@@ -74,7 +74,12 @@ component PluginCard inherits Rectangle {
 
         HorizontalLayout {
             spacing: 10px;
+            // Without a zero base width a long name would set the card's
+            // minimum width and push the badge out of the viewport.
             Text {
+                width: 0px;
+                horizontal-stretch: 1;
+                overflow: elide;
                 text: plugin.name;
                 color: Theme.text;
                 font-size: Theme.body-size;
@@ -109,6 +114,7 @@ component PluginCard inherits Rectangle {
             spacing: 16px;
             Text {
                 text: Translations.tr("plugin-author") + ": " + (plugin.author == "" ? "—" : plugin.author);
+                overflow: elide;
                 color: Theme.muted-text;
                 font-size: Theme.caption-size;
             }
@@ -134,11 +140,17 @@ component PluginCard inherits Rectangle {
         if plugin.source != "" || plugin.homepage != "": HorizontalLayout {
             spacing: 16px;
             if plugin.homepage != "": Text {
+                width: 0px;
+                horizontal-stretch: 1;
+                overflow: elide;
                 text: plugin.homepage;
                 color: Theme.accent;
                 font-size: Theme.caption-size;
             }
             if plugin.source != "": Text {
+                width: 0px;
+                horizontal-stretch: 1;
+                overflow: elide;
                 text: plugin.source;
                 color: Theme.accent;
                 font-size: Theme.caption-size;
@@ -163,6 +175,10 @@ component PluginCard inherits Rectangle {
         }
 
         Text {
+            // A long install path must elide inside the card rather than
+            // stretching it past the window.
+            width: 0px;
+            horizontal-stretch: 1;
             text: plugin.executable;
             color: Theme.muted-text;
             font-size: Theme.caption-size;
