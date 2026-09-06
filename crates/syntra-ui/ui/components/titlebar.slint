@@ -141,7 +141,10 @@ export component SidebarBrand inherits Rectangle {
     callback toggle-maximize-window();
     callback begin-window-drag();
     height: 52px;
-    background: Theme.titlebar;
+    // Sidebar colour, not title-bar colour: sharing the title bar's shade
+    // made the two read as one bar spanning the whole window, which is the
+    // opposite of the intended separation.
+    background: Theme.sidebar;
 
     HorizontalLayout {
         padding-left: root.compact ? 0px : Theme.spacing;

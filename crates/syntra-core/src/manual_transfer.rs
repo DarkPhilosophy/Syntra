@@ -251,13 +251,13 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
                 Self::complete_receiver(&mut record, sha256, now).await
             }
             ProtoEvent::ManualFileResult { success, error, .. } => {
-                Self::receive_result(&mut record, success, error)
+                Self::receive_result(&mut record, success, error, now)
             }
             ProtoEvent::ManualFileCancel { .. } => {
                 if is_terminal(&record.state) {
                     Vec::new()
                 } else {
-                    Self::terminal(&mut record, ManualTransferState::Cancelled, None);
+                    Self::terminal(&mut record, ManualTransferState::Cancelled, None, now);
                     vec![Self::notify(&record)]
                 }
             }
@@ -376,7 +376,7 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
             return Vec::new();
         }
         if now >= record.approval_deadline {
-            return Self::fail(record, "file offer expired", true);
+            return Self::fail(record, "file offer expired", true, now);
         }
         let preparation = async {
             if !directory.is_absolute() {
@@ -425,7 +425,7 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
             Err(error) => {
                 let message = local_receive_error(&error);
                 if automatic {
-                    Self::terminal(record, ManualTransferState::Failed, Some(message));
+                    Self::terminal(record, ManualTransferState::Failed, Some(message), now);
                     record.final_result = Some((false, Some(REMOTE_PREPARATION_ERROR.into())));
                     record.retry_event = Some(Self::offer_response(record));
                     vec![
@@ -462,7 +462,7 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
                 if now >= record.approval_deadline
                     && record.state != ManualTransferState::Transferring
                 {
-                    return Self::fail(record, "file offer expired", true);
+                    return Self::fail(record, "file offer expired", true, now);
                 }
                 let changed = record.state != ManualTransferState::Transferring;
                 if changed {
@@ -500,7 +500,7 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
                 vec![Self::send(record, pull)]
             }
             (ClipboardTransferDirection::Sending, ManualDecision::Declined) => {
-                Self::terminal(record, ManualTransferState::Declined, None);
+                Self::terminal(record, ManualTransferState::Declined, None, now);
                 vec![Self::notify(record)]
             }
             _ => Vec::new(),
@@ -526,7 +526,7 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
             )];
         }
         if length == 0 || length as usize > MAX_MANUAL_FILE_CHUNK_SIZE || offset > record.size {
-            return Self::fail(record, "invalid file request", true);
+            return Self::fail(record, "invalid file request", true, now);
         }
         if record.cached_request == Some((offset, length)) {
             if let Some(response) = record.cached_response.clone() {
@@ -540,15 +540,15 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
             return Vec::new();
         }
         if offset != record.transferred {
-            return Self::fail(record, "unexpected file offset", true);
+            return Self::fail(record, "unexpected file offset", true, now);
         }
         if record.outgoing.is_none() {
             let Some(offer) = record.offer.as_ref() else {
-                return Self::fail(record, "file source unavailable", true);
+                return Self::fail(record, "file source unavailable", true, now);
             };
             match offer.open(FILE_ID, 0).await {
                 Ok(outgoing) => record.outgoing = Some(outgoing),
-                Err(error) => return Self::fail(record, local_source_error(&error), true),
+                Err(error) => return Self::fail(record, local_source_error(&error), true, now),
             }
         }
         let read = if offset == record.size {
@@ -577,7 +577,7 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
         };
         let response = match read {
             Ok(response) => response,
-            Err(error) => return Self::fail(record, local_source_error(&error), true),
+            Err(error) => return Self::fail(record, local_source_error(&error), true, now),
         };
         record.cached_request = Some((offset, length));
         record.cached_response = Some(response.clone());
@@ -614,14 +614,14 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
             )];
         }
         let Some(end) = offset.checked_add(data.len() as u64) else {
-            return Self::fail(record, "invalid file chunk", true);
+            return Self::fail(record, "invalid file chunk", true, now);
         };
         if data.is_empty() || data.len() > MAX_MANUAL_FILE_CHUNK_SIZE || end > record.size {
-            return Self::fail(record, "invalid file chunk", true);
+            return Self::fail(record, "invalid file chunk", true, now);
         }
         if offset != record.transferred {
             if offset < record.transferred && end > record.transferred {
-                return Self::fail(record, "overlapping file chunk", true);
+                return Self::fail(record, "overlapping file chunk", true, now);
             }
             return vec![Self::send(record, request(record.id, record.transferred))];
         }
@@ -632,14 +632,14 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
             .write_chunk(FILE_ID, offset, &data)
             .await;
         if let Err(error) = write {
-            return Self::fail(record, local_receive_error(&error), true);
+            return Self::fail(record, local_receive_error(&error), true, now);
         }
         record.transferred = end;
         record.last_activity = now;
         record.retries = 0;
         if end == record.size {
             if let Some(digest) = record.early_digest.take() {
-                return Self::finish_receiver(record, digest).await;
+                return Self::finish_receiver(record, digest, now).await;
             }
         }
         // Pull EOF only after the final data has been committed, never race it.
@@ -653,7 +653,7 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
     async fn complete_receiver(
         record: &mut Record<P>,
         digest: [u8; 32],
-        _now: Instant,
+        now: Instant,
     ) -> Vec<ManualAction<P>> {
         if record.direction != ClipboardTransferDirection::Receiving {
             return Vec::new();
@@ -673,24 +673,28 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
                 .early_digest
                 .is_some_and(|previous| previous != digest)
             {
-                return Self::fail(record, "conflicting file digest", true);
+                return Self::fail(record, "conflicting file digest", true, now);
             }
             record.early_digest = Some(digest);
             return vec![Self::send(record, request(record.id, record.transferred))];
         }
-        Self::finish_receiver(record, digest).await
+        Self::finish_receiver(record, digest, now).await
     }
 
-    async fn finish_receiver(record: &mut Record<P>, digest: [u8; 32]) -> Vec<ManualAction<P>> {
+    async fn finish_receiver(
+        record: &mut Record<P>,
+        digest: [u8; 32],
+        now: Instant,
+    ) -> Vec<ManualAction<P>> {
         let incoming = record.incoming.as_mut().expect("receiver prepared");
         let result = incoming
             .finalize_file(FILE_ID, record.size, digest)
             .await
             .and_then(|()| incoming.finish());
         if let Err(error) = result {
-            return Self::fail(record, local_receive_error(&error), true);
+            return Self::fail(record, local_receive_error(&error), true, now);
         }
-        Self::terminal(record, ManualTransferState::Completed, None);
+        Self::terminal(record, ManualTransferState::Completed, None, now);
         record.final_result = Some((true, None));
         record.retry_event = Some(Self::offer_response(record));
         vec![
@@ -710,6 +714,7 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
         record: &mut Record<P>,
         success: bool,
         error: Option<String>,
+        now: Instant,
     ) -> Vec<ManualAction<P>> {
         if is_terminal(&record.state) {
             return Vec::new();
@@ -719,6 +724,7 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
                 record,
                 ManualTransferState::Failed,
                 Some(sanitize_remote_error(error)),
+                now,
             );
             record.retry_event = Some(Self::offer_response(record));
             return vec![Self::notify(record)];
@@ -728,7 +734,7 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
             && record.transferred == record.size
             && record.final_digest.is_some()
         {
-            Self::terminal(record, ManualTransferState::Completed, None);
+            Self::terminal(record, ManualTransferState::Completed, None, now);
             record.final_result = Some((true, None));
             record.retry_event = Some(Self::offer_response(record));
             return vec![Self::notify(record)];
@@ -736,7 +742,12 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
         Vec::new()
     }
 
-    pub(crate) fn decline(&mut self, fingerprint: &str, id: u64) -> Vec<ManualAction<P>> {
+    pub(crate) fn decline(
+        &mut self,
+        fingerprint: &str,
+        id: u64,
+        now: Instant,
+    ) -> Vec<ManualAction<P>> {
         let key = (fingerprint.to_owned(), id);
         let Some(mut record) = self.records.remove(&key) else {
             return Vec::new();
@@ -744,7 +755,7 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
         let actions = if record.direction == ClipboardTransferDirection::Receiving
             && record.state == ManualTransferState::AwaitingAcceptance
         {
-            Self::terminal(&mut record, ManualTransferState::Declined, None);
+            Self::terminal(&mut record, ManualTransferState::Declined, None, now);
             vec![
                 Self::send(
                     &record,
@@ -762,13 +773,18 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
         actions
     }
 
-    pub(crate) fn cancel(&mut self, fingerprint: &str, id: u64) -> Vec<ManualAction<P>> {
+    pub(crate) fn cancel(
+        &mut self,
+        fingerprint: &str,
+        id: u64,
+        now: Instant,
+    ) -> Vec<ManualAction<P>> {
         let key = (fingerprint.to_owned(), id);
         let Some(mut record) = self.records.remove(&key) else {
             return Vec::new();
         };
         let actions = if !is_terminal(&record.state) {
-            Self::terminal(&mut record, ManualTransferState::Cancelled, None);
+            Self::terminal(&mut record, ManualTransferState::Cancelled, None, now);
             vec![
                 Self::send(&record, ProtoEvent::ManualFileCancel { transfer_id: id }),
                 Self::notify(&record),
@@ -813,6 +829,7 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
                         &mut record,
                         ManualTransferState::Failed,
                         Some("file offer expired".into()),
+                        now,
                     );
                     actions.push(Self::notify(&record));
                 } else if record.state != ManualTransferState::AwaitingAcceptance
@@ -829,6 +846,7 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
                             &mut record,
                             ManualTransferState::Failed,
                             Some("file transfer timed out".into()),
+                            now,
                         );
                         actions.push(Self::notify(&record));
                     } else {
@@ -845,7 +863,11 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
         actions
     }
 
-    pub(crate) fn refresh_routes(&mut self, routes: &HashMap<String, P>) -> Vec<ManualAction<P>> {
+    pub(crate) fn refresh_routes(
+        &mut self,
+        routes: &HashMap<String, P>,
+        now: Instant,
+    ) -> Vec<ManualAction<P>> {
         let keys = self.records.keys().cloned().collect::<Vec<_>>();
         let mut actions = Vec::new();
         for key in keys {
@@ -859,6 +881,7 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
                     &mut record,
                     ManualTransferState::Failed,
                     Some("peer disconnected".into()),
+                    now,
                 );
                 actions.push(Self::notify(&record));
             }
@@ -977,11 +1000,22 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
             actions.push(Self::notify(record));
         }
     }
-    fn terminal(record: &mut Record<P>, state: ManualTransferState, error: Option<String>) {
+    /// Moves a record to a terminal state at `now`.
+    ///
+    /// The time is injected like everywhere else in this state machine.
+    /// Reading the real clock here made the retry deadline measured against a
+    /// different clock from the one the caller ticks with, so under load a
+    /// retry that was due could be skipped.
+    fn terminal(
+        record: &mut Record<P>,
+        state: ManualTransferState,
+        error: Option<String>,
+        now: Instant,
+    ) {
         record.state = state;
         record.error = error;
         record.retries = 0;
-        record.last_activity = Instant::now();
+        record.last_activity = now;
         record.cached_response = None;
         record.outgoing = None;
         record.offer = None;
@@ -1001,8 +1035,9 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
         record: &mut Record<P>,
         error: impl Into<String>,
         report_peer: bool,
+        now: Instant,
     ) -> Vec<ManualAction<P>> {
-        Self::terminal(record, ManualTransferState::Failed, Some(error.into()));
+        Self::terminal(record, ManualTransferState::Failed, Some(error.into()), now);
         record.retry_event = Some(Self::offer_response(record));
         let mut actions = vec![Self::notify(record)];
         if report_peer {
@@ -1122,7 +1157,7 @@ mod tests {
         )));
         assert!(!directory.join("secret.bin").exists());
 
-        receiver.decline("sender", 7);
+        receiver.decline("sender", 7, now);
         assert!(!directory.join("secret.bin").exists());
         fs::remove_dir_all(directory).unwrap();
     }
@@ -1294,7 +1329,7 @@ mod tests {
                 now,
             )
             .await;
-        receiver.cancel("sender", 11);
+        receiver.cancel("sender", 11, now);
         assert!(!directory.join("partial.bin").exists());
         assert_eq!(fs::read(existing).unwrap(), b"keep");
         fs::remove_dir_all(directory).unwrap();
@@ -1560,9 +1595,9 @@ mod tests {
                 .await;
 
             let dropped = if cancel {
-                receiver.cancel("sender", transfer_id)
+                receiver.cancel("sender", transfer_id, now)
             } else {
-                receiver.decline("sender", transfer_id)
+                receiver.decline("sender", transfer_id, now)
             };
             assert!(sent_event(&dropped, |event| if cancel {
                 matches!(event, ProtoEvent::ManualFileCancel { .. })

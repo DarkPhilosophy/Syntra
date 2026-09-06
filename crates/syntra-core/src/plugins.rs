@@ -70,6 +70,9 @@ struct Manifest {
     license: Option<String>,
     #[serde(default)]
     bundled: bool,
+    /// Started only when something needs it, rather than kept running.
+    #[serde(default)]
+    on_demand: bool,
     #[serde(default)]
     capabilities: Capabilities,
 }
@@ -209,7 +212,7 @@ impl PluginRegistry {
     }
 
     /// Health of one plugin, derived from user intent and process state.
-    fn health(&self, id: &str, installed: bool, enabled: bool) -> PluginHealth {
+    fn health(&self, id: &str, installed: bool, enabled: bool, on_demand: bool) -> PluginHealth {
         if !enabled {
             return PluginHealth::Disabled;
         }
@@ -230,6 +233,9 @@ impl PluginRegistry {
         if self.starting.get(id).copied().unwrap_or(false) {
             return PluginHealth::Starting;
         }
+        if on_demand {
+            return PluginHealth::OnDemand;
+        }
         PluginHealth::Stopped
     }
 
@@ -247,7 +253,12 @@ impl PluginRegistry {
                     version: plugin.manifest.version.clone(),
                     protocol_version: plugin.manifest.protocol_version,
                     supported_protocol_version: SUPPORTED_PROTOCOL_VERSION,
-                    health: self.health(&plugin.manifest.id, installed, enabled),
+                    health: self.health(
+                        &plugin.manifest.id,
+                        installed,
+                        enabled,
+                        plugin.manifest.on_demand,
+                    ),
                     pid: self.pids.get(&plugin.manifest.id).copied(),
                     restarts: self.restarts.get(&plugin.manifest.id).copied().unwrap_or(0),
                     author: plugin.manifest.author.clone(),

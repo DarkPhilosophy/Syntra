@@ -37,7 +37,7 @@ export component ServiceControls inherits Rectangle {
             Text { text: Translations.tr("service-install-location") + ":"; color: Theme.text; font-size: Theme.caption-size; }
             HorizontalLayout {
                 spacing: Theme.small-spacing;
-                Text { text: root.destination-path; color: Theme.text; font-size: Theme.caption-size; width: 0px; horizontal-stretch: 1; overflow: elide; vertical-alignment: center; }
+                Text { text: root.destination-path; color: Theme.text; font-size: Theme.caption-size; min-width: 0px; horizontal-stretch: 1; overflow: elide; vertical-alignment: center; }
                 Rectangle {
                     width: Theme.control-height;
                     height: Theme.control-height;
@@ -105,8 +105,8 @@ export component ServiceControls inherits Rectangle {
         if root.pending != "" : VerticalLayout {
             spacing: Theme.small-spacing;
             Text { text: Translations.tr("service-confirm") + " " + Translations.tr(root.pending == "install-desktop-entry" ? "desktop-entry-install" : root.pending == "remove-desktop-entry" ? "desktop-entry-remove" : "service-" + root.pending); color: Theme.warning; font-size: Theme.body-size; wrap: word-wrap; }
-            if root.copies-binaries : Text { text: Translations.tr("service-confirm-source") + ": " + root.source-path; color: Theme.text; font-size: Theme.caption-size; width: 0px; horizontal-stretch: 1; wrap: word-wrap; overflow: elide; }
-            if root.copies-binaries : Text { text: Translations.tr("service-confirm-destination") + ": " + root.destination-path; color: Theme.text; font-size: Theme.caption-size; width: 0px; horizontal-stretch: 1; wrap: word-wrap; overflow: elide; }
+            if root.copies-binaries : Text { text: Translations.tr("service-confirm-source") + ": " + root.source-path; color: Theme.text; font-size: Theme.caption-size; min-width: 0px; horizontal-stretch: 1; wrap: word-wrap; overflow: elide; }
+            if root.copies-binaries : Text { text: Translations.tr("service-confirm-destination") + ": " + root.destination-path; color: Theme.text; font-size: Theme.caption-size; min-width: 0px; horizontal-stretch: 1; wrap: word-wrap; overflow: elide; }
             Text { text: Translations.tr((root.pending == "install-desktop-entry" || root.pending == "remove-desktop-entry") ? "desktop-entry-confirm-" + root.pending : "service-confirm-" + root.pending); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
             HorizontalLayout {
                 spacing: Theme.small-spacing;

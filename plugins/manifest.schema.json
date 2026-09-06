@@ -56,6 +56,11 @@
       "default": false,
       "description": "True for plugins shipped with Syntra. Bundled plugins are updated with the application and cannot be uninstalled from the plugin manager."
     },
+    "on_demand": {
+      "type": "boolean",
+      "default": false,
+      "description": "True when the daemon starts this plugin only for the duration of a task rather than keeping it running. Such a plugin is reported as available rather than stopped when idle, because not running is its normal state."
+    },
     "executable": { "type": "string", "minLength": 1 },
     "args": { "type": "array", "items": { "type": "string" } },
     "capabilities": {

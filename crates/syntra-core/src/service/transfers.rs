@@ -19,7 +19,9 @@ fn plugin_id(adapter: &ProcessAdapterId) -> &'static str {
 impl Service {
     pub(super) fn refresh_manual_routes(&mut self) {
         let routes = self.connected_authenticated_peers();
-        let actions = self.manual_transfers.refresh_routes(&routes);
+        let actions = self
+            .manual_transfers
+            .refresh_routes(&routes, std::time::Instant::now());
         self.execute_manual_actions(actions);
     }
 

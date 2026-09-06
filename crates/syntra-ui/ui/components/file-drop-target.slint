@@ -53,7 +53,10 @@ export component FileDropTarget inherits Rectangle {
             }
         }
         Text {
-            text: !root.peer.connected ? Translations.tr("manual-transfer-connect-peer") : root.picker-busy ? Translations.tr("manual-transfer-choosing") : root.native-drop-supported ? Translations.tr("manual-transfer-drop-here") : Translations.tr("manual-transfer-choose-files");
+            // Clicking always opens the file chooser; dropping is an extra
+            // where the platform supports it. Advertising only "drop here"
+            // made the click look as though it had been taken away.
+            text: !root.peer.connected ? Translations.tr("manual-transfer-connect-peer") : root.picker-busy ? Translations.tr("manual-transfer-choosing") : root.native-drop-supported ? Translations.tr("manual-transfer-choose-or-drop") : Translations.tr("manual-transfer-choose-files");
             color: root.peer.connected ? Theme.accent : Theme.muted-text;
             font-size: Theme.body-size; font-weight: 600; wrap: word-wrap;
         }

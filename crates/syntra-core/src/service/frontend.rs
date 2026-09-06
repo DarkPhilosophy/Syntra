@@ -5,6 +5,7 @@
 //! an outcome: it applies the change, then reports what happened.
 
 use super::*;
+use std::time::Instant;
 /// Infers how this process was started.
 ///
 /// systemd exports `INVOCATION_ID` to the units it starts, and its
@@ -263,16 +264,18 @@ impl Service {
                 peer_fingerprint,
                 transfer_id,
             } => {
-                let actions = self
-                    .manual_transfers
-                    .decline(&peer_fingerprint, transfer_id);
+                let actions =
+                    self.manual_transfers
+                        .decline(&peer_fingerprint, transfer_id, Instant::now());
                 self.execute_manual_actions(actions);
             }
             FrontendRequest::CancelManualTransfer {
                 peer_fingerprint,
                 transfer_id,
             } => {
-                let actions = self.manual_transfers.cancel(&peer_fingerprint, transfer_id);
+                let actions =
+                    self.manual_transfers
+                        .cancel(&peer_fingerprint, transfer_id, Instant::now());
                 self.execute_manual_actions(actions);
             }
             FrontendRequest::SetFileReceiveSettings(settings) => {

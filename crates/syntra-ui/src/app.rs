@@ -1643,6 +1643,7 @@ fn project_app_state(app: &AppWindow, state: &AppViewState, settings: &Presentat
             PluginHealth::Disabled => "disabled",
             PluginHealth::NotInstalled => "not-installed",
             PluginHealth::Stopped => "stopped",
+            PluginHealth::OnDemand => "on-demand",
             PluginHealth::Starting => "starting",
             PluginHealth::Healthy => "healthy",
             PluginHealth::Unresponsive => "unresponsive",

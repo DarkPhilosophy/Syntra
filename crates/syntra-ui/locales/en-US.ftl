@@ -350,3 +350,5 @@ diagnostics-column-time = Time
 diagnostics-column-event = Event
 diagnostics-column-message = Message
 plugin-process = Process
+plugin-health-on-demand = On demand
+manual-transfer-choose-or-drop = Click to choose files, or drop them here

@@ -12,6 +12,7 @@
   "update_url": "https://github.com/DarkPhilosophy/syntra/releases",
   "license": "GPL-3.0-or-later",
   "bundled": true,
+  "on_demand": true,
   "executable": "syntra-plugin-fuse",
   "capabilities": {
     "clipboard_read": false,

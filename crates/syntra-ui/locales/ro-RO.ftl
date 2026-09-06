@@ -350,3 +350,5 @@ diagnostics-column-time = Oră
 diagnostics-column-event = Eveniment
 diagnostics-column-message = Mesaj
 plugin-process = Proces
+plugin-health-on-demand = La cerere
+manual-transfer-choose-or-drop = Click pentru a alege fișiere, sau trage-le aici

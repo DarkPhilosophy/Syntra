@@ -548,6 +548,12 @@ pub enum PluginHealth {
     NotInstalled,
     /// Enabled and installed, but the process is not up yet.
     Stopped,
+    /// Installed and ready, but only run when something needs it.
+    ///
+    /// The FUSE plugin is started per transfer and exits when that transfer
+    /// ends, so reporting it as stopped or perpetually starting would be
+    /// misleading: nothing is wrong when it is not running.
+    OnDemand,
     /// Process launched, handshake not yet completed.
     Starting,
     /// Running and answering.
