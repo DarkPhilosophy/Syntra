@@ -383,6 +383,21 @@ impl AndroidHostController {
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 pub fn android_main(app: slint::android::AndroidApp) {
+    // Without this bridge every Rust log line is discarded, which makes a
+    // failing start look like the app simply doing nothing.
+    android_logger::init_once(
+        android_logger::Config::default()
+            .with_max_level(log::LevelFilter::Info)
+            .with_tag("syntra"),
+    );
+    log::info!("Syntra Android entry reached");
+    // Emulators and Waydroid expose a GL stack Skia cannot build a direct
+    // context on, which aborts start-up. Honour an explicit choice, and
+    // otherwise ask for the software renderer, which always works.
+    if std::env::var_os("SLINT_RENDERER").is_none() {
+        // SAFETY: single-threaded, before any Slint initialisation.
+        unsafe { std::env::set_var("SLINT_RENDERER", "software") };
+    }
     let Some(data_path) = app.internal_data_path() else {
         log::error!("Android did not provide an internal data directory");
         return;

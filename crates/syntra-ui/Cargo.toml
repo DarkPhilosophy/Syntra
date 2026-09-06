@@ -11,7 +11,8 @@ crate-type = ["cdylib", "rlib"]
 
 [package.metadata.android]
 package = "io.syntra.syntra"
-build_targets = ["aarch64-linux-android"]
+# arm64 covers physical devices; x86_64 is what emulators and Waydroid run.
+build_targets = ["aarch64-linux-android", "x86_64-linux-android"]
 apk_name = "syntra"
 resources = "android/app/src/main/res"
 
@@ -63,7 +64,16 @@ interprocess = { version = "2.4.4", default-features = false }
 fs2 = "0.4.3"
 
 [target.'cfg(target_os = "android")'.dependencies]
-slint = { version = "1.17.1", default-features = false, features = ["std", "compat-1-2", "backend-android-activity-06", "renderer-femtovg"] }
+# `renderer-software` is the fallback for hosts without a usable GL context,
+# such as emulators and Waydroid, where Skia cannot create a direct context.
+slint = { version = "1.17.1", default-features = false, features = ["std", "compat-1-2", "backend-android-activity-06", "renderer-femtovg", "renderer-software"] }
+# `cargo apk` generates a manifest declaring android.app.NativeActivity, so the
+# backend must be built for that variant. android-activity defaults to
+# GameActivity, which starts the activity but never calls android_main, giving
+# a window that opens and closes with no Rust output at all.
+android-activity = { version = "0.6", default-features = false, features = ["native-activity"] }
+# Rust logs are invisible on Android without a logcat bridge.
+android_logger = "0.15"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSEvent", "NSView", "NSWindow"] }
