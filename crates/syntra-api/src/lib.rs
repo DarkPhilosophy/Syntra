@@ -485,9 +485,15 @@ pub struct DiscoveredPeer {
     pub port: u16,
 }
 
-/// Defines the MAX DEVICE PROFILE NAME BYTES value carried by this public API type.
+/// Maximum length of a published device name, in UTF-8 bytes.
+///
+/// The daemon rejects a longer name rather than truncating it, so a peer
+/// never renders a silently mangled identity.
 pub const MAX_DEVICE_PROFILE_NAME_BYTES: usize = 128;
-/// Defines the MAX PEER AVATAR DIMENSION value carried by this public API type.
+/// Maximum width and height, in pixels, of a published device avatar.
+///
+/// Avatars travel inline with the profile, so the bound keeps a peer from
+/// pushing an arbitrarily large image through the handshake.
 pub const MAX_PEER_AVATAR_DIMENSION: u32 = 128;
 
 #[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
