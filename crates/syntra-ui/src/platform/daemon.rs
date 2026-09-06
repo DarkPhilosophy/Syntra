@@ -146,6 +146,76 @@ fn read_failure(stderr: Option<std::process::ChildStderr>) -> String {
         .to_owned()
 }
 
+/// Daemon processes that are running but not answering the control socket.
+///
+/// A daemon can end up alive yet unreachable — its socket unlinked, or the
+/// process wedged — and while it lives it holds the peer port, so nothing
+/// else can start. Without a way to see and stop it the user is stuck.
+///
+/// Only processes owned by this user, executing a file named exactly like
+/// our daemon, are reported; an unrelated program can never be listed.
+#[cfg(target_os = "linux")]
+pub fn unreachable_daemons() -> Vec<u32> {
+    if is_running() {
+        return Vec::new();
+    }
+    let own = std::process::id();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for entry in entries.flatten() {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if pid == own {
+            continue;
+        }
+        // Resolving the executable also proves the process is ours: reading
+        // another user's link fails with a permission error.
+        let Ok(executable) = std::fs::read_link(format!("/proc/{pid}/exe")) else {
+            continue;
+        };
+        if executable.file_name().and_then(|name| name.to_str()) == Some(install::DAEMON_EXECUTABLE)
+        {
+            found.push(pid);
+        }
+    }
+    found
+}
+
+/// Daemon processes that are running but not answering the control socket.
+#[cfg(not(target_os = "linux"))]
+pub fn unreachable_daemons() -> Vec<u32> {
+    Vec::new()
+}
+
+/// Stops every daemon that is running but not answering.
+///
+/// Returns how many were signalled. SIGTERM rather than SIGKILL, so the
+/// daemon releases pressed keys and grabbed devices on its way out.
+#[cfg(target_os = "linux")]
+pub fn stop_unreachable() -> usize {
+    let daemons = unreachable_daemons();
+    for pid in &daemons {
+        log::info!("stopping unreachable service with pid {pid}");
+        // SAFETY: the pid was just read from /proc and belongs to this user,
+        // proven by resolving its executable link.
+        unsafe { libc::kill(*pid as libc::pid_t, libc::SIGTERM) };
+    }
+    daemons.len()
+}
+
+/// Stops every daemon that is running but not answering.
+#[cfg(not(target_os = "linux"))]
+pub fn stop_unreachable() -> usize {
+    0
+}
+
 /// Stops a daemon this process started.
 ///
 /// Returns `false` when no daemon is owned here, which means the running one

@@ -141,6 +141,10 @@ export global AppState {
     /// pressed twice and produce two daemons.
     in-out property <bool> daemon-starting;
     in-out property <string> daemon-start-error;
+    /// Count of daemons that are running but not answering, so the interface
+    /// can offer to stop them instead of leaving the user stuck.
+    in-out property <int> unreachable-daemons;
+    callback stop-unreachable-daemons();
     callback start-daemon();
 
     // Where installation copies the binaries from and to, shown so the

@@ -2724,6 +2724,25 @@ fn bind_app_state_callbacks(
     }
     #[cfg(not(target_os = "android"))]
     {
+        // Surfaced so the interface can offer a way out when a daemon is
+        // alive but unreachable and therefore holding the network port.
+        let weak = app.as_weak();
+        global.set_unreachable_daemons(crate::platform::daemon::unreachable_daemons().len() as i32);
+        global.on_stop_unreachable_daemons(move || {
+            let stopped = crate::platform::daemon::stop_unreachable();
+            log::info!("stopped {stopped} unreachable service process(es)");
+            if let Some(app) = weak.upgrade() {
+                let global = app.global::<AppState>();
+                global.set_unreachable_daemons(
+                    crate::platform::daemon::unreachable_daemons().len() as i32,
+                );
+                global.set_daemon_start_error(Default::default());
+            }
+        });
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
         // Starting blocks until the daemon answers, so it runs off the UI
         // thread; the window must stay responsive while a service starts.
         let weak = app.as_weak();
@@ -2739,6 +2758,11 @@ fn bind_app_state_callbacks(
                 let _ = weak.upgrade_in_event_loop(move |app| {
                     let global = app.global::<AppState>();
                     global.set_daemon_starting(false);
+                    // Re-count here: a start that fails because the port is
+                    // taken is exactly when the recovery control must appear.
+                    global.set_unreachable_daemons(
+                        crate::platform::daemon::unreachable_daemons().len() as i32,
+                    );
                     if let Err(error) = outcome {
                         global.set_daemon_start_error(error.to_string().into());
                     }

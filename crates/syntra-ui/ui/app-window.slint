@@ -181,6 +181,8 @@ export component AppWindow inherits Window {
                     clipboard-text-enabled: AppState.clipboard-text-enabled;
                     daemon-starting: AppState.daemon-starting;
                     daemon-start-error: AppState.daemon-start-error;
+                    unreachable-daemons: AppState.unreachable-daemons;
+                    stop-unreachable => { AppState.stop-unreachable-daemons(); }
                     start-service => { AppState.start-daemon(); }
                     clipboard-image-enabled: AppState.clipboard-image-enabled;
                     clipboard-files-enabled: AppState.clipboard-files-enabled;

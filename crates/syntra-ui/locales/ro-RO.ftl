@@ -352,3 +352,5 @@ diagnostics-column-message = Mesaj
 plugin-process = Proces
 plugin-health-on-demand = La cerere
 manual-transfer-choose-or-drop = Click pentru a alege fișiere, sau trage-le aici
+overview-service-unreachable-found = Un serviciu rulează deja dar nu răspunde. Ocupă portul de rețea, deci unul nou nu poate porni până nu este oprit.
+overview-service-stop-unreachable = Oprește serviciul care nu răspunde

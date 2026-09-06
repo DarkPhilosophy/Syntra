@@ -45,6 +45,8 @@ export component OverviewPage inherits Rectangle {
     callback toggle-text(bool);
     in property <bool> daemon-starting;
     in property <string> daemon-start-error;
+    in property <int> unreachable-daemons;
+    callback stop-unreachable();
     callback start-service();
     background: Theme.background;
 
@@ -77,6 +79,26 @@ export component OverviewPage inherits Rectangle {
                         }
                         if root.daemon-starting : Text { text: Translations.tr("overview-service-starting"); color: Theme.muted-text; font-size: Theme.caption-size; vertical-alignment: center; }
                         Rectangle { horizontal-stretch: 1; }
+                    }
+                    // A daemon that is alive but not answering holds the peer
+                    // port, so starting another can only ever fail. Offer the
+                    // way out rather than leaving the user to find a terminal.
+                    if !root.daemon-known && root.unreachable-daemons > 0 : VerticalLayout {
+                        spacing: Theme.small-spacing;
+                        Text {
+                            text: Translations.tr("overview-service-unreachable-found");
+                            color: Theme.warning;
+                            font-size: Theme.caption-size;
+                            wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            AppButton {
+                                text: Translations.tr("overview-service-stop-unreachable");
+                                enabled: !root.daemon-starting;
+                                clicked => { root.stop-unreachable(); }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
                     }
                     if !root.daemon-known && root.daemon-start-error != "" : Text { text: root.daemon-start-error; color: Theme.danger; font-size: Theme.caption-size; wrap: word-wrap; }
                     if root.daemon-known : Text { text: Translations.tr("overview-service-name") + " " + root.daemon-version; color: Theme.text; font-size: Theme.body-size; }
