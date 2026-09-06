@@ -258,11 +258,66 @@ pub struct Capabilities {
     /// Protocol value used by the receiver for this transfer or declaration.
     pub mime_types: Vec<String>,
 }
+/// Fingerprint of the source this component was built from.
+///
+/// A daemon and a plugin that disagree here are from different builds. The
+/// protocol version cannot detect that, because both sides can speak the
+/// same protocol while disagreeing about everything above it, which is how a
+/// stale installed plugin goes unnoticed.
+pub const BUILD_FINGERPRINT: &str = env!("SYNTRA_BUILD_FINGERPRINT");
+
+/// What a plugin reports about itself during the handshake.
+///
+/// Compiled into the plugin, so it can never disagree with the binary the
+/// way a file beside it can.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginMetadata {
+    /// One or two sentences describing the capability this plugin adds.
+    #[serde(default)]
+    pub description: String,
+    /// Plugin version.
+    #[serde(default)]
+    pub version: String,
+    /// Person or organisation responsible for it.
+    #[serde(default)]
+    pub author: String,
+    /// Project or documentation page.
+    #[serde(default)]
+    pub homepage: Option<String>,
+    /// Where the source can be audited.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Where newer releases are published.
+    #[serde(default)]
+    pub update_url: Option<String>,
+    /// SPDX licence identifier.
+    #[serde(default)]
+    pub license: Option<String>,
+    /// Shipped with Syntra rather than installed by the user.
+    #[serde(default)]
+    pub bundled: bool,
+    /// Started only while something needs it, then exits.
+    ///
+    /// Reported by the plugin because only it knows how it behaves; a stale
+    /// manifest omitting this is what made a one-shot plugin read as broken.
+    #[serde(default)]
+    pub on_demand: bool,
+    /// Fingerprint of the build this plugin came from.
+    #[serde(default)]
+    pub build_fingerprint: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 /// Wire messages exchanged between an out-of-process plugin and the daemon.
 pub enum Message {
     /// Plugin startup declaration; the daemon validates it before routing messages.
+    ///
+    /// This is the authoritative description of a plugin. A manifest file is
+    /// only how an unknown plugin is *discovered*; once the process speaks,
+    /// what it says about itself wins. A file beside a binary can be stale,
+    /// edited or missing, and a plugin described by a stale file is reported
+    /// wrongly for as long as the file survives.
     Hello {
         /// Protocol version advertised by the plugin during startup.
         protocol_version: u32,
@@ -272,6 +327,12 @@ pub enum Message {
         name: String,
         /// Operations and MIME types the plugin can handle.
         capabilities: Capabilities,
+        /// Everything else a user is shown about the plugin.
+        ///
+        /// Optional so a third-party plugin written against the earlier
+        /// message shape still completes its handshake.
+        #[serde(default)]
+        metadata: Option<PluginMetadata>,
     },
     /// Plugin-to-daemon declaration of a local clipboard selection.
     CopyManifest(CopyManifest),

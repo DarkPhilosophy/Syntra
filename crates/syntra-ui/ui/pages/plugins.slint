@@ -26,6 +26,8 @@ export struct PluginEntry {
     health: string,
     restarts: int,
     pid: string,
+    build-mismatch: bool,
+    build-fingerprint: string,
     protocol-version: int,
     supported-protocol-version: int,
     error: string,
@@ -159,6 +161,15 @@ component PluginCard inherits Rectangle {
 
         // A plugin built for another protocol may load and then misbehave, so
         // the mismatch is stated rather than left to be discovered.
+        // A plugin from another build speaks the same protocol yet may behave
+        // nothing like its description, which is the failure the protocol
+        // version cannot catch.
+        if plugin.build-mismatch: Text {
+            text: Translations.tr("plugin-build-mismatch") + " (" + plugin.build-fingerprint + ")";
+            color: Theme.warning;
+            font-size: Theme.caption-size;
+            wrap: word-wrap;
+        }
         if plugin.protocol-version != plugin.supported-protocol-version: Text {
             text: Translations.tr("plugin-protocol-mismatch")
                 + " (" + plugin.protocol-version + " ≠ " + plugin.supported-protocol-version + ")";

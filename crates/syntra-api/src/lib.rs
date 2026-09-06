@@ -524,6 +524,11 @@ pub struct DaemonInfo {
     pub emulation_backend: Option<String>,
     /// Port the daemon listens on for peers.
     pub port: u16,
+    /// Build the daemon was compiled from.
+    ///
+    /// A client compares this with its own [`BUILD_FINGERPRINT`]; a
+    /// difference means the two binaries are from different builds.
+    pub build_fingerprint: String,
 }
 
 /// How the daemon process came to exist.
@@ -623,6 +628,15 @@ pub struct PluginStatus {
     pub bundled: bool,
     /// Absolute path of the manifest this was read from.
     pub manifest_path: String,
+    /// Build the plugin reported at handshake; empty until it has connected.
+    ///
+    /// Compared against `daemon_build_fingerprint`: a mismatch means the
+    /// plugin and the daemon come from different builds, which the protocol
+    /// version cannot detect and which is the usual cause of a plugin
+    /// behaving unlike its description.
+    pub build_fingerprint: String,
+    /// Build this daemon was compiled from.
+    pub daemon_build_fingerprint: String,
     /// Absolute path of the executable the daemon would launch.
     pub executable: String,
     /// Whether that executable exists and is runnable.
@@ -978,6 +992,15 @@ impl From<Status> for bool {
         }
     }
 }
+
+/// Fingerprint of the source this component was built from.
+///
+/// The dashboard and the daemon are separate binaries that can be replaced
+/// independently, so they can end up from different builds while still
+/// speaking the same protocol. Every symptom of that is confusing and none of
+/// it points at the cause, which is why the two compare fingerprints and say
+/// so plainly.
+pub const BUILD_FINGERPRINT: &str = env!("SYNTRA_BUILD_FINGERPRINT");
 
 pub mod paths;
 

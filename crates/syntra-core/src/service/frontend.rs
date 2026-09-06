@@ -419,6 +419,7 @@ impl Service {
             capture_backend: self.capture_backend.clone(),
             emulation_backend: self.emulation_backend.clone(),
             port: self.port,
+            build_fingerprint: syntra_api::BUILD_FINGERPRINT.to_owned(),
         };
         self.notify_frontend(FrontendEvent::DaemonInfo(info));
     }

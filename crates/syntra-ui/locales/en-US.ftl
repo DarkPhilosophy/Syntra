@@ -354,3 +354,5 @@ plugin-health-on-demand = On demand
 manual-transfer-choose-or-drop = Click to choose files, or drop them here
 overview-service-unreachable-found = A service is already running but is not responding. It holds the network port, so a new one cannot start until it is stopped.
 overview-service-stop-unreachable = Stop the unresponsive service
+plugin-build-mismatch = Built from a different revision than the service; it may not behave as described
+overview-service-build-mismatch = The service was built from different sources than this dashboard. Replace both together.

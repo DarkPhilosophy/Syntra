@@ -112,7 +112,10 @@ pub(crate) enum ManagerEvent {
     /// entry inferred from a file sitting in a directory.
     Started(AdapterId, u32),
     /// The plugin completed its handshake and is answering.
-    Ready(AdapterId),
+    ///
+    /// Carries what the plugin declared about itself, which supersedes
+    /// anything read from a manifest file.
+    Ready(AdapterId, Option<syntra_plugin_api::PluginMetadata>),
     /// The plugin was stopped because a client asked for it.
     ///
     /// Distinct from `Exited`: a deliberate stop is not a failure, and
@@ -528,7 +531,13 @@ async fn handle_process_event(
                 if let Some(runtime) = state.processes.get_mut(&adapter) {
                     runtime.ready = true;
                 }
-                emit(events, ManagerEvent::Ready(adapter.clone())).await;
+                // What the process says about itself is authoritative; a
+                // manifest file is only how it was discovered.
+                let declared = match &message {
+                    Message::Hello { metadata, .. } => metadata.clone(),
+                    _ => None,
+                };
+                emit(events, ManagerEvent::Ready(adapter.clone(), declared)).await;
                 if let Some(pending) = state.pending_messages.remove(&adapter) {
                     send_ready(state, &adapter, pending, events).await;
                 }

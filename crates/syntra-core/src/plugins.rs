@@ -26,6 +26,7 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use syntra_api::{PluginHealth, PluginStatus};
+use syntra_plugin_api::PluginMetadata;
 
 /// Identifier of the bundled clipboard plugin.
 pub(crate) const CLIPBOARD_PLUGIN_ID: &str = "clipboard";
@@ -53,7 +54,7 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const CRASH_LOOP_RESTARTS: u32 = 3;
 
 /// A plugin manifest as found on disk.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct Manifest {
     manifest_version: u32,
     #[serde(default)]
@@ -94,6 +95,8 @@ struct Capabilities {
 /// A discovered plugin and where it came from.
 struct Discovered {
     manifest: Manifest,
+    /// Build the plugin reported at handshake; empty until it connects.
+    build_fingerprint: String,
     manifest_path: PathBuf,
     executable: PathBuf,
 }
@@ -119,19 +122,74 @@ pub(crate) struct PluginRegistry {
     pids: HashMap<String, u32>,
 }
 
-impl PluginRegistry {
-    /// Discovers plugins beside `daemon_executable` and in `user_directory`.
-    ///
-    /// Discovery never fails: an unreadable or malformed manifest is skipped
-    /// with a warning, because one bad third-party file must not stop the
-    /// daemon from starting.
-    pub(crate) fn discover(daemon_executable: &Path, user_directory: Option<PathBuf>) -> Self {
-        let mut plugins: Vec<Discovered> = Vec::new();
-        let bundled_directory = daemon_executable.parent().map(Path::to_path_buf);
+/// The plugins Syntra ships with, known without reading anything from disk.
+///
+/// Only what is needed to find and launch the process lives here; everything
+/// shown to the user comes from the plugin's own handshake, so this can
+/// never drift from the binary the way a file beside it can.
+fn builtin(directory: &Path) -> Vec<Discovered> {
+    [
+        (
+            CLIPBOARD_PLUGIN_ID,
+            "File clipboard",
+            "syntra-plugin-clipboard",
+            false,
+        ),
+        (FUSE_PLUGIN_ID, "Received files", "syntra-plugin-fuse", true),
+    ]
+    .into_iter()
+    .map(|(id, name, executable, on_demand)| {
+        let executable = if cfg!(windows) {
+            format!("{executable}.exe")
+        } else {
+            executable.to_owned()
+        };
+        Discovered {
+            manifest: Manifest {
+                manifest_version: SUPPORTED_MANIFEST_VERSION,
+                protocol_version: SUPPORTED_PROTOCOL_VERSION,
+                id: id.to_owned(),
+                name: name.to_owned(),
+                executable: executable.clone(),
+                bundled: true,
+                // Known up front so a plugin that has never run is still
+                // described correctly; the handshake confirms it.
+                on_demand,
+                ..Manifest::default()
+            },
+            // No manifest file backs a built-in entry.
+            manifest_path: PathBuf::new(),
+            executable: directory.join(executable),
+            build_fingerprint: String::new(),
+        }
+    })
+    .collect()
+}
 
-        for directory in [bundled_directory, user_directory].into_iter().flatten() {
+impl PluginRegistry {
+    /// Builds the registry: bundled plugins first, then discovered manifests.
+    ///
+    /// Bundled plugins are known intrinsically, not found on disk. Shipping
+    /// their description as a loose file meant it could be missing, stale or
+    /// hand-edited, and the plugin was then reported wrongly for as long as
+    /// the file survived — including a one-shot plugin reading as broken
+    /// because the file predated the field that says so.
+    ///
+    /// Manifest files remain how a THIRD-PARTY plugin is discovered, since
+    /// the daemon cannot know about one it was not built with. A manifest
+    /// may also replace a bundled entry with the same id, which is how a
+    /// plugin is substituted without modifying the installation.
+    ///
+    /// Whatever the source, the plugin's own handshake supersedes it.
+    pub(crate) fn discover(daemon_executable: &Path, user_directory: Option<PathBuf>) -> Self {
+        let directory = daemon_executable
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        let mut plugins: Vec<Discovered> = builtin(&directory);
+
+        for directory in [Some(directory), user_directory].into_iter().flatten() {
             for discovered in read_directory(&directory) {
-                // A user manifest replaces a bundled one with the same id.
                 if let Some(existing) = plugins
                     .iter_mut()
                     .find(|plugin| plugin.manifest.id == discovered.manifest.id)
@@ -212,6 +270,74 @@ impl PluginRegistry {
         self.starting.remove(id);
         self.failures.remove(id);
         self.pids.remove(id);
+    }
+
+    /// Replaces a plugin's description with what the plugin itself declared.
+    ///
+    /// A manifest file is only how a plugin is discovered. Once the process
+    /// speaks, its own description wins: a file beside a binary can be
+    /// stale, hand-edited or absent, and a plugin described by a stale file
+    /// is reported wrongly for as long as that file survives. This is what
+    /// made a one-shot plugin read as perpetually starting.
+    pub(crate) fn adopt_declared(&mut self, id: &str, declared: PluginMetadata) {
+        let Some(plugin) = self
+            .plugins
+            .iter_mut()
+            .find(|plugin| plugin.manifest.id == id)
+        else {
+            return;
+        };
+        let manifest = &mut plugin.manifest;
+        // Empty fields mean "not declared", so the manifest still fills gaps
+        // for a plugin written against the earlier message shape.
+        if !declared.description.is_empty() {
+            manifest.description = declared.description;
+        }
+        if !declared.version.is_empty() {
+            manifest.version = declared.version;
+        }
+        if !declared.author.is_empty() {
+            manifest.author = declared.author;
+        }
+        if declared.homepage.is_some() {
+            manifest.homepage = declared.homepage;
+        }
+        if declared.source.is_some() {
+            manifest.source = declared.source;
+        }
+        if declared.update_url.is_some() {
+            manifest.update_url = declared.update_url;
+        }
+        if declared.license.is_some() {
+            manifest.license = declared.license;
+        }
+        // Behavioural facts are always taken from the plugin: only it knows
+        // whether it is one-shot, and which build it came from.
+        manifest.on_demand = declared.on_demand;
+        manifest.bundled = declared.bundled;
+        plugin.build_fingerprint = declared.build_fingerprint;
+    }
+
+    /// Whether this plugin only runs while something needs it.
+    pub(crate) fn is_on_demand(&self, id: &str) -> bool {
+        self.plugins
+            .iter()
+            .any(|plugin| plugin.manifest.id == id && plugin.manifest.on_demand)
+    }
+
+    /// Records that a plugin's process ended.
+    ///
+    /// For an on-demand plugin an exit is the normal end of its work, not a
+    /// fault: the FUSE helper serves one transfer and leaves. Recording that
+    /// as a failure left a red state and a "Starting" badge that nothing
+    /// could ever clear, because nothing relaunches it until the next
+    /// transfer.
+    pub(crate) fn set_exited(&mut self, id: &str, reason: impl Into<String>) {
+        if self.is_on_demand(id) {
+            self.set_stopped(id);
+            return;
+        }
+        self.set_failed(id, reason);
     }
 
     /// Records a failure reported for a plugin.
@@ -314,6 +440,8 @@ impl PluginRegistry {
                     mime_types: plugin.manifest.capabilities.mime_types.clone(),
                     bundled: plugin.manifest.bundled,
                     manifest_path: plugin.manifest_path.display().to_string(),
+                    build_fingerprint: plugin.build_fingerprint.clone(),
+                    daemon_build_fingerprint: syntra_plugin_api::BUILD_FINGERPRINT.to_owned(),
                     executable: plugin.executable.display().to_string(),
                     installed,
                     enabled,
@@ -383,6 +511,7 @@ fn read_manifest(path: &Path) -> Result<Discovered, String> {
     };
     Ok(Discovered {
         manifest,
+        build_fingerprint: String::new(),
         manifest_path: path.to_path_buf(),
         executable,
     })
@@ -391,6 +520,16 @@ fn read_manifest(path: &Path) -> Result<Discovered, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The registry always contains the built-in plugins, so tests select the
+    /// entry they mean rather than relying on position or total count.
+    fn entry(registry: &PluginRegistry, id: &str) -> PluginStatus {
+        registry
+            .snapshot()
+            .into_iter()
+            .find(|plugin| plugin.id == id)
+            .unwrap_or_else(|| panic!("no plugin with id {id}"))
+    }
 
     fn write(directory: &Path, name: &str, contents: &str) {
         std::fs::create_dir_all(directory).unwrap();
@@ -426,7 +565,7 @@ mod tests {
         write(&directory, "clipboard.json", BUNDLED_MANIFEST);
 
         let registry = PluginRegistry::discover(&directory.join("syntra-daemon"), None);
-        let plugin = registry.snapshot().into_iter().next().expect("discovered");
+        let plugin = entry(&registry, "clipboard");
 
         assert_eq!(plugin.id, "clipboard");
         assert_eq!(plugin.version, "1.0.0");
@@ -450,7 +589,9 @@ mod tests {
 
         let registry = PluginRegistry::discover(&directory.join("syntra-daemon"), None);
 
-        assert_eq!(registry.snapshot().len(), 1);
+        // The good manifest still describes its plugin; the broken file is
+        // simply absent from the result.
+        assert_eq!(entry(&registry, "clipboard").author, "Syntra");
         std::fs::remove_dir_all(directory).unwrap();
     }
 
@@ -467,7 +608,8 @@ mod tests {
 
         let registry = PluginRegistry::discover(&directory.join("syntra-daemon"), None);
 
-        assert!(registry.snapshot().is_empty());
+        // Rejected, so the built-in description stands unchanged.
+        assert_eq!(entry(&registry, "clipboard").version, "");
         std::fs::remove_dir_all(directory).unwrap();
     }
 
@@ -487,11 +629,19 @@ mod tests {
         );
 
         let registry = PluginRegistry::discover(&bundled.join("syntra-daemon"), Some(user.clone()));
-        let plugins = registry.snapshot();
+        let clipboard = entry(&registry, "clipboard");
 
-        assert_eq!(plugins.len(), 1, "the id must not appear twice");
-        assert_eq!(plugins[0].author, "Third party");
-        assert!(!plugins[0].bundled);
+        assert_eq!(
+            registry
+                .snapshot()
+                .iter()
+                .filter(|plugin| plugin.id == "clipboard")
+                .count(),
+            1,
+            "the id must not appear twice"
+        );
+        assert_eq!(clipboard.author, "Third party");
+        assert!(!clipboard.bundled);
         std::fs::remove_dir_all(bundled).unwrap();
         std::fs::remove_dir_all(user).unwrap();
     }
@@ -517,7 +667,7 @@ mod tests {
 
         assert!(registry.set_enabled(CLIPBOARD_PLUGIN_ID, false));
 
-        let clipboard = registry.snapshot().remove(0);
+        let clipboard = entry(&registry, CLIPBOARD_PLUGIN_ID);
         assert!(!clipboard.enabled);
         assert!(!clipboard.running);
         std::fs::remove_dir_all(directory).unwrap();
@@ -534,7 +684,7 @@ mod tests {
         std::fs::write(directory.join("syntra-plugin-clipboard"), b"#!/bin/true\n").unwrap();
 
         let registry = PluginRegistry::discover(&directory.join("syntra-daemon"), None);
-        let plugin = registry.snapshot().remove(0);
+        let plugin = entry(&registry, "clipboard");
 
         assert!(plugin.installed, "precondition: the executable exists");
         assert!(!plugin.running);
@@ -564,9 +714,55 @@ mod tests {
 
         registry.record_restart(FUSE_PLUGIN_ID);
 
-        let plugin = registry.snapshot().remove(0);
+        let plugin = entry(&registry, FUSE_PLUGIN_ID);
         assert_eq!(plugin.health, PluginHealth::OnDemand);
         assert!(plugin.pid.is_none(), "a stopped process has no pid");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// A one-shot plugin exiting has finished its work, not failed. Treating
+    /// it as a fault left a red state and a badge nothing could clear,
+    /// because nothing relaunches it until the next transfer.
+    #[test]
+    fn an_on_demand_plugin_exiting_is_not_a_failure() {
+        let directory = temp_dir("on-demand-exit");
+        write(
+            &directory,
+            "fuse.json",
+            &BUNDLED_MANIFEST
+                .replace("\"id\": \"clipboard\"", "\"id\": \"fuse\"")
+                .replace(
+                    "\"bundled\": true",
+                    "\"bundled\": true, \"on_demand\": true",
+                )
+                .replace("syntra-plugin-clipboard", "syntra-plugin-fuse"),
+        );
+        std::fs::write(directory.join("syntra-plugin-fuse"), b"#!/bin/true\n").unwrap();
+        let mut registry = PluginRegistry::discover(&directory.join("syntra-daemon"), None);
+
+        registry.set_starting(FUSE_PLUGIN_ID, 4242);
+        registry.set_exited(FUSE_PLUGIN_ID, "exited with status 0");
+
+        let plugin = entry(&registry, FUSE_PLUGIN_ID);
+        assert_eq!(plugin.health, PluginHealth::OnDemand);
+        assert!(plugin.error.is_none(), "a normal exit is not an error");
+        assert!(plugin.pid.is_none());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// A persistent plugin exiting IS a failure, and must keep saying why.
+    #[test]
+    fn a_persistent_plugin_exiting_is_reported_as_failed() {
+        let directory = temp_dir("persistent-exit");
+        write(&directory, "clipboard.json", BUNDLED_MANIFEST);
+        std::fs::write(directory.join("syntra-plugin-clipboard"), b"#!/bin/true\n").unwrap();
+        let mut registry = PluginRegistry::discover(&directory.join("syntra-daemon"), None);
+
+        registry.set_exited(CLIPBOARD_PLUGIN_ID, "killed by signal 9");
+
+        let plugin = entry(&registry, CLIPBOARD_PLUGIN_ID);
+        assert_eq!(plugin.health, PluginHealth::Failed);
+        assert_eq!(plugin.error.as_deref(), Some("killed by signal 9"));
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

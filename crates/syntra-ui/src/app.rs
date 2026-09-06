@@ -1458,6 +1458,19 @@ fn project_app_state(app: &AppWindow, state: &AppViewState, settings: &Presentat
             .into(),
     );
     global.set_daemon_port(i32::from(daemon.map(|d| d.port).unwrap_or(0)));
+    // Enforced between the tiers, unlike plugins where a difference is only
+    // noted: the dashboard and the service are one product and are expected
+    // to be replaced together, so a mismatch explains symptoms that
+    // otherwise point nowhere.
+    global.set_daemon_build(
+        daemon
+            .map(|d| d.build_fingerprint.clone())
+            .unwrap_or_default()
+            .into(),
+    );
+    global.set_daemon_build_mismatch(
+        daemon.is_some_and(|d| d.build_fingerprint != syntra_api::BUILD_FINGERPRINT),
+    );
     global.set_daemon_capture_backend(
         daemon
             .and_then(|d| d.capture_backend.clone())
@@ -1683,6 +1696,10 @@ fn project_app_state(app: &AppWindow, state: &AppViewState, settings: &Presentat
                 running: plugin.running,
                 health: plugin_health_id(plugin.health).into(),
                 restarts: plugin.restarts as i32,
+                // Only meaningful once the plugin has actually connected.
+                build_mismatch: !plugin.build_fingerprint.is_empty()
+                    && plugin.build_fingerprint != plugin.daemon_build_fingerprint,
+                build_fingerprint: plugin.build_fingerprint.clone().into(),
                 pid: plugin
                     .pid
                     .map(|pid| pid.to_string())

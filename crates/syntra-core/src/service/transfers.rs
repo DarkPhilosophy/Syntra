@@ -39,7 +39,12 @@ impl Service {
                 self.plugins.set_stopped(plugin_id(&adapter));
                 self.publish_plugins();
             }
-            ManagerEvent::Ready(adapter) => {
+            ManagerEvent::Ready(adapter, declared) => {
+                // Adopt the plugin's own description before reporting it, so
+                // a stale manifest beside the binary cannot misdescribe it.
+                if let Some(metadata) = declared {
+                    self.plugins.adopt_declared(plugin_id(&adapter), metadata);
+                }
                 self.plugins.set_running(plugin_id(&adapter), true);
                 self.publish_plugins();
             }
@@ -191,7 +196,7 @@ impl Service {
                 log::warn!("adapter {:?} rejected transfer: {}", adapter, reason)
             }
             ManagerEvent::Exited { adapter, status } => {
-                self.plugins.set_failed(plugin_id(&adapter), status.clone());
+                self.plugins.set_exited(plugin_id(&adapter), status.clone());
                 self.publish_plugins();
                 let id = match adapter {
                     ProcessAdapterId::Gtk => "gtk-clipboard".to_owned(),

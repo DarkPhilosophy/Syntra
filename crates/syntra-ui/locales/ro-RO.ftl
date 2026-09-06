@@ -354,3 +354,5 @@ plugin-health-on-demand = La cerere
 manual-transfer-choose-or-drop = Click pentru a alege fișiere, sau trage-le aici
 overview-service-unreachable-found = Un serviciu rulează deja dar nu răspunde. Ocupă portul de rețea, deci unul nou nu poate porni până nu este oprit.
 overview-service-stop-unreachable = Oprește serviciul care nu răspunde
+plugin-build-mismatch = Construit dintr-o altă revizie decât serviciul; s-ar putea să nu se comporte conform descrierii
+overview-service-build-mismatch = Serviciul a fost construit din alte surse decât acest dashboard. Înlocuiește-le împreună.

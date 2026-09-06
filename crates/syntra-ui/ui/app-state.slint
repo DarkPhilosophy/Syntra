@@ -137,6 +137,10 @@ export global AppState {
     in-out property <string> daemon-capture-backend;
     in-out property <string> daemon-emulation-backend;
     in-out property <int> daemon-port;
+    /// True when the service was built from different sources than this
+    /// dashboard, which is worth stating plainly rather than debugging.
+    in-out property <bool> daemon-build-mismatch;
+    in-out property <string> daemon-build;
     /// True while a start attempt is in flight, so the control cannot be
     /// pressed twice and produce two daemons.
     in-out property <bool> daemon-starting;

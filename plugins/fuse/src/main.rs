@@ -661,6 +661,23 @@ mod linux {
                         "x-special/gnome-copied-files".into(),
                     ],
                 },
+                metadata: Some(syntra_plugin_api::PluginMetadata {
+                    description: "Exposes files offered by a peer as an ordinary folder, so pasting them in your file manager works exactly like pasting a local file. Runs separately because mounting is privileged and can block, which must never affect input forwarding.".into(),
+                    version: env!("CARGO_PKG_VERSION").into(),
+                    author: "Syntra contributors".into(),
+                    homepage: Some("https://github.com/DarkPhilosophy/syntra".into()),
+                    source: Some(
+                        "https://github.com/DarkPhilosophy/syntra/tree/main/plugins/fuse".into(),
+                    ),
+                    update_url: Some("https://github.com/DarkPhilosophy/syntra/releases".into()),
+                    license: Some("GPL-3.0-or-later".into()),
+                    bundled: true,
+                    // Started per transfer and exits when it ends. Only the
+                    // plugin knows this; a manifest omitting it made a
+                    // one-shot plugin read as broken.
+                    on_demand: true,
+                    build_fingerprint: syntra_plugin_api::BUILD_FINGERPRINT.into(),
+                }),
             },
         )
         .map_err(|error| io::Error::other(error.to_string()))?;

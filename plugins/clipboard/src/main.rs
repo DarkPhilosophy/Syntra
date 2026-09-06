@@ -112,6 +112,18 @@ fn main() {
                 "x-special/gnome-copied-files".into(),
             ],
         },
+        metadata: Some(syntra_plugin_api::PluginMetadata {
+            description: "Copy files in your file manager and paste them on another device. Text and images are synchronised by the daemon itself and need no plugin; only file selections require this helper, because reading them needs a desktop toolkit the background service cannot load.".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            author: "Syntra contributors".into(),
+            homepage: Some("https://github.com/DarkPhilosophy/syntra".into()),
+            source: Some("https://github.com/DarkPhilosophy/syntra/tree/main/plugins/clipboard".into()),
+            update_url: Some("https://github.com/DarkPhilosophy/syntra/releases".into()),
+            license: Some("GPL-3.0-or-later".into()),
+            bundled: true,
+            on_demand: false,
+            build_fingerprint: syntra_plugin_api::BUILD_FINGERPRINT.into(),
+        }),
     });
     let loop_ = glib::MainLoop::new(None, false);
     let cancelled = Arc::new(AtomicBool::new(false));
