@@ -70,24 +70,28 @@ export component PeerMap inherits Rectangle {
         border-radius: Theme.small-radius;
         border-width: drag.pressed ? 1px : 0px;
         border-color: Theme.accent;
-        // Positioned explicitly rather than through a layout: a layout
-        // stretches its children, so an avatar with a fixed size ends up
-        // wherever the stretch leaves it instead of centred.
+        // Identical treatment to the centre card: the avatar is centred with
+        // the name directly below it, the pair centred as a group.
+        //
+        // Positioned explicitly rather than through a layout, and with an
+        // explicit height, because `Avatar` declares only a minimum height
+        // and would otherwise fill the card and re-centre its own circle.
         Avatar {
             source: peer.custom-image; has-image: peer.has-custom-image;
             size: root.avatar-size;
             width: root.avatar-size;
             height: root.avatar-size;
-            x: Theme.small-spacing;
-            y: (parent.height - root.avatar-size) / 2;
+            x: (parent.width - root.avatar-size) / 2;
+            y: (parent.height - root.local-content-height) / 2;
         }
         Text {
-            x: 2 * Theme.small-spacing + root.avatar-size;
-            y: 0px;
-            width: max(0px, parent.width - self.x - Theme.small-spacing);
-            height: parent.height;
+            x: Theme.small-spacing;
+            y: (parent.height - root.local-content-height) / 2
+                + root.avatar-size + Theme.small-spacing;
+            width: max(0px, parent.width - 2 * Theme.small-spacing);
+            height: Theme.body-size * 1.5;
             text: peer.display-name; color: Theme.text;
-            vertical-alignment: center; overflow: elide;
+            horizontal-alignment: center; vertical-alignment: center; overflow: elide;
         }
         drag := TouchArea {
             pointer-event(event) => {
