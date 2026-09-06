@@ -42,6 +42,8 @@ export component PeerMap inherits Rectangle {
         Avatar {
             source: root.local-image; has-image: root.has-local-image;
             size: root.avatar-size;
+            width: root.avatar-size;
+            height: root.avatar-size;
             x: (parent.width - root.avatar-size) / 2;
             y: (parent.height - root.local-content-height) / 2;
         }
@@ -74,6 +76,8 @@ export component PeerMap inherits Rectangle {
         Avatar {
             source: peer.custom-image; has-image: peer.has-custom-image;
             size: root.avatar-size;
+            width: root.avatar-size;
+            height: root.avatar-size;
             x: Theme.small-spacing;
             y: (parent.height - root.avatar-size) / 2;
         }

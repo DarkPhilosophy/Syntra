@@ -22,6 +22,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use syntra_api::{PluginHealth, PluginStatus};
@@ -40,6 +41,12 @@ const SUPPORTED_MANIFEST_VERSION: u32 = 1;
 /// different one is still listed, so the user can see why it misbehaves
 /// instead of finding an unexplained absence.
 const SUPPORTED_PROTOCOL_VERSION: u32 = syntra_plugin_api::PROTOCOL_VERSION;
+
+/// How long a launched plugin may take to complete its handshake.
+///
+/// Past this the process exists but is not answering, which is a different
+/// and more useful statement than "starting" repeated indefinitely.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Restarts within a session after which a plugin is treated as unhealthy
 /// rather than merely restarting.
@@ -100,7 +107,9 @@ pub(crate) struct PluginRegistry {
     /// Ids whose process has completed its handshake.
     running: HashMap<String, bool>,
     /// Ids whose process has been launched but has not handshaken yet.
-    starting: HashMap<String, bool>,
+    /// When a launch was observed, so a start that never completes cannot
+    /// stay pending for ever.
+    starting: HashMap<String, Instant>,
     /// Restart count per id for this session.
     restarts: HashMap<String, u32>,
     /// Most recent failure reported for a plugin.
@@ -178,14 +187,18 @@ impl PluginRegistry {
     pub(crate) fn set_running(&mut self, id: &str, running: bool) {
         self.running.insert(id.to_owned(), running);
         if running {
-            self.starting.insert(id.to_owned(), false);
+            self.starting.remove(id);
             self.failures.remove(id);
         }
     }
 
     /// Records that a plugin's process has been launched, with its pid.
+    ///
+    /// Only the supervisor calls this, and only once a process genuinely
+    /// exists. Health is derived from observed processes, never from an
+    /// intention to start one.
     pub(crate) fn set_starting(&mut self, id: &str, pid: u32) {
-        self.starting.insert(id.to_owned(), true);
+        self.starting.insert(id.to_owned(), Instant::now());
         self.running.insert(id.to_owned(), false);
         self.pids.insert(id.to_owned(), pid);
     }
@@ -194,7 +207,7 @@ impl PluginRegistry {
     pub(crate) fn set_failed(&mut self, id: &str, reason: impl Into<String>) {
         self.failures.insert(id.to_owned(), reason.into());
         self.running.insert(id.to_owned(), false);
-        self.starting.insert(id.to_owned(), false);
+        self.starting.remove(id);
         // The process is gone; keeping its pid would advertise a dead one.
         self.pids.remove(id);
     }
@@ -204,34 +217,55 @@ impl PluginRegistry {
     /// The pid is cleared rather than kept: the old process is on its way out
     /// and the supervisor reports the new one when it launches, so showing
     /// the previous pid meanwhile would be a lie.
+    /// Counts a restart requested by a client, used to spot a crash loop.
+    ///
+    /// This records only that the old process is going away. It must NOT
+    /// claim the plugin is starting: an on-demand plugin is not relaunched
+    /// until something needs it, and marking an intention as a state left it
+    /// reading "Starting" forever with nothing able to clear the flag.
     pub(crate) fn record_restart(&mut self, id: &str) {
         *self.restarts.entry(id.to_owned()).or_default() += 1;
-        self.starting.insert(id.to_owned(), true);
+        self.starting.remove(id);
         self.running.insert(id.to_owned(), false);
         self.pids.remove(id);
+        self.failures.remove(id);
     }
 
-    /// Health of one plugin, derived from user intent and process state.
+    /// Health of one plugin, derived from its connection to the daemon.
+    ///
+    /// `Healthy` means the plugin completed its handshake over the stdio
+    /// contract and is answering. It is never inferred from an executable
+    /// existing on disk: a file that is present but never connects is not a
+    /// working plugin, and reporting it as one is exactly the lie this state
+    /// machine exists to prevent. `installed` only distinguishes "declared
+    /// but absent" from "declared and launchable".
     fn health(&self, id: &str, installed: bool, enabled: bool, on_demand: bool) -> PluginHealth {
         if !enabled {
             return PluginHealth::Disabled;
         }
-        if !installed {
-            return PluginHealth::NotInstalled;
-        }
         if self.failures.contains_key(id) {
             return PluginHealth::Failed;
         }
-        let restarts = self.restarts.get(id).copied().unwrap_or(0);
+        // Answering the handshake is the only evidence of health.
         if self.running.get(id).copied().unwrap_or(false) {
-            // A process that keeps coming back is answering but not working.
+            let restarts = self.restarts.get(id).copied().unwrap_or(0);
+            // A plugin that keeps coming back answers, but does not work.
             if restarts >= CRASH_LOOP_RESTARTS {
                 return PluginHealth::Unresponsive;
             }
             return PluginHealth::Healthy;
         }
-        if self.starting.get(id).copied().unwrap_or(false) {
-            return PluginHealth::Starting;
+        if let Some(since) = self.starting.get(id) {
+            // A launch that never handshakes must not stay pending for ever;
+            // past the deadline the process exists but is not answering.
+            return if since.elapsed() < HANDSHAKE_TIMEOUT {
+                PluginHealth::Starting
+            } else {
+                PluginHealth::Unresponsive
+            };
+        }
+        if !installed {
+            return PluginHealth::NotInstalled;
         }
         if on_demand {
             return PluginHealth::OnDemand;
@@ -475,6 +509,53 @@ mod tests {
         let clipboard = registry.snapshot().remove(0);
         assert!(!clipboard.enabled);
         assert!(!clipboard.running);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// An executable sitting on disk is not a working plugin. Health must
+    /// come from the plugin answering the daemon, never from a file being
+    /// present, or the interface would claim a capability that does not work.
+    #[test]
+    fn an_installed_executable_alone_is_never_reported_healthy() {
+        let directory = temp_dir("presence-is-not-health");
+        write(&directory, "clipboard.json", BUNDLED_MANIFEST);
+        // Create the executable the manifest names, so it counts as installed.
+        std::fs::write(directory.join("syntra-plugin-clipboard"), b"#!/bin/true\n").unwrap();
+
+        let registry = PluginRegistry::discover(&directory.join("syntra-daemon"), None);
+        let plugin = registry.snapshot().remove(0);
+
+        assert!(plugin.installed, "precondition: the executable exists");
+        assert!(!plugin.running);
+        assert_eq!(plugin.health, PluginHealth::Stopped);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// Restarting an on-demand plugin must not leave it claiming to start.
+    /// Nothing relaunches it until a transfer needs it, so a "starting" flag
+    /// set from intention rather than an observed process stuck for ever.
+    #[test]
+    fn restarting_an_on_demand_plugin_returns_it_to_on_demand() {
+        let directory = temp_dir("on-demand-restart");
+        write(
+            &directory,
+            "fuse.json",
+            &BUNDLED_MANIFEST
+                .replace("\"id\": \"clipboard\"", "\"id\": \"fuse\"")
+                .replace(
+                    "\"bundled\": true",
+                    "\"bundled\": true, \"on_demand\": true",
+                )
+                .replace("syntra-plugin-clipboard", "syntra-plugin-fuse"),
+        );
+        std::fs::write(directory.join("syntra-plugin-fuse"), b"#!/bin/true\n").unwrap();
+        let mut registry = PluginRegistry::discover(&directory.join("syntra-daemon"), None);
+
+        registry.record_restart(FUSE_PLUGIN_ID);
+
+        let plugin = registry.snapshot().remove(0);
+        assert_eq!(plugin.health, PluginHealth::OnDemand);
+        assert!(plugin.pid.is_none(), "a stopped process has no pid");
         std::fs::remove_dir_all(directory).unwrap();
     }
 }
