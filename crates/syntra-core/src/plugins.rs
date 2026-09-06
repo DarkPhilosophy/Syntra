@@ -167,18 +167,23 @@ fn builtin(directory: &Path) -> Vec<Discovered> {
 }
 
 impl PluginRegistry {
-    /// Builds the registry: bundled plugins first, then discovered manifests.
+    /// Builds the registry: built-in plugins first, then discovered manifests.
     ///
     /// Bundled plugins are known intrinsically, not found on disk. Shipping
     /// their description as a loose file meant it could be missing, stale or
     /// hand-edited, and the plugin was then reported wrongly for as long as
-    /// the file survived — including a one-shot plugin reading as broken
-    /// because the file predated the field that says so.
+    /// the file survived — a one-shot plugin read as merely stopped because
+    /// an installed file predated the field that says it is one-shot.
     ///
-    /// Manifest files remain how a THIRD-PARTY plugin is discovered, since
-    /// the daemon cannot know about one it was not built with. A manifest
-    /// may also replace a bundled entry with the same id, which is how a
-    /// plugin is substituted without modifying the installation.
+    /// A manifest beside the daemon therefore does NOT override a built-in.
+    /// That directory is ours: anything there is a leftover of an earlier
+    /// install, and letting it win reintroduces the very staleness this
+    /// removes.
+    ///
+    /// Manifests remain how a THIRD-PARTY plugin is discovered, since the
+    /// daemon cannot know about one it was not built with. A manifest in the
+    /// user directory may still replace a built-in entry, because putting
+    /// one there is a deliberate substitution rather than an accident.
     ///
     /// Whatever the source, the plugin's own handshake supersedes it.
     pub(crate) fn discover(daemon_executable: &Path, user_directory: Option<PathBuf>) -> Self {
@@ -187,13 +192,20 @@ impl PluginRegistry {
             .map(Path::to_path_buf)
             .unwrap_or_default();
         let mut plugins: Vec<Discovered> = builtin(&directory);
+        let builtin_ids: Vec<String> = plugins
+            .iter()
+            .map(|plugin| plugin.manifest.id.clone())
+            .collect();
 
-        for directory in [Some(directory), user_directory].into_iter().flatten() {
+        for (directory, may_replace_builtin) in [(Some(directory), false), (user_directory, true)] {
+            let Some(directory) = directory else { continue };
             for discovered in read_directory(&directory) {
-                if let Some(existing) = plugins
-                    .iter_mut()
-                    .find(|plugin| plugin.manifest.id == discovered.manifest.id)
-                {
+                let id = discovered.manifest.id.clone();
+                if !may_replace_builtin && builtin_ids.contains(&id) {
+                    log::debug!("ignoring redundant manifest for built-in plugin `{id}`");
+                    continue;
+                }
+                if let Some(existing) = plugins.iter_mut().find(|plugin| plugin.manifest.id == id) {
                     *existing = discovered;
                 } else {
                     plugins.push(discovered);
@@ -465,7 +477,6 @@ impl PluginRegistry {
             .collect()
     }
 }
-
 /// Reads every `*.json` manifest in one directory.
 fn read_directory(directory: &Path) -> Vec<Discovered> {
     let Ok(entries) = std::fs::read_dir(directory) else {
@@ -543,11 +554,13 @@ mod tests {
         path
     }
 
+    const THIRD_PARTY_ID: &str = "acme-scanner";
+
     const BUNDLED_MANIFEST: &str = r#"{
         "manifest_version": 1,
         "protocol_version": 1,
-        "id": "clipboard",
-        "name": "File clipboard",
+        "id": "acme-scanner",
+        "name": "Acme scanner",
         "version": "1.0.0",
         "author": "Syntra",
         "source": "https://example.invalid/src",
@@ -565,9 +578,9 @@ mod tests {
         write(&directory, "clipboard.json", BUNDLED_MANIFEST);
 
         let registry = PluginRegistry::discover(&directory.join("syntra-daemon"), None);
-        let plugin = entry(&registry, "clipboard");
+        let plugin = entry(&registry, THIRD_PARTY_ID);
 
-        assert_eq!(plugin.id, "clipboard");
+        assert_eq!(plugin.id, THIRD_PARTY_ID);
         assert_eq!(plugin.version, "1.0.0");
         assert_eq!(plugin.author, "Syntra");
         assert_eq!(
@@ -575,7 +588,6 @@ mod tests {
             Some("https://example.invalid/src")
         );
         assert_eq!(plugin.mime_types, vec!["text/uri-list".to_owned()]);
-        assert!(plugin.bundled);
         std::fs::remove_dir_all(directory).unwrap();
     }
 
@@ -591,7 +603,7 @@ mod tests {
 
         // The good manifest still describes its plugin; the broken file is
         // simply absent from the result.
-        assert_eq!(entry(&registry, "clipboard").author, "Syntra");
+        assert_eq!(entry(&registry, THIRD_PARTY_ID).author, "Syntra");
         std::fs::remove_dir_all(directory).unwrap();
     }
 
@@ -608,8 +620,14 @@ mod tests {
 
         let registry = PluginRegistry::discover(&directory.join("syntra-daemon"), None);
 
-        // Rejected, so the built-in description stands unchanged.
-        assert_eq!(entry(&registry, "clipboard").version, "");
+        // Rejected outright: a manifest from a future version is not
+        // half-understood, so the plugin is simply not discovered.
+        assert!(
+            !registry
+                .snapshot()
+                .iter()
+                .any(|plugin| plugin.id == THIRD_PARTY_ID)
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 
@@ -629,13 +647,13 @@ mod tests {
         );
 
         let registry = PluginRegistry::discover(&bundled.join("syntra-daemon"), Some(user.clone()));
-        let clipboard = entry(&registry, "clipboard");
+        let clipboard = entry(&registry, THIRD_PARTY_ID);
 
         assert_eq!(
             registry
                 .snapshot()
                 .iter()
-                .filter(|plugin| plugin.id == "clipboard")
+                .filter(|plugin| plugin.id == THIRD_PARTY_ID)
                 .count(),
             1,
             "the id must not appear twice"
@@ -684,7 +702,7 @@ mod tests {
         std::fs::write(directory.join("syntra-plugin-clipboard"), b"#!/bin/true\n").unwrap();
 
         let registry = PluginRegistry::discover(&directory.join("syntra-daemon"), None);
-        let plugin = entry(&registry, "clipboard");
+        let plugin = entry(&registry, THIRD_PARTY_ID);
 
         assert!(plugin.installed, "precondition: the executable exists");
         assert!(!plugin.running);
@@ -702,7 +720,7 @@ mod tests {
             &directory,
             "fuse.json",
             &BUNDLED_MANIFEST
-                .replace("\"id\": \"clipboard\"", "\"id\": \"fuse\"")
+                .replace("\"id\": \"acme-scanner\"", "\"id\": \"fuse\"")
                 .replace(
                     "\"bundled\": true",
                     "\"bundled\": true, \"on_demand\": true",
@@ -730,7 +748,7 @@ mod tests {
             &directory,
             "fuse.json",
             &BUNDLED_MANIFEST
-                .replace("\"id\": \"clipboard\"", "\"id\": \"fuse\"")
+                .replace("\"id\": \"acme-scanner\"", "\"id\": \"fuse\"")
                 .replace(
                     "\"bundled\": true",
                     "\"bundled\": true, \"on_demand\": true",
@@ -764,5 +782,65 @@ mod tests {
         assert_eq!(plugin.health, PluginHealth::Failed);
         assert_eq!(plugin.error.as_deref(), Some("killed by signal 9"));
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// A leftover manifest beside the daemon must not override what the
+    /// daemon knows about its own plugins. An installed file that predated
+    /// `on_demand` made a one-shot plugin report as merely stopped, which is
+    /// exactly the staleness built-ins exist to remove.
+    #[test]
+    fn a_manifest_beside_the_daemon_cannot_override_a_builtin() {
+        let directory = temp_dir("builtin-not-overridden");
+        // An older install: same id, no on_demand field.
+        write(
+            &directory,
+            "syntra-plugin-fuse.json",
+            r#"{
+                "manifest_version": 1,
+                "protocol_version": 1,
+                "id": "fuse",
+                "name": "Stale name",
+                "executable": "syntra-plugin-fuse",
+                "capabilities": { "clipboard_read": false, "paste": true,
+                                  "cancel": true, "mime_types": ["text/uri-list"] }
+            }"#,
+        );
+
+        std::fs::write(directory.join("syntra-plugin-fuse"), b"#!/bin/true\n").unwrap();
+
+        let registry = PluginRegistry::discover(&directory.join("syntra-daemon"), None);
+        let fuse = entry(&registry, FUSE_PLUGIN_ID);
+
+        assert_eq!(fuse.health, PluginHealth::OnDemand);
+        assert_ne!(fuse.name, "Stale name");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// A manifest the user placed deliberately still substitutes a built-in,
+    /// which is how a plugin is replaced without touching the installation.
+    #[test]
+    fn a_user_manifest_still_substitutes_a_builtin() {
+        let install = temp_dir("substitute-install");
+        let user = temp_dir("substitute-user");
+        write(
+            &user,
+            "fuse.json",
+            r#"{
+                "manifest_version": 1,
+                "protocol_version": 1,
+                "id": "fuse",
+                "name": "My own receiver",
+                "executable": "my-receiver",
+                "capabilities": { "clipboard_read": false, "paste": true,
+                                  "cancel": true, "mime_types": ["text/uri-list"] }
+            }"#,
+        );
+
+        let registry = PluginRegistry::discover(&install.join("syntra-daemon"), Some(user.clone()));
+        let fuse = entry(&registry, FUSE_PLUGIN_ID);
+
+        assert_eq!(fuse.name, "My own receiver");
+        std::fs::remove_dir_all(install).unwrap();
+        std::fs::remove_dir_all(user).unwrap();
     }
 }

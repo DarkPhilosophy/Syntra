@@ -236,16 +236,14 @@ pub fn install_binaries_from_to(
             continue;
         }
         copy_into(&from, &target)?;
-        // The daemon discovers plugins by manifest, so the executable alone
-        // would install a plugin that never appears.
-        let manifest = source.join(format!("{name}.json"));
-        if manifest.is_file() {
-            copy_into(&manifest, &target)?;
-        } else {
-            log::warn!(
-                "{} has no manifest beside it; it will not be discovered",
-                name
-            );
+        // No manifest is installed for a bundled plugin: the daemon knows
+        // them intrinsically and the plugin describes itself at handshake.
+        // A file here could only ever go stale and misreport the plugin, so
+        // any left by an earlier install is removed.
+        let stale_manifest = target.join(format!("{name}.json"));
+        if stale_manifest.is_file() {
+            log::info!("removing redundant manifest {}", stale_manifest.display());
+            let _ = fs::remove_file(&stale_manifest);
         }
     }
 
