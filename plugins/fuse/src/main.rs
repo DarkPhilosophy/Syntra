@@ -643,11 +643,13 @@ mod linux {
         }
     }
 
-    pub fn run() -> io::Result<()> {
-        let out = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
-        write_message(
-            &mut *out.lock(),
-            &Message::Hello {
+    /// This plugin's own description, the single source of truth about it.
+    ///
+    /// The daemon reads it either from the handshake or, before the plugin
+    /// has ever run, by invoking `--describe`. Nothing about the plugin is
+    /// duplicated in the daemon or in a file beside the binary.
+    pub fn hello() -> Message {
+        Message::Hello {
                 protocol_version: syntra_plugin_api::PROTOCOL_VERSION,
                 adapter_id: "fuse".into(),
                 name: "Read-only Clipboard FUSE".into(),
@@ -678,9 +680,13 @@ mod linux {
                     on_demand: true,
                     build_fingerprint: syntra_plugin_api::BUILD_FINGERPRINT.into(),
                 }),
-            },
-        )
-        .map_err(|error| io::Error::other(error.to_string()))?;
+            }
+    }
+
+    pub fn run() -> io::Result<()> {
+        let out = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
+        write_message(&mut *out.lock(), &hello())
+            .map_err(|error| io::Error::other(error.to_string()))?;
         let mut reader = BufReader::new(io::stdin());
         let mut first_line = String::new();
         reader.read_line(&mut first_line)?;
@@ -815,6 +821,17 @@ mod linux {
 
 #[cfg(target_os = "linux")]
 fn main() -> std::io::Result<()> {
+    // `--describe` prints this plugin's own declaration and exits, so the
+    // daemon can list it accurately before it has ever been needed. Without
+    // it the daemon would have to keep a second copy of the description and
+    // the two would drift.
+    if std::env::args().any(|argument| argument == "--describe") {
+        let line = linux::hello()
+            .encode_line()
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        print!("{line}");
+        return Ok(());
+    }
     linux::run()
 }
 

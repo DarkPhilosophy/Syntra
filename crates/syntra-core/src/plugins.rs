@@ -122,48 +122,106 @@ pub(crate) struct PluginRegistry {
     pids: HashMap<String, u32>,
 }
 
-/// The plugins Syntra ships with, known without reading anything from disk.
+/// Executables Syntra ships with.
 ///
-/// Only what is needed to find and launch the process lives here; everything
-/// shown to the user comes from the plugin's own handshake, so this can
-/// never drift from the binary the way a file beside it can.
+/// The only thing the daemon states about its own plugins is which file to
+/// run: it cannot discover a binary it was built to launch. Everything else
+/// — name, description, author, whether it is one-shot — is read from that
+/// binary, so the daemon holds no second copy that could disagree with it.
+const BUILTIN_EXECUTABLES: [(&str, &str); 2] = [
+    (CLIPBOARD_PLUGIN_ID, "syntra-plugin-clipboard"),
+    (FUSE_PLUGIN_ID, "syntra-plugin-fuse"),
+];
+
+/// Applies a plugin's own declaration over whatever is currently held.
+///
+/// Empty fields mean "not declared", so a plugin written against the earlier
+/// message shape still contributes what it does say. Behavioural facts are
+/// always taken from the plugin: only it knows whether it is one-shot.
+fn apply_declared(manifest: &mut Manifest, declared: PluginMetadata) {
+    if !declared.description.is_empty() {
+        manifest.description = declared.description;
+    }
+    if !declared.version.is_empty() {
+        manifest.version = declared.version;
+    }
+    if !declared.author.is_empty() {
+        manifest.author = declared.author;
+    }
+    if declared.homepage.is_some() {
+        manifest.homepage = declared.homepage;
+    }
+    if declared.source.is_some() {
+        manifest.source = declared.source;
+    }
+    if declared.update_url.is_some() {
+        manifest.update_url = declared.update_url;
+    }
+    if declared.license.is_some() {
+        manifest.license = declared.license;
+    }
+    manifest.on_demand = declared.on_demand;
+    manifest.bundled = declared.bundled;
+}
+
 fn builtin(directory: &Path) -> Vec<Discovered> {
-    [
-        (
-            CLIPBOARD_PLUGIN_ID,
-            "File clipboard",
-            "syntra-plugin-clipboard",
-            false,
-        ),
-        (FUSE_PLUGIN_ID, "Received files", "syntra-plugin-fuse", true),
-    ]
-    .into_iter()
-    .map(|(id, name, executable, on_demand)| {
-        let executable = if cfg!(windows) {
-            format!("{executable}.exe")
-        } else {
-            executable.to_owned()
-        };
-        Discovered {
-            manifest: Manifest {
+    BUILTIN_EXECUTABLES
+        .into_iter()
+        .map(|(id, executable)| {
+            let executable = if cfg!(windows) {
+                format!("{executable}.exe")
+            } else {
+                executable.to_owned()
+            };
+            let path = directory.join(&executable);
+            let mut manifest = Manifest {
                 manifest_version: SUPPORTED_MANIFEST_VERSION,
                 protocol_version: SUPPORTED_PROTOCOL_VERSION,
                 id: id.to_owned(),
-                name: name.to_owned(),
-                executable: executable.clone(),
-                bundled: true,
-                // Known up front so a plugin that has never run is still
-                // described correctly; the handshake confirms it.
-                on_demand,
+                executable,
                 ..Manifest::default()
-            },
-            // No manifest file backs a built-in entry.
-            manifest_path: PathBuf::new(),
-            executable: directory.join(executable),
-            build_fingerprint: String::new(),
+            };
+            let mut fingerprint = String::new();
+            // Ask the binary to describe itself. A plugin that has never run
+            // would otherwise be listed with no description at all, and an
+            // on-demand one would be indistinguishable from a stopped one.
+            if let Some((name, declared)) = describe(&path) {
+                manifest.name = name;
+                fingerprint = declared.build_fingerprint.clone();
+                apply_declared(&mut manifest, declared);
+            }
+            Discovered {
+                manifest,
+                // No manifest file backs a built-in entry.
+                manifest_path: PathBuf::new(),
+                executable: path,
+                build_fingerprint: fingerprint,
+            }
+        })
+        .collect()
+}
+
+/// Runs a plugin with `--describe` and reads the declaration it prints.
+///
+/// Cheap and bounded: the plugin prints one line and exits. Any failure is
+/// silent, since a plugin that is not installed simply has nothing to say.
+fn describe(executable: &Path) -> Option<(String, PluginMetadata)> {
+    if !executable.is_file() {
+        return None;
+    }
+    let output = std::process::Command::new(executable)
+        .arg("--describe")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let line = String::from_utf8(output.stdout).ok()?;
+    match syntra_plugin_api::Message::decode_line(line.trim_end()) {
+        Ok(syntra_plugin_api::Message::Hello { name, metadata, .. }) => {
+            Some((name, metadata.unwrap_or_default()))
         }
-    })
-    .collect()
+        _ => None,
+    }
 }
 
 impl PluginRegistry {
@@ -299,35 +357,8 @@ impl PluginRegistry {
         else {
             return;
         };
-        let manifest = &mut plugin.manifest;
-        // Empty fields mean "not declared", so the manifest still fills gaps
-        // for a plugin written against the earlier message shape.
-        if !declared.description.is_empty() {
-            manifest.description = declared.description;
-        }
-        if !declared.version.is_empty() {
-            manifest.version = declared.version;
-        }
-        if !declared.author.is_empty() {
-            manifest.author = declared.author;
-        }
-        if declared.homepage.is_some() {
-            manifest.homepage = declared.homepage;
-        }
-        if declared.source.is_some() {
-            manifest.source = declared.source;
-        }
-        if declared.update_url.is_some() {
-            manifest.update_url = declared.update_url;
-        }
-        if declared.license.is_some() {
-            manifest.license = declared.license;
-        }
-        // Behavioural facts are always taken from the plugin: only it knows
-        // whether it is one-shot, and which build it came from.
-        manifest.on_demand = declared.on_demand;
-        manifest.bundled = declared.bundled;
-        plugin.build_fingerprint = declared.build_fingerprint;
+        plugin.build_fingerprint = declared.build_fingerprint.clone();
+        apply_declared(&mut plugin.manifest, declared);
     }
 
     /// Whether this plugin only runs while something needs it.
@@ -532,6 +563,30 @@ fn read_manifest(path: &Path) -> Result<Discovered, String> {
 mod tests {
     use super::*;
 
+    /// Writes an executable that answers `--describe` like a real plugin.
+    ///
+    /// A stub that prints nothing is not a plugin: the daemon reads every
+    /// description from the binary, so a test using an inert file would be
+    /// asserting against an absence rather than against behaviour.
+    fn describing_stub(directory: &Path, executable: &str, id: &str, on_demand: bool) {
+        let hello = format!(
+            r#"{{"type":"hello","data":{{"protocol_version":1,"adapter_id":"{id}",
+               "name":"Stub {id}","capabilities":{{"clipboard_read":true,"paste":true,
+               "cancel":true,"requires_live_mount":true,"mime_types":["text/uri-list"]}},
+               "metadata":{{"description":"stub","version":"9.9.9","author":"Test",
+               "bundled":true,"on_demand":{on_demand},"build_fingerprint":"test"}}}}}}"#
+        )
+        .replace('\n', "")
+        .replace("               ", "");
+        let path = directory.join(executable);
+        std::fs::write(&path, format!("#!/bin/sh\nprintf '%s' '{hello}'\n")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
     /// The registry always contains the built-in plugins, so tests select the
     /// entry they mean rather than relying on position or total count.
     fn entry(registry: &PluginRegistry, id: &str) -> PluginStatus {
@@ -699,7 +754,12 @@ mod tests {
         let directory = temp_dir("presence-is-not-health");
         write(&directory, "clipboard.json", BUNDLED_MANIFEST);
         // Create the executable the manifest names, so it counts as installed.
-        std::fs::write(directory.join("syntra-plugin-clipboard"), b"#!/bin/true\n").unwrap();
+        describing_stub(
+            &directory,
+            "syntra-plugin-clipboard",
+            "gtk-clipboard",
+            false,
+        );
 
         let registry = PluginRegistry::discover(&directory.join("syntra-daemon"), None);
         let plugin = entry(&registry, THIRD_PARTY_ID);
@@ -727,7 +787,7 @@ mod tests {
                 )
                 .replace("syntra-plugin-clipboard", "syntra-plugin-fuse"),
         );
-        std::fs::write(directory.join("syntra-plugin-fuse"), b"#!/bin/true\n").unwrap();
+        describing_stub(&directory, "syntra-plugin-fuse", "fuse", true);
         let mut registry = PluginRegistry::discover(&directory.join("syntra-daemon"), None);
 
         registry.record_restart(FUSE_PLUGIN_ID);
@@ -755,7 +815,7 @@ mod tests {
                 )
                 .replace("syntra-plugin-clipboard", "syntra-plugin-fuse"),
         );
-        std::fs::write(directory.join("syntra-plugin-fuse"), b"#!/bin/true\n").unwrap();
+        describing_stub(&directory, "syntra-plugin-fuse", "fuse", true);
         let mut registry = PluginRegistry::discover(&directory.join("syntra-daemon"), None);
 
         registry.set_starting(FUSE_PLUGIN_ID, 4242);
@@ -773,7 +833,12 @@ mod tests {
     fn a_persistent_plugin_exiting_is_reported_as_failed() {
         let directory = temp_dir("persistent-exit");
         write(&directory, "clipboard.json", BUNDLED_MANIFEST);
-        std::fs::write(directory.join("syntra-plugin-clipboard"), b"#!/bin/true\n").unwrap();
+        describing_stub(
+            &directory,
+            "syntra-plugin-clipboard",
+            "gtk-clipboard",
+            false,
+        );
         let mut registry = PluginRegistry::discover(&directory.join("syntra-daemon"), None);
 
         registry.set_exited(CLIPBOARD_PLUGIN_ID, "killed by signal 9");
@@ -806,7 +871,7 @@ mod tests {
             }"#,
         );
 
-        std::fs::write(directory.join("syntra-plugin-fuse"), b"#!/bin/true\n").unwrap();
+        describing_stub(&directory, "syntra-plugin-fuse", "fuse", true);
 
         let registry = PluginRegistry::discover(&directory.join("syntra-daemon"), None);
         let fuse = entry(&registry, FUSE_PLUGIN_ID);

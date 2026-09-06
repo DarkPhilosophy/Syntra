@@ -94,11 +94,13 @@ fn process_text(text: &str, generation: &AtomicU64) -> Option<CopyManifest> {
         entries,
     })
 }
-fn main() {
-    if !cfg!(target_os = "linux") || gtk::init().is_err() {
-        return;
-    }
-    emit(&Message::Hello {
+/// This plugin's own declaration, the single source of truth about it.
+///
+/// The daemon reads it from the handshake, or from `--describe` before the
+/// plugin has ever run, so nothing about it is duplicated in the daemon or in
+/// a file beside the binary.
+fn hello() -> Message {
+    Message::Hello {
         protocol_version: syntra_plugin_api::PROTOCOL_VERSION,
         adapter_id: "gtk-clipboard".into(),
         name: "GNOME Clipboard Source".into(),
@@ -124,7 +126,22 @@ fn main() {
             on_demand: false,
             build_fingerprint: syntra_plugin_api::BUILD_FINGERPRINT.into(),
         }),
-    });
+    }
+}
+
+fn main() {
+    // `--describe` prints the declaration and exits, so the daemon can list
+    // this plugin accurately without launching a full session.
+    if std::env::args().any(|argument| argument == "--describe") {
+        if let Ok(line) = hello().encode_line() {
+            print!("{line}");
+        }
+        return;
+    }
+    if !cfg!(target_os = "linux") || gtk::init().is_err() {
+        return;
+    }
+    emit(&hello());
     let loop_ = glib::MainLoop::new(None, false);
     let cancelled = Arc::new(AtomicBool::new(false));
     let incoming: Arc<Mutex<Vec<Message>>> = Arc::new(Mutex::new(Vec::new()));
