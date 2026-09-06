@@ -3,6 +3,9 @@ pub mod service;
 // Copying the binaries into a durable location before anything points at them.
 #[cfg(not(target_os = "android"))]
 pub mod install;
+/// Downloading and installing published GitHub release archives.
+#[cfg(not(target_os = "android"))]
+pub mod release;
 
 // Freedesktop launcher entry. Only Linux and the BSDs use `.desktop` files;
 // macOS and Windows install an application bundle or a shortcut instead.

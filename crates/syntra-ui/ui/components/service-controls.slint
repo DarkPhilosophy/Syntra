@@ -34,14 +34,34 @@ export component ServiceControls inherits Rectangle {
         // be changed, rather than installing somewhere the user never chose.
         VerticalLayout {
             spacing: Theme.small-spacing;
-            Text { text: Translations.tr("service-install-location") + ": " + root.destination-path; color: Theme.text; font-size: Theme.caption-size; wrap: word-wrap; }
-            Text { text: Translations.tr("service-install-location-hint"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
+            Text { text: Translations.tr("service-install-location") + ":"; color: Theme.text; font-size: Theme.caption-size; }
             HorizontalLayout {
                 spacing: Theme.small-spacing;
-                AppButton { text: Translations.tr("service-install-location-choose"); enabled: !root.busy; clicked => { root.choose-destination(); } }
-                if root.destination-customised : AppButton { text: Translations.tr("service-install-location-reset"); enabled: !root.busy; clicked => { root.reset-destination(); } }
-                Rectangle { horizontal-stretch: 1; }
+                Text { text: root.destination-path; color: Theme.text; font-size: Theme.caption-size; width: 0px; horizontal-stretch: 1; overflow: elide; vertical-alignment: center; }
+                Rectangle {
+                    width: Theme.control-height;
+                    height: Theme.control-height;
+                    border-radius: Theme.small-radius;
+                    background: choose-touch.pressed ? Theme.pressed-surface : choose-touch.has-hover ? Theme.hover-surface : Theme.elevated-surface;
+                    opacity: root.busy ? 0.5 : 1;
+                    accessible-role: button;
+                    accessible-label: Translations.tr("service-install-location-choose");
+                    choose-icon := Image { source: @image-url("../assets/navigation/folder.svg"); colorize: Theme.text; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; image-fit: contain; }
+                    choose-touch := TouchArea { enabled: !root.busy; clicked => { root.choose-destination(); } }
+                }
+                if root.destination-customised : Rectangle {
+                    width: Theme.control-height;
+                    height: Theme.control-height;
+                    border-radius: Theme.small-radius;
+                    background: reset-touch.pressed ? Theme.pressed-surface : reset-touch.has-hover ? Theme.hover-surface : Theme.elevated-surface;
+                    opacity: root.busy ? 0.5 : 1;
+                    accessible-role: button;
+                    accessible-label: Translations.tr("service-install-location-reset");
+                    reset-icon := Image { source: @image-url("../assets/navigation/reset.svg"); colorize: Theme.muted-text; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; image-fit: contain; }
+                    reset-touch := TouchArea { enabled: !root.busy; clicked => { root.reset-destination(); } }
+                }
             }
+            Text { text: Translations.tr("service-install-location-hint"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
         }
         Text { text: Translations.tr("service-interface") + ": " + (root.connected ? Translations.tr("status-connected") : Translations.tr("label-offline")); color: Theme.text; font-size: Theme.body-size; }
         if root.known : VerticalLayout {
@@ -85,8 +105,8 @@ export component ServiceControls inherits Rectangle {
         if root.pending != "" : VerticalLayout {
             spacing: Theme.small-spacing;
             Text { text: Translations.tr("service-confirm") + " " + Translations.tr(root.pending == "install-desktop-entry" ? "desktop-entry-install" : root.pending == "remove-desktop-entry" ? "desktop-entry-remove" : "service-" + root.pending); color: Theme.warning; font-size: Theme.body-size; wrap: word-wrap; }
-            if root.copies-binaries : Text { text: Translations.tr("service-confirm-source") + ": " + root.source-path; color: Theme.text; font-size: Theme.caption-size; wrap: word-wrap; }
-            if root.copies-binaries : Text { text: Translations.tr("service-confirm-destination") + ": " + root.destination-path; color: Theme.text; font-size: Theme.caption-size; wrap: word-wrap; }
+            if root.copies-binaries : Text { text: Translations.tr("service-confirm-source") + ": " + root.source-path; color: Theme.text; font-size: Theme.caption-size; width: 0px; horizontal-stretch: 1; wrap: word-wrap; overflow: elide; }
+            if root.copies-binaries : Text { text: Translations.tr("service-confirm-destination") + ": " + root.destination-path; color: Theme.text; font-size: Theme.caption-size; width: 0px; horizontal-stretch: 1; wrap: word-wrap; overflow: elide; }
             Text { text: Translations.tr((root.pending == "install-desktop-entry" || root.pending == "remove-desktop-entry") ? "desktop-entry-confirm-" + root.pending : "service-confirm-" + root.pending); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
             HorizontalLayout {
                 spacing: Theme.small-spacing;

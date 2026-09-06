@@ -366,6 +366,9 @@ name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
+dependencies = [
+ "derive_arbitrary",
+]
 
 [[package]]
 name = "arboard"
@@ -1635,6 +1638,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
 dependencies = [
  "powerfmt",
+]
+
+[[package]]
+name = "derive_arbitrary"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e567bd82dcff979e4b03460c307b3cdc9e96fde3d73bed1496d2bc75d9dd62a"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -7215,6 +7229,7 @@ dependencies = [
  "android_logger",
  "chrono",
  "dirs",
+ "flate2",
  "fluent-bundle",
  "fluent-syntax",
  "fs2",
@@ -7230,15 +7245,19 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "sha2",
  "slint",
  "slint-build",
  "syntra-api",
  "syntra-store",
+ "tar",
+ "tempfile",
  "thiserror 2.0.18",
  "toml 0.8.23",
  "unic-langid",
  "windows 0.61.3",
  "x11rb",
+ "zip",
 ]
 
 [[package]]
@@ -9595,6 +9614,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "zip"
+version = "4.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "caa8cd6af31c3b31c6631b8f483848b91589021b28fffe50adada48d4f4d2ed1"
+dependencies = [
+ "arbitrary",
+ "crc32fast",
+ "flate2",
+ "indexmap",
+ "memchr",
+ "zopfli",
+]
+
+[[package]]
 name = "zlib-rs"
 version = "0.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9605,6 +9638,18 @@ name = "zmij"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
+
+[[package]]
+name = "zopfli"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f05cd8797d63865425ff89b5c4a48804f35ba0ce8d125800027ad6017d2b5249"
+dependencies = [
+ "bumpalo",
+ "crc32fast",
+ "log",
+ "simd-adler32",
+]
 
 [[package]]
 name = "zune-core"

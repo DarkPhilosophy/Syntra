@@ -37,23 +37,22 @@ export component PeerMap inherits Rectangle {
         height: root.lane - Theme.small-spacing;
         background: Theme.elevated-surface;
         border-radius: Theme.small-radius;
-        VerticalLayout {
-            x: Theme.small-spacing;
+        // The avatar is centred on the card and the name sits directly
+        // below it, the pair centred as a group.
+        Avatar {
+            source: root.local-image; has-image: root.has-local-image;
+            size: root.avatar-size;
+            x: (parent.width - root.avatar-size) / 2;
             y: (parent.height - root.local-content-height) / 2;
+        }
+        Text {
+            x: Theme.small-spacing;
+            y: (parent.height - root.local-content-height) / 2
+                + root.avatar-size + Theme.small-spacing;
             width: max(0px, parent.width - 2 * Theme.small-spacing);
-            height: root.local-content-height;
-            alignment: center;
-            spacing: Theme.small-spacing;
-            Avatar {
-                source: root.local-image; has-image: root.has-local-image;
-                size: root.avatar-size;
-            }
-            Text {
-                width: 100%;
-                height: Theme.body-size * 1.5;
-                text: root.local-name; color: Theme.text;
-                horizontal-alignment: center; vertical-alignment: center; overflow: elide;
-            }
+            height: Theme.body-size * 1.5;
+            text: root.local-name; color: Theme.text;
+            horizontal-alignment: center; vertical-alignment: center; overflow: elide;
         }
     }
     for peer in root.clients: Rectangle {
@@ -69,22 +68,22 @@ export component PeerMap inherits Rectangle {
         border-radius: Theme.small-radius;
         border-width: drag.pressed ? 1px : 0px;
         border-color: Theme.accent;
-        HorizontalLayout {
+        // Positioned explicitly rather than through a layout: a layout
+        // stretches its children, so an avatar with a fixed size ends up
+        // wherever the stretch leaves it instead of centred.
+        Avatar {
+            source: peer.custom-image; has-image: peer.has-custom-image;
+            size: root.avatar-size;
+            x: Theme.small-spacing;
             y: (parent.height - root.avatar-size) / 2;
-            height: root.avatar-size;
-            padding: 0px;
-            padding-left: Theme.small-spacing;
-            padding-right: Theme.small-spacing;
-            spacing: Theme.small-spacing;
-            Avatar {
-                source: peer.custom-image; has-image: peer.has-custom-image;
-                size: root.avatar-size;
-            }
-            Text {
-                text: peer.display-name; color: Theme.text;
-                horizontal-stretch: 1;
-                vertical-alignment: center; overflow: elide;
-            }
+        }
+        Text {
+            x: 2 * Theme.small-spacing + root.avatar-size;
+            y: 0px;
+            width: max(0px, parent.width - self.x - Theme.small-spacing);
+            height: parent.height;
+            text: peer.display-name; color: Theme.text;
+            vertical-alignment: center; overflow: elide;
         }
         drag := TouchArea {
             pointer-event(event) => {

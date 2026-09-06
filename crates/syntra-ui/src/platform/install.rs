@@ -194,9 +194,23 @@ pub fn running_from_install_directory() -> bool {
 /// rolled back if a later step fails; a partial installation is still
 /// runnable, and reinstalling repairs it.
 pub fn install_binaries() -> Result<InstalledBinaries, InstallError> {
-    let source = running_directory()?;
-    let target = install_directory()?;
-    fs::create_dir_all(&target).map_err(|error| InstallError::Copy {
+    install_binaries_from(&running_directory()?)
+}
+
+/// Copies binaries from an explicit directory into [`install_directory`].
+///
+/// Release archives and locally built binaries use this same routine so they
+/// receive identical plugin and destination handling.
+pub fn install_binaries_from(source: &Path) -> Result<InstalledBinaries, InstallError> {
+    install_binaries_from_to(source, &install_directory()?)
+}
+
+/// Copies binaries from `source` into an explicit destination.
+pub fn install_binaries_from_to(
+    source: &Path,
+    target: &Path,
+) -> Result<InstalledBinaries, InstallError> {
+    fs::create_dir_all(target).map_err(|error| InstallError::Copy {
         path: target.display().to_string(),
         source: error,
     })?;
