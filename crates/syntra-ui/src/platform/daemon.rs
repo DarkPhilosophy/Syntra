@@ -35,6 +35,19 @@ pub enum DaemonControlError {
     /// The process could not be spawned.
     #[error("could not start the service: {0}")]
     Spawn(#[from] std::io::Error),
+    /// The process started and then exited before answering.
+    ///
+    /// Carries what the daemon itself said, which is nearly always the
+    /// actionable part: a port already in use, a missing permission, or a
+    /// configuration it could not read.
+    #[error("the service exited immediately ({status}){}",
+        if detail.is_empty() { String::new() } else { format!(": {detail}") })]
+    Exited {
+        /// Exit status as reported by the operating system.
+        status: String,
+        /// Most useful line the daemon printed before exiting.
+        detail: String,
+    },
     /// The process started but never accepted a connection.
     #[error("the service started but did not become reachable within {0:?}")]
     NeverReady(Duration),
@@ -78,23 +91,59 @@ pub fn start() -> Result<(), DaemonControlError> {
     }
     let executable = executable().ok_or(DaemonControlError::NotFound)?;
     log::info!("starting service: {}", executable.display());
-    let child = Command::new(&executable).spawn()?;
-    if let Ok(mut owned) = OWNED.lock() {
-        // Replace any previous child; a dead one has already been reaped or
-        // has exited, and keeping it would leak the handle.
-        *owned = Some(child);
-    }
+    // stderr is captured so a daemon that dies immediately can say why.
+    // Reporting only "did not become reachable" leaves the user with nothing
+    // to act on, when the daemon usually knows exactly what went wrong.
+    let mut child = Command::new(&executable)
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    let stderr = child.stderr.take();
 
     // Report readiness rather than optimism: the interface must not claim the
     // service is up before it can be reached.
     let deadline = std::time::Instant::now() + START_TIMEOUT;
     while std::time::Instant::now() < deadline {
         if is_running() {
+            if let Ok(mut owned) = OWNED.lock() {
+                *owned = Some(child);
+            }
             return Ok(());
+        }
+        if let Ok(Some(status)) = child.try_wait() {
+            return Err(DaemonControlError::Exited {
+                status: status.to_string(),
+                detail: read_failure(stderr),
+            });
         }
         std::thread::sleep(POLL_INTERVAL);
     }
+
+    // Alive but not answering: keep it owned so it is not orphaned.
+    if let Ok(mut owned) = OWNED.lock() {
+        *owned = Some(child);
+    }
     Err(DaemonControlError::NeverReady(START_TIMEOUT))
+}
+
+/// Extracts the most useful line the daemon printed before dying.
+///
+/// The last error line is preferred over the whole log, which is mostly
+/// start-up noise that would bury the reason.
+fn read_failure(stderr: Option<std::process::ChildStderr>) -> String {
+    use std::io::Read;
+    let Some(mut stderr) = stderr else {
+        return String::new();
+    };
+    let mut output = String::new();
+    let _ = stderr.read_to_string(&mut output);
+    output
+        .lines()
+        .rev()
+        .find(|line| line.contains("ERROR") || line.contains("error"))
+        .or_else(|| output.lines().next_back())
+        .unwrap_or_default()
+        .trim()
+        .to_owned()
 }
 
 /// Stops a daemon this process started.

@@ -18,3 +18,8 @@ serde_json = "1.0.107"
 thiserror = "2.0.0"
 tokio = { version = "1.32.0", features = ["macros", "net", "io-util", "time"] }
 tokio-stream = { version = "0.1.15", features = ["io-util"] }
+
+[dev-dependencies]
+# The listener tests need a reactor; the library itself leaves the runtime
+# choice to the binary that embeds it.
+tokio = { version = "1.32.0", features = ["macros", "rt", "net", "time"] }

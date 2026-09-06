@@ -47,17 +47,26 @@ impl AsyncFrontendListener {
         let (socket_path, listener) = {
             let socket_path = crate::default_socket_path()?;
 
-            log::debug!("remove socket: {socket_path:?}");
             if socket_path.exists() {
-                // try to connect to see if some other instance
-                // of syntra is already running
+                // Probe before touching it: the file may belong to a daemon
+                // that is alive and listening.
                 match UnixStream::connect(&socket_path).await {
-                    // connected -> syntra is already running
+                    // Somebody answered, so a daemon is already running.
                     Ok(_) => return Err(IpcListenerCreationError::AlreadyRunning),
-                    // syntra is not running but a socket was left behind
-                    Err(e) => {
-                        log::debug!("{socket_path:?}: {e} - removing left behind socket");
+                    // Nobody is bound to it. Only this error proves the file
+                    // is abandoned; a timeout or a permission problem means
+                    // the socket may well be live, and deleting it would
+                    // unlink a listening daemon's endpoint and leave it
+                    // running yet permanently unreachable.
+                    Err(error) if error.kind() == ErrorKind::ConnectionRefused => {
+                        log::debug!("{socket_path:?}: {error} - removing left behind socket");
                         let _ = std::fs::remove_file(&socket_path);
+                    }
+                    Err(error) => {
+                        log::warn!(
+                            "{socket_path:?}: {error} - refusing to remove a socket that may be in use"
+                        );
+                        return Err(IpcListenerCreationError::AlreadyRunning);
                     }
                 }
             }
@@ -146,5 +155,60 @@ impl Stream for AsyncFrontendListener {
         } else {
             Poll::Pending
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    /// A second daemon must never unlink the endpoint of one that is alive.
+    ///
+    /// Deleting it leaves the first daemon listening on an inode no client
+    /// can reach: the process keeps running and every dashboard reports "no
+    /// service is reachable" for as long as it lives.
+    #[tokio::test]
+    async fn a_listening_socket_is_never_removed() {
+        let directory = std::env::temp_dir().join("syntra-listen-live");
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("daemon.sock");
+        // SAFETY: single-threaded test; the variable is restored below.
+        unsafe { std::env::set_var(crate::paths::ENV_DAEMON_SOCKET, &path) };
+
+        let first = AsyncFrontendListener::new().await.expect("first listener");
+        let second = AsyncFrontendListener::new().await;
+
+        assert!(
+            matches!(second, Err(IpcListenerCreationError::AlreadyRunning)),
+            "a running daemon must be detected"
+        );
+        assert!(path.exists(), "the live socket must still exist");
+        drop(first);
+        unsafe { std::env::remove_var(crate::paths::ENV_DAEMON_SOCKET) };
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// A socket left behind by a dead daemon must be replaced, or the service
+    /// could never start again after a crash.
+    #[tokio::test]
+    async fn an_abandoned_socket_is_replaced() {
+        let directory = std::env::temp_dir().join("syntra-listen-stale");
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("daemon.sock");
+        // A plain file stands in for the remains of a crashed daemon: nothing
+        // is listening, so connecting is refused.
+        std::fs::write(&path, b"").unwrap();
+        unsafe { std::env::set_var(crate::paths::ENV_DAEMON_SOCKET, &path) };
+
+        let listener = AsyncFrontendListener::new().await;
+
+        assert!(
+            listener.is_ok(),
+            "an abandoned socket must not block a fresh listener"
+        );
+        unsafe { std::env::remove_var(crate::paths::ENV_DAEMON_SOCKET) };
+        let _ = std::fs::remove_dir_all(&directory);
     }
 }
