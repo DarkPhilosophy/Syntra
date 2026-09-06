@@ -30,27 +30,32 @@ export component PeerMap inherits Rectangle {
         border-radius: Theme.small-radius;
         Text { x: 8px; y: 8px; width: max(0px, parent.width - 16px); text: Translations.tr(zone == 0 ? "position-left" : zone == 1 ? "position-right" : zone == 2 ? "position-top" : "position-bottom"); color: Theme.muted-text; font-size: Theme.caption-size; horizontal-alignment: right; overflow: elide; }
     }
-    Rectangle {
+    local-card := Rectangle {
         x: parent.width / 3;
         y: root.lane;
         width: parent.width / 3 - Theme.small-spacing;
         height: root.lane - Theme.small-spacing;
         background: Theme.elevated-surface;
         border-radius: Theme.small-radius;
-        // The avatar is centred on the card and the name sits directly
-        // below it, the pair centred as a group.
+        // Reserves the same label band the surrounding zones use, even
+        // though this card carries no direction label, so its group lines up
+        // with theirs instead of sitting a half-band higher.
+        // `self`, not `parent`: inside a property declaration `parent` is the
+        // map, whose height spans all three lanes, which pushed the group a
+        // lane and a half down into the bottom zone.
+        private property <length> group-top:
+            root.header-height + (self.height - root.header-height - root.local-content-height) / 2;
         Avatar {
             source: root.local-image; has-image: root.has-local-image;
             size: root.avatar-size;
             width: root.avatar-size;
             height: root.avatar-size;
             x: (parent.width - root.avatar-size) / 2;
-            y: (parent.height - root.local-content-height) / 2;
+            y: local-card.group-top;
         }
         Text {
             x: Theme.small-spacing;
-            y: (parent.height - root.local-content-height) / 2
-                + root.avatar-size + Theme.small-spacing;
+            y: local-card.group-top + root.avatar-size + Theme.small-spacing;
             width: max(0px, parent.width - 2 * Theme.small-spacing);
             height: Theme.body-size * 1.5;
             text: root.local-name; color: Theme.text;
@@ -58,8 +63,16 @@ export component PeerMap inherits Rectangle {
         }
     }
     for peer in root.clients: Rectangle {
+        // The direction label occupies a band at the top of every zone, so
+        // the peers below it are centred within what remains. Without this
+        // the stack sat flush under the label and read as too low.
+        private property <length> zone-content: root.lane - Theme.small-spacing - root.header-height;
+        private property <length> stack-height: max(1, peer.zone-total) * root.row-height;
         private property <length> home-x: peer.position == 0 ? 0px : peer.position == 1 ? 2 * root.width / 3 : root.width / 3;
-        private property <length> home-y: (peer.position == 2 ? 0px : peer.position == 3 ? 2 * root.lane : root.lane) + root.header-height + peer.zone-index * root.row-height;
+        private property <length> home-y: (peer.position == 2 ? 0px : peer.position == 3 ? 2 * root.lane : root.lane)
+            + root.header-height
+            + max(0px, (self.zone-content - self.stack-height) / 2)
+            + peer.zone-index * root.row-height;
         private property <length> press-x;
         private property <length> press-y;
         x: home-x;

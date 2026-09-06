@@ -1510,6 +1510,13 @@ fn project_app_state(app: &AppWindow, state: &AppViewState, settings: &Presentat
             .into(),
     );
 
+    // Counted up front: the map centres each zone's stack of peers, which it
+    // cannot do while still discovering how many that zone holds.
+    let mut zone_totals = [0i32; 4];
+    for client in state.clients.values() {
+        let position = position_index(client.position);
+        zone_totals[position as usize] = zone_totals[position as usize].saturating_add(1);
+    }
     let mut zone_counts = [0i32; 4];
     let clients = state
         .clients
@@ -1517,6 +1524,7 @@ fn project_app_state(app: &AppWindow, state: &AppViewState, settings: &Presentat
         .map(|client| {
             let position = position_index(client.position);
             let zone_index = zone_counts[position as usize];
+            let zone_total = zone_totals[position as usize];
             zone_counts[position as usize] = zone_index.saturating_add(1);
             let fingerprint = state
                 .client_fingerprints
@@ -1570,6 +1578,7 @@ fn project_app_state(app: &AppWindow, state: &AppViewState, settings: &Presentat
                 port: i32::from(client.port),
                 position,
                 zone_index,
+                zone_total,
                 active: client.active,
                 active_address: client
                     .active_addr
