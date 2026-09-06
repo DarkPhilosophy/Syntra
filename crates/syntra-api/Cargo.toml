@@ -1,0 +1,20 @@
+[package]
+name = "syntra-api"
+description = "Syntra control API: the versioned contract between the daemon and its clients"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+dirs = "6"
+futures = "0.3.30"
+log = "0.4.22"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0.107"
+thiserror = "2.0.0"
+tokio = { version = "1.32.0", features = ["macros", "net", "io-util", "time"] }
+tokio-stream = { version = "0.1.15", features = ["io-util"] }

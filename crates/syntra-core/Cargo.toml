@@ -1,0 +1,76 @@
+[package]
+name = "syntra-core"
+description = "Syntra daemon core: input routing, peer transport, clipboard, transfers and history. Contains no user-interface code."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[build-dependencies]
+shadow-rs = "1.2.0"
+
+[dependencies]
+syntra-api.workspace = true
+syntra-cli.workspace = true
+syntra-input-capture.workspace = true
+syntra-input-emulation.workspace = true
+syntra-input-event.workspace = true
+syntra-plugin-api.workspace = true
+syntra-proto.workspace = true
+syntra-store.workspace = true
+
+arboard = { version = "3.6.1", features = ["wayland-data-control"] }
+base64.workspace = true
+bincode.workspace = true
+clap.workspace = true
+dirs = "6"
+futures.workspace = true
+getrandom = "0.3"
+hostname.workspace = true
+image = { workspace = true, features = ["jpeg", "png"] }
+local-channel = "0.1.5"
+log.workspace = true
+mdns-sd = "0.21.1"
+notify = "8.2.0"
+rustls = { version = "0.23.12", default-features = false, features = [
+    "std",
+    "ring",
+] }
+same-file = "1.0.6"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+shadow-rs = { version = "1.2.0", features = ["metadata"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = [
+    "io-util",
+    "io-std",
+    "macros",
+    "net",
+    "process",
+    "rt",
+    "rt-multi-thread",
+    "sync",
+    "signal",
+] }
+tokio-util = { version = "0.7", features = ["codec"] }
+toml.workspace = true
+toml_edit = { version = "0.22", features = ["serde"] }
+webrtc-dtls = { version = "0.12.0", features = ["pem"] }
+webrtc-util = "0.11.0"
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[features]
+default = []
+layer_shell_capture = ["syntra-input-capture/layer_shell"]
+x11_capture = ["syntra-input-capture/x11"]
+libei_capture = ["syntra-input-event/libei", "syntra-input-capture/libei"]
+libei_emulation = ["syntra-input-event/libei", "syntra-input-emulation/libei"]
+wlroots_emulation = ["syntra-input-emulation/wlroots"]
+x11_emulation = ["syntra-input-emulation/x11"]
+rdp_emulation = ["syntra-input-emulation/remote_desktop_portal"]

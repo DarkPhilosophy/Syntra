@@ -1,0 +1,36 @@
+[package]
+name = "syntra-daemon"
+description = "Syntra background service: input sharing, clipboard and file transfer daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "syntra-daemon"
+path = "src/main.rs"
+
+[dependencies]
+syntra-api.workspace = true
+syntra-cli.workspace = true
+syntra-core.workspace = true
+syntra-input-capture.workspace = true
+syntra-input-emulation.workspace = true
+
+env_logger.workspace = true
+log.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "signal"] }
+
+[features]
+default = []
+layer_shell_capture = ["syntra-core/layer_shell_capture"]
+x11_capture = ["syntra-core/x11_capture"]
+libei_capture = ["syntra-core/libei_capture"]
+libei_emulation = ["syntra-core/libei_emulation"]
+wlroots_emulation = ["syntra-core/wlroots_emulation"]
+x11_emulation = ["syntra-core/x11_emulation"]
+rdp_emulation = ["syntra-core/rdp_emulation"]

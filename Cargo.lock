@@ -3738,74 +3738,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "input-capture"
-version = "0.4.0"
-dependencies = [
- "ashpd 0.13.9",
- "async-trait",
- "bitflags 2.11.0",
- "core-foundation 0.10.1",
- "core-foundation-sys",
- "core-graphics 0.25.0",
- "futures",
- "futures-core",
- "input-event",
- "keycode",
- "libc",
- "log",
- "memmap",
- "once_cell",
- "reis",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "wayland-client",
- "wayland-protocols",
- "wayland-protocols-wlr",
- "windows 0.61.3",
- "x11",
-]
-
-[[package]]
-name = "input-emulation"
-version = "0.4.0"
-dependencies = [
- "ashpd 0.13.9",
- "async-trait",
- "bitflags 2.11.0",
- "core-foundation 0.10.1",
- "core-foundation-sys",
- "core-graphics 0.25.0",
- "futures",
- "input-event",
- "keycode",
- "log",
- "once_cell",
- "reis",
- "thiserror 2.0.18",
- "tokio",
- "wayland-client",
- "wayland-protocols",
- "wayland-protocols-misc",
- "wayland-protocols-wlr",
- "windows 0.61.3",
- "x11",
-]
-
-[[package]]
-name = "input-event"
-version = "0.4.0"
-dependencies = [
- "futures-core",
- "log",
- "num_enum",
- "reis",
- "serde",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "input-sys"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4125,159 +4057,6 @@ dependencies = [
  "euclid",
  "polycool",
  "smallvec",
-]
-
-[[package]]
-name = "lan-mouse"
-version = "0.11.0"
-dependencies = [
- "arboard",
- "base64",
- "bincode 1.3.3",
- "clap",
- "dirs",
- "env_logger",
- "futures",
- "getrandom 0.3.4",
- "hostname",
- "image",
- "input-capture",
- "input-emulation",
- "input-event",
- "lan-mouse-adapter-api",
- "lan-mouse-cli",
- "lan-mouse-history",
- "lan-mouse-ipc",
- "lan-mouse-proto",
- "lan-mouse-ui",
- "libc",
- "local-channel",
- "log",
- "mdns-sd",
- "notify",
- "rcgen",
- "rustls",
- "same-file",
- "serde",
- "serde_json",
- "sha2",
- "shadow-rs",
- "slab",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "toml 0.8.23",
- "toml_edit 0.22.27",
- "webrtc-dtls",
- "webrtc-util",
-]
-
-[[package]]
-name = "lan-mouse-adapter-api"
-version = "0.1.0"
-dependencies = [
- "base64",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "lan-mouse-adapter-fuse"
-version = "0.1.0"
-dependencies = [
- "base64",
- "fuser",
- "lan-mouse-adapter-api",
- "lan-mouse-proto",
- "libc",
- "parking_lot",
- "percent-encoding",
-]
-
-[[package]]
-name = "lan-mouse-adapter-gtk-clipboard"
-version = "0.1.0"
-dependencies = [
- "gtk4",
- "lan-mouse-adapter-api",
- "parking_lot",
-]
-
-[[package]]
-name = "lan-mouse-cli"
-version = "0.3.0"
-dependencies = [
- "clap",
- "futures",
- "lan-mouse-ipc",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
-name = "lan-mouse-history"
-version = "0.1.0"
-dependencies = [
- "image",
- "rusqlite",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
-name = "lan-mouse-ipc"
-version = "0.4.0"
-dependencies = [
- "futures",
- "log",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tokio-stream",
-]
-
-[[package]]
-name = "lan-mouse-proto"
-version = "0.5.0"
-dependencies = [
- "input-event",
- "num_enum",
- "paste",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "lan-mouse-ui"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "fluent-bundle",
- "fluent-syntax",
- "fs2",
- "hostname",
- "image",
- "interprocess",
- "ksni",
- "lan-mouse-history",
- "lan-mouse-ipc",
- "log",
- "objc2-app-kit 0.3.2",
- "reqwest",
- "rfd",
- "semver",
- "serde",
- "serde_json",
- "slint",
- "slint-build",
- "thiserror 2.0.18",
- "toml 0.8.23",
- "unic-langid",
- "windows 0.61.3",
- "x11rb",
 ]
 
 [[package]]
@@ -7221,6 +7000,251 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "syntra-api"
+version = "0.11.0"
+dependencies = [
+ "dirs",
+ "futures",
+ "log",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
+name = "syntra-app"
+version = "0.11.0"
+dependencies = [
+ "env_logger",
+ "libc",
+ "log",
+ "syntra-api",
+ "syntra-ui",
+ "tokio",
+]
+
+[[package]]
+name = "syntra-cli"
+version = "0.11.0"
+dependencies = [
+ "clap",
+ "futures",
+ "syntra-api",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "syntra-core"
+version = "0.11.0"
+dependencies = [
+ "arboard",
+ "base64",
+ "bincode 1.3.3",
+ "clap",
+ "dirs",
+ "futures",
+ "getrandom 0.3.4",
+ "hostname",
+ "image",
+ "libc",
+ "local-channel",
+ "log",
+ "mdns-sd",
+ "notify",
+ "rustls",
+ "same-file",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shadow-rs",
+ "syntra-api",
+ "syntra-cli",
+ "syntra-input-capture",
+ "syntra-input-emulation",
+ "syntra-input-event",
+ "syntra-plugin-api",
+ "syntra-proto",
+ "syntra-store",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "toml 0.8.23",
+ "toml_edit 0.22.27",
+ "webrtc-dtls",
+ "webrtc-util",
+]
+
+[[package]]
+name = "syntra-daemon"
+version = "0.11.0"
+dependencies = [
+ "env_logger",
+ "log",
+ "syntra-api",
+ "syntra-cli",
+ "syntra-core",
+ "syntra-input-capture",
+ "syntra-input-emulation",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "syntra-input-capture"
+version = "0.11.0"
+dependencies = [
+ "ashpd 0.13.9",
+ "async-trait",
+ "bitflags 2.11.0",
+ "core-foundation 0.10.1",
+ "core-foundation-sys",
+ "core-graphics 0.25.0",
+ "futures",
+ "futures-core",
+ "keycode",
+ "libc",
+ "log",
+ "memmap",
+ "once_cell",
+ "reis",
+ "syntra-input-event",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-wlr",
+ "windows 0.61.3",
+ "x11",
+]
+
+[[package]]
+name = "syntra-input-emulation"
+version = "0.11.0"
+dependencies = [
+ "ashpd 0.13.9",
+ "async-trait",
+ "bitflags 2.11.0",
+ "core-foundation 0.10.1",
+ "core-foundation-sys",
+ "core-graphics 0.25.0",
+ "futures",
+ "keycode",
+ "log",
+ "once_cell",
+ "reis",
+ "syntra-input-event",
+ "thiserror 2.0.18",
+ "tokio",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-misc",
+ "wayland-protocols-wlr",
+ "windows 0.61.3",
+ "x11",
+]
+
+[[package]]
+name = "syntra-input-event"
+version = "0.11.0"
+dependencies = [
+ "futures-core",
+ "log",
+ "num_enum",
+ "reis",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "syntra-plugin-api"
+version = "0.11.0"
+dependencies = [
+ "base64",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "syntra-plugin-clipboard"
+version = "0.11.0"
+dependencies = [
+ "gtk4",
+ "parking_lot",
+ "syntra-plugin-api",
+]
+
+[[package]]
+name = "syntra-plugin-fuse"
+version = "0.11.0"
+dependencies = [
+ "base64",
+ "fuser",
+ "libc",
+ "parking_lot",
+ "percent-encoding",
+ "syntra-plugin-api",
+ "syntra-proto",
+]
+
+[[package]]
+name = "syntra-proto"
+version = "0.11.0"
+dependencies = [
+ "num_enum",
+ "paste",
+ "syntra-input-event",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "syntra-store"
+version = "0.11.0"
+dependencies = [
+ "image",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "syntra-ui"
+version = "0.11.0"
+dependencies = [
+ "chrono",
+ "fluent-bundle",
+ "fluent-syntax",
+ "fs2",
+ "hostname",
+ "image",
+ "interprocess",
+ "ksni",
+ "log",
+ "objc2-app-kit 0.3.2",
+ "reqwest",
+ "rfd",
+ "semver",
+ "serde",
+ "serde_json",
+ "slint",
+ "slint-build",
+ "syntra-api",
+ "syntra-store",
+ "thiserror 2.0.18",
+ "toml 0.8.23",
+ "unic-langid",
+ "windows 0.61.3",
+ "x11rb",
 ]
 
 [[package]]

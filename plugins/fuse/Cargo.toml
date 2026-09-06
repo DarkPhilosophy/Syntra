@@ -1,0 +1,14 @@
+[package]
+name = "syntra-plugin-fuse"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+base64 = "0.22"
+fuser = { version = "0.14", default-features = false }
+syntra-plugin-api.workspace = true
+syntra-proto.workspace = true
+libc = "0.2"
+parking_lot = "0.12"
+percent-encoding = "2.3"
