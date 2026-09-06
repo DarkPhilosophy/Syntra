@@ -280,6 +280,8 @@ export component AppWindow inherits Window {
                     backend-connected: AppState.connected;
                     service-error: AppState.service-error;
                     service-binary-path: AppState.service-binary-path;
+                    desktop-entry-supported: AppState.desktop-entry-supported;
+                    desktop-entry-installed: AppState.desktop-entry-installed;
                     service-action(value) => { AppState.service-action(value); }
                     update-repository: AppState.update-repository;
                     update-automatic-check: AppState.update-automatic-check;

@@ -1,5 +1,14 @@
 pub mod service;
 
+// Copying the binaries into a durable location before anything points at them.
+#[cfg(not(target_os = "android"))]
+pub mod install;
+
+// Freedesktop launcher entry. Only Linux and the BSDs use `.desktop` files;
+// macOS and Windows install an application bundle or a shortcut instead.
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+pub mod desktop_entry;
+
 use std::fmt;
 use std::sync::Arc;
 

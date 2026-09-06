@@ -58,6 +58,8 @@ ksni = { version = "0.3.6", default-features = false, features = ["blocking", "a
 x11rb = "0.13"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
+# Resolves the per-user application directory for the launcher entry.
+dirs = "6"
 slint = { version = "1.17.1", default-features = false, features = ["std", "backend-default", "renderer-femtovg", "renderer-software", "accessibility", "compat-1-2", "unstable-winit-030"] }
 rfd = "0.15"
 interprocess = { version = "2.4.4", default-features = false }

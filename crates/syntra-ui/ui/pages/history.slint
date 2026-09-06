@@ -1,4 +1,4 @@
-import { ScrollView, LineEdit } from "std-widgets.slint";
+import { ScrollView, LineEdit, ListView } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
 import { Translations } from "../localization.slint";
 import { AppButton } from "../components/controls.slint";
@@ -47,16 +47,16 @@ export component HistoryPage inherits Rectangle {
         if root.operation-status != "": Text { text: root.operation-status; color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; vertical-stretch: 0; }
         if !root.connected: Text { text: Translations.tr("history-disconnected"); color: Theme.warning; font-size: Theme.caption-size; wrap: word-wrap; vertical-stretch: 0; }
         if root.busy: Text { text: Translations.tr("history-loading"); color: Theme.muted-text; font-size: Theme.caption-size; vertical-stretch: 0; }
-        ScrollView {
-            VerticalLayout {
-                alignment: start;
-                spacing: Theme.small-spacing;
-                if root.records.length == 0 && !root.busy: Text { text: Translations.tr("history-empty"); color: Theme.muted-text; font-size: Theme.body-size; wrap: word-wrap; }
-                for record in root.records: Rectangle {
-                    height: record-content.preferred-height;
-                    vertical-stretch: 0;
-                    background: Theme.surface;
-                    border-radius: Theme.small-radius;
+        if root.records.length == 0 && !root.busy: Text { text: Translations.tr("history-empty"); color: Theme.muted-text; font-size: Theme.body-size; wrap: word-wrap; vertical-stretch: 0; }
+        ListView {
+            // Virtualised: only the rows on screen are built. A plain layout
+            // instantiated every record, including its decoded thumbnail,
+            // which is what made opening History stutter.
+            vertical-stretch: 1;
+            for record in root.records: Rectangle {
+                height: record-content.preferred-height + Theme.small-spacing;
+                background: Theme.surface;
+                border-radius: Theme.small-radius;
                     record-content := VerticalLayout {
                         padding: Theme.spacing;
                         spacing: Theme.small-spacing;
@@ -71,7 +71,6 @@ export component HistoryPage inherits Rectangle {
                         if record.preview-text != "": Text { text: record.preview-text; color: Theme.text; font-size: Theme.body-size; wrap: word-wrap; overflow: elide; max-height: Theme.body-size * 5; }
                     }
                 }
-            }
         }
         if root.has-more: AppButton { text: Translations.tr("history-more"); enabled: root.connected && !root.busy; clicked => { root.load-more(); } }
         if root.confirm-clear: VerticalLayout {

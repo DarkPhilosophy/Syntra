@@ -544,13 +544,37 @@ impl HistoryStore {
     }
 
     /// Exports an immutable bounded page for authenticated peer reconciliation.
+    ///
+    /// Deliberately chronological: pinning is local state, so letting it
+    /// reorder the export would make two devices disagree about page
+    /// boundaries and reconcile the same records repeatedly.
     pub fn export_page(
         &self,
         offset: u64,
         limit: usize,
     ) -> Result<(Vec<ImportedHistoryEvent>, Option<u64>), HistoryError> {
-        let (records, next) = self.page("", offset, limit)?;
-        Ok((records.iter().map(immutable_event).collect(), next))
+        let limit = limit.clamp(1, 50);
+        let all = self.query_records(
+            "SELECT e.origin_device_id, e.origin_sequence, e.kind, e.created_at_ms,
+                    e.origin_label, COALESCE(s.pinned, 0), e.text_payload,
+                    e.image_payload, e.media_type, e.image_width, e.image_height, e.files_json
+             FROM history_events e
+             LEFT JOIN history_local_state s USING(origin_device_id, origin_sequence)
+             WHERE COALESCE(s.dismissed, 0) = 0
+             ORDER BY e.created_at_ms DESC, e.origin_device_id, e.origin_sequence DESC",
+            None,
+        )?;
+        let start = usize::try_from(offset).unwrap_or(usize::MAX).min(all.len());
+        let end = start.saturating_add(limit).min(all.len());
+        let next = (end < all.len()).then_some(end as u64);
+        Ok((
+            all.iter()
+                .skip(start)
+                .take(limit)
+                .map(immutable_event)
+                .collect(),
+            next,
+        ))
     }
 
     fn query_records(

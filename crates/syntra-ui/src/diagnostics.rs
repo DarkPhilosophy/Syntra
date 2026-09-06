@@ -43,6 +43,10 @@ impl Default for DiagnosticFilter {
 pub struct DiagnosticStore {
     entries: VecDeque<LiveDiagnostic>,
     paused_entries: Option<Vec<LiveDiagnostic>>,
+    /// Total records ever appended, used to append only what is new.
+    appended: u64,
+    /// Bumped whenever the view must rebuild rather than append.
+    revision: u64,
     pub filter: DiagnosticFilter,
     pub stream_status: String,
     pub last_error: Option<String>,
@@ -60,6 +64,7 @@ impl DiagnosticStore {
 
     pub fn push(&mut self, entry: LiveDiagnostic) {
         self.entries.push_back(entry);
+        self.appended = self.appended.wrapping_add(1);
         while self.entries.len() > MAX_DIAGNOSTIC_ENTRIES {
             self.entries.pop_front();
         }
@@ -70,6 +75,28 @@ impl DiagnosticStore {
         if let Some(entries) = &mut self.paused_entries {
             entries.clear();
         }
+        // Force the next projection to rebuild: the view cannot append its
+        // way from a populated list to an empty one.
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// Total records ever appended.
+    ///
+    /// The view uses the difference since its last projection to append only
+    /// what is new, instead of rebuilding the whole model.
+    pub fn appended(&self) -> u64 {
+        self.appended
+    }
+
+    /// Changes whenever the list must be rebuilt from scratch rather than
+    /// appended to, such as after a clear, a filter change or a pause.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Marks the list as needing a full rebuild.
+    pub fn invalidate(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
     }
 
     pub fn set_paused(&mut self, paused: bool) {
@@ -78,6 +105,8 @@ impl DiagnosticStore {
         }
         self.filter.paused = paused;
         self.paused_entries = paused.then(|| self.entries.iter().cloned().collect());
+        // Pausing swaps the backing list, so the view must rebuild.
+        self.invalidate();
     }
 
     /// Most recent entries matching the active filter, newest last.

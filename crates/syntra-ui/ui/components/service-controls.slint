@@ -5,6 +5,8 @@ import { AppButton, AppSwitch } from "controls.slint";
 export component ServiceControls inherits Rectangle {
     in property <bool> supported;
     in property <bool> busy;
+    in property <bool> desktop-entry-supported;
+    in property <bool> desktop-entry-installed;
     in property <bool> known;
     in property <bool> installed;
     in property <bool> running;
@@ -42,6 +44,23 @@ export component ServiceControls inherits Rectangle {
             spacing: Theme.small-spacing;
             AppButton { text: Translations.tr("service-start"); enabled: !root.busy && !root.running; clicked => { root.pending = "start"; } }
             AppButton { text: Translations.tr("service-stop"); enabled: !root.busy && root.running; clicked => { root.pending = "stop"; } }
+        }
+        // The launcher entry is separate from the background service: this
+        // one puts the application in the menu and gives its window an icon,
+        // it does not start anything at login.
+        if root.desktop-entry-supported : VerticalLayout {
+            spacing: Theme.small-spacing;
+            Text { text: Translations.tr("desktop-entry-title"); color: Theme.text; font-size: Theme.body-size; font-weight: 600; }
+            Text { text: Translations.tr("desktop-entry-description"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
+            Text { text: Translations.tr("desktop-entry-state") + ": " + Translations.tr(root.desktop-entry-installed ? "service-installed" : "service-not-installed"); color: Theme.text; font-size: Theme.body-size; }
+            HorizontalLayout {
+                spacing: Theme.small-spacing;
+                AppButton {
+                    text: Translations.tr(root.desktop-entry-installed ? "desktop-entry-remove" : "desktop-entry-install");
+                    enabled: !root.busy;
+                    clicked => { root.action(root.desktop-entry-installed ? "remove-desktop-entry" : "install-desktop-entry"); }
+                }
+            }
         }
         if !root.supported : Text { text: Translations.tr("service-unsupported"); color: Theme.muted-text; wrap: word-wrap; }
         if root.error != "" : Text { text: root.error; color: Theme.danger; wrap: word-wrap; }

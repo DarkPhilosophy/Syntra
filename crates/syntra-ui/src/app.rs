@@ -1046,12 +1046,37 @@ fn install_localizer(
 /// scrollback buys nothing and costs a full model rebuild per update.
 const DIAGNOSTIC_VISIBLE_ROWS: usize = 400;
 
+thread_local! {
+    /// The live diagnostics model, kept across projections.
+    ///
+    /// Replacing the model on every update discards the view's row state and
+    /// forces Slint to rebuild the entire list. Holding one model and
+    /// appending to it lets a burst of log lines cost only the rows that are
+    /// actually new.
+    static DIAGNOSTIC_MODEL: Rc<VecModel<DiagnosticEntry>> = Rc::new(VecModel::default());
+    /// `(appended, revision)` observed at the last projection.
+    static DIAGNOSTIC_CURSOR: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
+}
+
 fn project_live_diagnostics(
     app: &AppWindow,
     store: &Arc<Mutex<crate::diagnostics::DiagnosticStore>>,
 ) {
     let Ok(store) = store.lock() else { return };
-    let entries = store
+    let global = app.global::<AppState>();
+
+    let (previous_appended, previous_revision) = DIAGNOSTIC_CURSOR.with(|cursor| cursor.get());
+    let appended = store.appended();
+    let revision = store.revision();
+    // A filter change alters which records qualify, so appending would be
+    // wrong; only an unchanged filter and a pure growth can be appended.
+    let rebuild = revision != previous_revision || appended < previous_appended;
+    let new_records = appended.saturating_sub(previous_appended) as usize;
+    if !rebuild && new_records == 0 {
+        return;
+    }
+
+    let rows = store
         .filtered(DIAGNOSTIC_VISIBLE_ROWS)
         .into_iter()
         .map(|entry| DiagnosticEntry {
@@ -1063,10 +1088,28 @@ fn project_live_diagnostics(
             message: entry.message.into(),
         })
         .collect::<Vec<_>>();
-    let global = app.global::<AppState>();
+
+    DIAGNOSTIC_MODEL.with(|model| {
+        if rebuild || new_records >= rows.len() {
+            // Nothing in common with what is displayed; start again.
+            model.set_vec(rows.clone());
+        } else {
+            // Append the tail, then trim the head back to the window so the
+            // model never grows past what the view can show.
+            for row in &rows[rows.len() - new_records..] {
+                model.push(row.clone());
+            }
+            while model.row_count() > DIAGNOSTIC_VISIBLE_ROWS {
+                model.remove(0);
+            }
+        }
+        global.set_diagnostics(ModelRc::from(model.clone()));
+    });
+    DIAGNOSTIC_CURSOR.with(|cursor| cursor.set((appended, revision)));
+
     // Approximate the width from byte length rather than scanning every
     // character of every message; the value only sizes a scroll area.
-    let message_columns = entries
+    let message_columns = rows
         .iter()
         .map(|entry| entry.message.len())
         .max()
@@ -1074,7 +1117,6 @@ fn project_live_diagnostics(
         // One pathological line must not widen the table for every row.
         .clamp(80, 400) as i32;
     global.set_diagnostics_message_columns(message_columns);
-    global.set_diagnostics(ModelRc::new(VecModel::from(entries)));
     global.set_diagnostics_paused(store.filter.paused);
     global.set_diagnostics_error(
         store
@@ -1945,8 +1987,37 @@ fn bind_app_state_callbacks(
                 let result = (|| {
                     match action.as_str() {
                         "refresh" => {}
-                        "install" => service::install(&service::daemon_executable()?)?,
+                        "install" => {
+                            // Copy first: a unit pointing at a build tree
+                            // silently fails once that tree moves.
+                            let installed = crate::platform::install::install_binaries()
+                                .map_err(|error| {
+                                    service::ServiceError::InvalidBinary(error.to_string())
+                                })?;
+                            service::install(&installed.daemon)?
+                        }
                         "uninstall" => service::uninstall()?,
+                        // Launcher entry, distinct from the background
+                        // service: one makes the application appear in the
+                        // menu, the other runs the daemon at login.
+                        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+                        "install-desktop-entry" => {
+                            crate::platform::install::install_binaries()
+                                .map_err(|error| {
+                                    service::ServiceError::InvalidBinary(error.to_string())
+                                })
+                                .and_then(|installed| {
+                                    crate::platform::desktop_entry::install(&installed.application)
+                                        .map_err(|error| {
+                                            service::ServiceError::InvalidBinary(error.to_string())
+                                        })
+                                })
+                                .map(|_| ())
+                                .map_err(|error| service::ServiceError::InvalidBinary(error.to_string()))?
+                        }
+                        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+                        "remove-desktop-entry" => crate::platform::desktop_entry::uninstall()
+                            .map_err(|error| service::ServiceError::InvalidBinary(error.to_string()))?,
                         "start" => {
                             #[cfg(target_os = "linux")]
                             if was_connected && !service::query()?.running {
@@ -2358,6 +2429,9 @@ fn bind_app_state_callbacks(
         global.on_diagnostics_level_changed(move |value| {
             if let Ok(mut store) = store.lock() {
                 store.filter.level = value.to_string();
+                // A different filter selects different records, so the view
+                // must rebuild rather than append.
+                store.invalidate();
             }
             if let Some(app) = weak.upgrade() {
                 project_live_diagnostics(&app, &store);
@@ -2370,6 +2444,9 @@ fn bind_app_state_callbacks(
         global.on_diagnostics_stage_changed(move |value| {
             if let Ok(mut store) = store.lock() {
                 store.filter.stage = value.to_string();
+                // A different filter selects different records, so the view
+                // must rebuild rather than append.
+                store.invalidate();
             }
             if let Some(app) = weak.upgrade() {
                 project_live_diagnostics(&app, &store);
@@ -2382,6 +2459,9 @@ fn bind_app_state_callbacks(
         global.on_diagnostics_direction_changed(move |value| {
             if let Ok(mut store) = store.lock() {
                 store.filter.direction = value.to_string();
+                // A different filter selects different records, so the view
+                // must rebuild rather than append.
+                store.invalidate();
             }
             if let Some(app) = weak.upgrade() {
                 project_live_diagnostics(&app, &store);
@@ -2394,6 +2474,9 @@ fn bind_app_state_callbacks(
         global.on_diagnostics_text_changed(move |value| {
             if let Ok(mut store) = store.lock() {
                 store.filter.query = value.to_string();
+                // A different filter selects different records, so the view
+                // must rebuild rather than append.
+                store.invalidate();
             }
             if let Some(app) = weak.upgrade() {
                 project_live_diagnostics(&app, &store);

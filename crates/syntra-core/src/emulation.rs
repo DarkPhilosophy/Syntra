@@ -675,6 +675,10 @@ impl EmulationTask {
         let mut health_check = tokio::time::interval(Duration::from_millis(100));
         health_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+        // Cleared once the backend's clipboard source is exhausted, so an
+        // absent clipboard is polled once rather than on every wake-up.
+        let mut clipboard_active = true;
+
         loop {
             tokio::select! {
                 e = self.request_rx.recv() => match e.expect("channel closed") {
@@ -722,8 +726,17 @@ impl EmulationTask {
                         let _ = reply.send(result);
                     },
                 },
-                clipboard = emulation.clipboard_event() => {
-                    if let Some((mime_type, data)) = clipboard {
+                // Guarded: a backend without clipboard support resolves this
+                // immediately with `None`, and `select!` would poll it again
+                // at once, spinning the daemon at 100% CPU for the lifetime
+                // of the session. An exhausted source is polled once.
+                clipboard = emulation.clipboard_event(), if clipboard_active => {
+                    let Some((mime_type, data)) = clipboard else {
+                        log::debug!("clipboard source ended; no longer polling it");
+                        clipboard_active = false;
+                        continue;
+                    };
+                    {
                         if matches!(
                             mime_type.as_str(),
                             "image/png" | "image/jpeg" | "image/jpg"

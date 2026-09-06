@@ -123,6 +123,10 @@ export global AppState {
     callback set-plugin-enabled(string, bool);
     callback restart-plugin(string);
     callback refresh-plugins();
+
+    // Launcher entry, distinct from the background service.
+    in-out property <bool> desktop-entry-supported;
+    in-out property <bool> desktop-entry-installed;
     in-out property <int> listen-port;
     in-out property <string> locale: "en-US";
     in-out property <[string]> locale-options;

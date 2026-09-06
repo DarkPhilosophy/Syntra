@@ -54,6 +54,8 @@ export component SettingsPage inherits Rectangle {
     callback change-density(string);
     callback change-reduced-motion(bool);
     callback change-zoom(int);
+    in property <bool> desktop-entry-supported;
+    in property <bool> desktop-entry-installed;
     callback service-action(string);
     callback port-changed(string);
     callback save-requested();
@@ -128,6 +130,8 @@ export component SettingsPage inherits Rectangle {
                 supported: root.service-supported; busy: root.service-busy; known: root.service-known;
                 installed: root.service-installed; running: root.service-running; autostart: root.service-autostart;
                 connected: root.backend-connected; error: root.service-error; binary-path: root.service-binary-path;
+                desktop-entry-supported: root.desktop-entry-supported;
+                desktop-entry-installed: root.desktop-entry-installed;
                 action(value) => { root.service-action(value); }
             }
             UpdateControls {
