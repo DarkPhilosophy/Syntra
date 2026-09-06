@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures_core::Stream;
 
-use input_event::{Event, KeyboardEvent, scancode};
+use input_event::{Event, KeyboardEvent, PointerEvent, scancode};
 
 pub use error::{CaptureCreationError, CaptureError, InputCaptureError};
 
@@ -42,10 +42,7 @@ pub enum CaptureEvent {
     /// input event coming from capture handle
     Input(Event),
     /// Clipboard selection read through the native desktop portal.
-    Clipboard {
-        mime_type: String,
-        data: Vec<u8>,
-    },
+    Clipboard { mime_type: String, data: Vec<u8> },
 }
 
 impl Display for CaptureEvent {
@@ -127,6 +124,8 @@ impl Display for Backend {
 pub struct InputCapture {
     /// capture backend
     capture: Box<dyn Capture>,
+    /// buttons pressed by active capture
+    pressed_buttons: HashSet<u32>,
     /// keys pressed by active capture
     pressed_keys: HashSet<scancode::Linux>,
     /// map from position to ids
@@ -176,18 +175,19 @@ impl InputCapture {
     /// release mouse
     pub async fn release(&mut self) -> Result<(), CaptureError> {
         self.pressed_keys.clear();
+        self.pressed_buttons.clear();
         self.capture.release().await
+    }
+
+    /// Drain every pointer button forwarded as down-but-not-up.
+    pub fn take_pressed_buttons(&mut self) -> HashSet<u32> {
+        std::mem::take(&mut self.pressed_buttons)
     }
 
     /// Drain and return every key the capture has forwarded as
     /// down-but-not-up. The caller is expected to synthesize key-up
-    /// events to the remote peer for each — otherwise the peer
-    /// retains phantom-held keys after capture is released. The
-    /// canonical case is the release-bind chord
-    /// (Ctrl+Shift+Alt+Meta): the down events were sent while
-    /// capture was active, but the matching up events arrive after
-    /// the local tap has flipped to passthrough and never reach
-    /// the peer.
+    /// events to the remote peer for each — otherwise the peer retains
+    /// phantom-held keys after capture is released.
     pub fn take_pressed_keys(&mut self) -> HashSet<scancode::Linux> {
         std::mem::take(&mut self.pressed_keys)
     }
@@ -196,7 +196,6 @@ impl InputCapture {
     pub async fn terminate(&mut self) -> Result<(), CaptureError> {
         self.capture.terminate().await
     }
-
     /// creates a new [`InputCapture`]
     pub async fn new(backend: Option<Backend>) -> Result<Self, CaptureCreationError> {
         let capture = create(backend).await?;
@@ -206,9 +205,9 @@ impl InputCapture {
             pending: Default::default(),
             position_map: Default::default(),
             pressed_keys: HashSet::new(),
+            pressed_buttons: HashSet::new(),
         })
     }
-
     /// check whether the given keys are pressed
     pub fn keys_pressed(&self, keys: &[scancode::Linux]) -> bool {
         keys.iter().all(|k| self.pressed_keys.contains(k))
@@ -251,9 +250,18 @@ impl Stream for InputCapture {
             Err(e) => return Poll::Ready(Some(Err(e))),
         };
 
-        // handle key presses
-        if let CaptureEvent::Input(Event::Keyboard(KeyboardEvent::Key { key, state, .. })) = event {
-            self.update_pressed_keys(key, state);
+        match event {
+            CaptureEvent::Input(Event::Keyboard(KeyboardEvent::Key { key, state, .. })) => {
+                self.update_pressed_keys(key, state);
+            }
+            CaptureEvent::Input(Event::Pointer(PointerEvent::Button { button, state, .. })) => {
+                if state == 1 {
+                    self.pressed_buttons.insert(button);
+                } else {
+                    self.pressed_buttons.remove(&button);
+                }
+            }
+            _ => {}
         }
 
         let len = self
@@ -284,7 +292,7 @@ impl Stream for InputCapture {
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 trait Capture: Stream<Item = Result<(Position, CaptureEvent), CaptureError>> + Unpin {
     /// create a new client with the given id
     async fn create(&mut self, pos: Position) -> Result<(), CaptureError>;

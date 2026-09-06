@@ -1,0 +1,176 @@
+import { ClientItem } from "components/client-row.slint";
+import { TransferItem } from "pages/transfer-row.slint";
+import { DiagnosticEntry } from "components/diagnostic-row.slint";
+import { HistoryItem } from "pages/history.slint";
+import { TransferPeerItem } from "components/file-drop-target.slint";
+
+export struct FlatpakApplication {
+    application-id: string,
+    name: string,
+}
+
+export struct DiscoveredPeerItem {
+    id: string,
+    display-name: string,
+    addresses: string,
+    port: int,
+}
+
+export global AppState {
+    in-out property <bool> connected;
+    in-out property <bool> reconnecting;
+    in-out property <string> transport-status: "Unavailable";
+    in-out property <[HistoryItem]> history-records;
+    in-out property <string> history-query;
+    in-out property <bool> history-busy;
+    in-out property <bool> history-has-more;
+    callback history-load-more();
+    in-out property <string> history-error;
+    in-out property <string> history-status;
+    callback history-search(string);
+    callback history-refresh();
+    callback history-pin(string, string, bool);
+    callback history-clear-global();
+    in-out property <[ClientItem]> clients;
+    in-out property <int> peer-zone-depth: 1;
+    in-out property <[DiscoveredPeerItem]> discovered-peers;
+    callback discover-peers();
+    in-out property <bool> service-supported;
+    in-out property <bool> service-busy;
+    in-out property <bool> service-known;
+    in-out property <bool> service-installed;
+    in-out property <bool> service-running;
+    in-out property <bool> service-autostart;
+    in-out property <string> service-error;
+    in-out property <string> service-binary-path;
+    callback service-action(string);
+    in-out property <bool> capture-enabled;
+    in-out property <bool> input-sharing;
+    in-out property <bool> input-sharing-known;
+    callback set-input-sharing(bool);
+    in-out property <bool> emulation-enabled;
+    in-out property <bool> capture-supported;
+    in-out property <bool> emulation-supported;
+    in-out property <bool> clipboard-text-enabled;
+    in-out property <bool> clipboard-image-enabled;
+    in-out property <bool> clipboard-files-enabled;
+    in-out property <bool> clipboard-files-supported;
+    in-out property <[FlatpakApplication]> flatpak-applications;
+    in-out property <[FlatpakApplication]> flatpak-all-applications;
+    in-out property <string> flatpak-search;
+    callback search-flatpak-apps(string);
+    in-out property <string> flatpak-grant-status;
+    in-out property <bool> flatpak-applications-loading;
+    in-out property <string> flatpak-applications-error;
+    in-out property <[TransferItem]> active-transfers;
+    in-out property <[TransferItem]> completed-transfers;
+    in-out property <[TransferItem]> failed-transfers;
+    in-out property <[TransferItem]> cancelled-transfers;
+    in-out property <[TransferPeerItem]> transfer-peers;
+    in-out property <string> manual-transfer-error;
+    in-out property <bool> manual-picker-busy;
+    in-out property <bool> manual-drop-supported;
+    in-out property <int> manual-drop-generation;
+    in-out property <string> manual-hover-peer;
+    callback choose-manual-files(string);
+    callback cancel-manual-transfer(string, string);
+    callback register-manual-drop-target(string, float, float, float, float);
+    callback register-manual-drop-viewport(float, float, float, float);
+    in-out property <bool> file-receive-known;
+    in-out property <bool> file-receive-busy;
+    in-out property <bool> file-receive-auto-accept;
+    in-out property <string> file-receive-directory;
+    in-out property <bool> file-receive-dirty;
+    in-out property <bool> file-receive-picker-busy;
+    in-out property <string> file-receive-error;
+    callback choose-download-directory();
+    callback save-file-receive-settings();
+    in-out property <bool> manual-offer-visible;
+    in-out property <string> manual-offer-peer;
+    in-out property <string> manual-offer-id;
+    in-out property <string> manual-offer-peer-name;
+    in-out property <image> manual-offer-peer-image;
+    in-out property <bool> manual-offer-has-peer-image;
+    in-out property <string> manual-offer-file-name;
+    in-out property <string> manual-offer-size;
+    in-out property <string> manual-offer-directory;
+    in-out property <string> manual-offer-error;
+    in-out property <bool> manual-offer-busy;
+    in-out property <bool> manual-offer-picker-busy;
+    in-out property <int> manual-offer-count;
+    callback choose-incoming-directory();
+    callback accept-incoming-file();
+    callback decline-incoming-file();
+    in-out property <[DiagnosticEntry]> diagnostics;
+    in-out property <int> diagnostics-message-columns: 80;
+    in-out property <string> diagnostics-level: "all";
+    in-out property <string> diagnostics-stage: "all";
+    in-out property <string> diagnostics-direction: "all";
+    in-out property <string> diagnostics-text: "";
+    in-out property <bool> diagnostics-paused: false;
+    callback diagnostics-level-changed(string);
+    callback diagnostics-stage-changed(string);
+    callback diagnostics-direction-changed(string);
+    callback diagnostics-text-changed(string);
+    callback diagnostics-pause(bool);
+    callback diagnostics-clear();
+    in-out property <string> diagnostics-error;
+    in-out property <int> listen-port;
+    in-out property <string> locale: "en-US";
+    in-out property <[string]> locale-options;
+    in-out property <bool> language-import-supported;
+    callback import-language();
+    callback change-locale(string);
+    in-out property <string> base-mode: "black";
+    in-out property <string> palette: "army";
+    in-out property <string> accent: "#718355";
+    in-out property <string> titlebar-color: "";
+    in-out property <string> density: "comfortable";
+    in-out property <int> zoom-percent: 100;
+    callback change-zoom(int);
+    in-out property <bool> reduced-motion: false;
+    callback change-base-mode(string);
+    callback change-palette(string);
+    callback change-accent(string);
+    callback change-titlebar-color(string);
+    callback change-accent-color(color);
+    callback change-titlebar-color-value(color);
+    callback change-density(string);
+    callback change-reduced-motion(bool);
+    in-out property <string> update-repository;
+    in-out property <bool> update-automatic-check;
+    in-out property <bool> update-busy;
+    in-out property <string> update-status;
+    callback configure-updates(string);
+    callback set-automatic-update-check(bool);
+    callback check-updates();
+    in-out property <string> local-fingerprint;
+    in-out property <string> regenerated-fingerprint;
+    callback regenerate-identity();
+    in-out property <string> pending-fingerprint;
+    in-out property <[string]> authorized-keys;
+
+    callback create-client();
+    callback activate-client(string, bool);
+    callback delete-client(string);
+    callback resolve-dns(string);
+    callback update-hostname(string, string);
+    callback update-port(string, int);
+    callback update-position(string, int);
+    callback update-fixed-ips(string, string);
+    callback enable-capture();
+    callback enable-emulation();
+    callback change-port(int);
+    callback authorize-key(string, string);
+    callback remove-authorized-key(string);
+    callback save-configuration();
+    callback set-clipboard-text(bool);
+    callback set-clipboard-image(bool);
+    callback set-clipboard-files(bool);
+    callback cancel-transfer(string);
+    callback synchronize();
+    callback request-permission();
+    callback open-permission-settings();
+    callback refresh-flatpak-apps();
+    callback grant-flatpak-access(string);
+}

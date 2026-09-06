@@ -1,5 +1,4 @@
-use crate::client::ClientManager;
-use crate::config::local_commit;
+use crate::{client::ClientManager, config::local_commit, crypto};
 use lan_mouse_ipc::{ClientHandle, DEFAULT_PORT};
 use lan_mouse_proto::{MAX_DATAGRAM_SIZE, ProtoEvent};
 use local_channel::mpsc::{Receiver, Sender, channel};
@@ -39,10 +38,11 @@ pub(crate) enum LanMouseConnectionError {
     TargetEmulationDisabled,
     #[error("Connection timed out")]
     Timeout,
+    #[error("peer did not present a certificate")]
+    MissingPeerCertificate,
 }
 
 const DEFAULT_CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
-
 async fn connect(
     addr: SocketAddr,
     cert: Certificate,
@@ -96,9 +96,10 @@ pub(crate) struct LanMouseConnection {
     cert: Certificate,
     client_manager: ClientManager,
     conns: Rc<Mutex<HashMap<SocketAddr, Arc<dyn Conn + Send + Sync>>>>,
+    peer_fingerprints: Rc<Mutex<HashMap<SocketAddr, String>>>,
     connecting: Rc<Mutex<HashSet<ClientHandle>>>,
-    recv_rx: Receiver<(ClientHandle, ProtoEvent)>,
-    recv_tx: Sender<(ClientHandle, ProtoEvent)>,
+    recv_rx: Receiver<(ClientHandle, String, ProtoEvent)>,
+    recv_tx: Sender<(ClientHandle, String, ProtoEvent)>,
     ping_response: Rc<RefCell<HashSet<SocketAddr>>>,
 }
 
@@ -109,6 +110,7 @@ impl LanMouseConnection {
             cert,
             client_manager,
             conns: Default::default(),
+            peer_fingerprints: Default::default(),
             connecting: Default::default(),
             recv_rx,
             recv_tx,
@@ -116,8 +118,13 @@ impl LanMouseConnection {
         }
     }
 
-    pub(crate) async fn recv(&mut self) -> (ClientHandle, ProtoEvent) {
-        self.recv_rx.recv().await.expect("channel closed")
+    pub(crate) async fn recv(&mut self) -> (ClientHandle, String, ProtoEvent) {
+        loop {
+            let event = self.recv_rx.recv().await.expect("channel closed");
+            if self.client_manager.contains(event.0) {
+                return event;
+            }
+        }
     }
 
     /// Start establishing a connection before the first input event.
@@ -125,22 +132,26 @@ impl LanMouseConnection {
     /// This makes pairing and peer-version discovery independent of reaching
     /// an input-capture barrier.
     pub(crate) async fn connect(&self, handle: ClientHandle) {
-        if self.client_manager.active_addr(handle).is_some() {
+        if !self.client_manager.contains(handle)
+            || self.client_manager.active_addr(handle).is_some()
+        {
             return;
         }
 
         let mut connecting = self.connecting.lock().await;
-        if connecting.insert(handle) {
-            spawn_local(connect_to_handle(
-                self.client_manager.clone(),
-                self.cert.clone(),
-                handle,
-                self.conns.clone(),
-                self.connecting.clone(),
-                self.recv_tx.clone(),
-                self.ping_response.clone(),
-            ));
+        if !connecting.insert(handle) {
+            return;
         }
+        spawn_local(connect_to_handle(
+            self.client_manager.clone(),
+            self.cert.clone(),
+            handle,
+            self.conns.clone(),
+            self.peer_fingerprints.clone(),
+            self.connecting.clone(),
+            self.recv_tx.clone(),
+            self.ping_response.clone(),
+        ));
     }
 
     /// The peer has an authenticated transport, independently of whether
@@ -174,11 +185,20 @@ impl LanMouseConnection {
                 }
                 if let Err(e) = conn.send(&buf).await {
                     log::warn!("client {handle} failed to send: {e}");
-                    if disconnect(&self.client_manager, handle, addr, &conn, &self.conns).await {
+                    if let Some(fingerprint) = disconnect(
+                        &self.client_manager,
+                        handle,
+                        addr,
+                        &conn,
+                        &self.conns,
+                        &self.peer_fingerprints,
+                    )
+                    .await
+                    {
                         // Announce the dead transport exactly once so bound
                         // transfers are dropped instead of stalling.
                         self.recv_tx
-                            .send((handle, ProtoEvent::Pong(false)))
+                            .send((handle, fingerprint, ProtoEvent::Pong(false)))
                             .expect("channel closed");
                     }
                     self.connect(handle).await;
@@ -199,8 +219,9 @@ async fn connect_to_handle(
     cert: Certificate,
     handle: ClientHandle,
     conns: Rc<Mutex<HashMap<SocketAddr, Arc<dyn Conn + Send + Sync>>>>,
+    peer_fingerprints: Rc<Mutex<HashMap<SocketAddr, String>>>,
     connecting: Rc<Mutex<HashSet<ClientHandle>>>,
-    tx: Sender<(ClientHandle, ProtoEvent)>,
+    tx: Sender<(ClientHandle, String, ProtoEvent)>,
     ping_response: Rc<RefCell<HashSet<SocketAddr>>>,
 ) -> Result<(), LanMouseConnectionError> {
     log::info!("client {handle} connecting ...");
@@ -221,8 +242,29 @@ async fn connect_to_handle(
             }
         };
         log::info!("client ({handle}) connected @ {addr}");
-        client_manager.set_active_addr(handle, Some(addr));
-        conns.lock().await.insert(addr, conn.clone());
+        let Some(fingerprint) = peer_certificate_fingerprint(&conn).await else {
+            log::warn!("client ({handle}) @ {addr} did not present a peer certificate");
+            let _ = conn.close().await;
+            connecting.lock().await.remove(&handle);
+            return Err(LanMouseConnectionError::MissingPeerCertificate);
+        };
+        let retained = {
+            let mut connections = conns.lock().await;
+            let mut identities = peer_fingerprints.lock().await;
+            if client_manager.contains(handle) {
+                client_manager.set_active_addr(handle, Some(addr));
+                connections.insert(addr, conn.clone());
+                identities.insert(addr, fingerprint.clone());
+                true
+            } else {
+                false
+            }
+        };
+        if !retained {
+            let _ = conn.close().await;
+            connecting.lock().await.remove(&handle);
+            return Err(LanMouseConnectionError::NotConnected);
+        }
         connecting.lock().await.remove(&handle);
 
         // Best-effort version handshake. Send our commit hash once
@@ -248,6 +290,8 @@ async fn connect_to_handle(
             addr,
             conn,
             conns,
+            peer_fingerprints,
+            fingerprint,
             tx,
             ping_response.clone(),
         ));
@@ -285,32 +329,56 @@ async fn ping_pong(
     }
 }
 
+fn pong_is_edge(
+    client_manager: &ClientManager,
+    handle: ClientHandle,
+    addr: SocketAddr,
+    remote_ready: bool,
+) -> bool {
+    !client_manager.alive(handle)
+        || client_manager.remote_ready(handle) != remote_ready
+        || client_manager.active_addr(handle) != Some(addr)
+}
 async fn receive_loop(
     client_manager: ClientManager,
     handle: ClientHandle,
     addr: SocketAddr,
     conn: Arc<dyn Conn + Send + Sync>,
     conns: Rc<Mutex<HashMap<SocketAddr, Arc<dyn Conn + Send + Sync>>>>,
-    tx: Sender<(ClientHandle, ProtoEvent)>,
+    peer_fingerprints: Rc<Mutex<HashMap<SocketAddr, String>>>,
+    fingerprint: String,
+    tx: Sender<(ClientHandle, String, ProtoEvent)>,
     ping_response: Rc<RefCell<HashSet<SocketAddr>>>,
 ) {
     let mut buf = [0u8; MAX_DATAGRAM_SIZE];
     while let Ok(len) = conn.recv(&mut buf).await {
+        let current = conns
+            .lock()
+            .await
+            .get(&addr)
+            .is_some_and(|current| Arc::ptr_eq(current, &conn));
+        if !client_manager.contains(handle) || !current {
+            let _ = conn.close().await;
+            break;
+        }
         match ProtoEvent::decode(&buf[..len]) {
             Ok(event) => {
                 log::trace!("{addr} <==<==<== {event}");
                 match event {
                     ProtoEvent::Pong(remote_ready) => {
+                        let changed = pong_is_edge(&client_manager, handle, addr, remote_ready);
                         client_manager.set_active_addr(handle, Some(addr));
                         client_manager.set_alive(handle, true);
                         client_manager.set_remote_ready(handle, remote_ready);
                         ping_response.borrow_mut().insert(addr);
-                        log::info!(
-                            "peer state handle={handle} connected=true remote_ready={remote_ready} version_known={}",
-                            client_manager.peer_commit(handle).is_some()
-                        );
-                        tx.send((handle, ProtoEvent::Pong(remote_ready)))
-                            .expect("channel closed");
+                        if changed {
+                            log::info!(
+                                "peer state handle={handle} connected=true remote_ready={remote_ready} version_known={}",
+                                client_manager.peer_commit(handle).is_some()
+                            );
+                            tx.send((handle, fingerprint.clone(), ProtoEvent::Pong(remote_ready)))
+                                .expect("channel closed");
+                        }
                     }
                     ProtoEvent::Hello { commit } => {
                         client_manager.set_peer_commit(handle, Some(commit));
@@ -319,10 +387,12 @@ async fn receive_loop(
                             client_manager.alive(handle),
                             client_manager.remote_ready(handle)
                         );
-                        tx.send((handle, ProtoEvent::Hello { commit }))
+                        tx.send((handle, fingerprint.clone(), ProtoEvent::Hello { commit }))
                             .expect("channel closed");
                     }
-                    event => tx.send((handle, event)).expect("channel closed"),
+                    event => tx
+                        .send((handle, fingerprint.clone(), event))
+                        .expect("channel closed"),
                 }
             }
             // Skip undecodable datagrams without dropping the
@@ -336,13 +406,77 @@ async fn receive_loop(
     // Only the connection that is still current may tear down peer state:
     // a newer transport to the same address must not be invalidated by the
     // late exit of the one it replaced.
-    if disconnect(&client_manager, handle, addr, &conn, &conns).await {
+    if disconnect(
+        &client_manager,
+        handle,
+        addr,
+        &conn,
+        &conns,
+        &peer_fingerprints,
+    )
+    .await
+    .is_some()
+    {
         // Wake the capture state machine immediately when the transport
         // dies. Otherwise its last `remote_ready=true` could survive until
         // another unrelated event and leave a stale barrier active.
-        tx.send((handle, ProtoEvent::Pong(false)))
+        tx.send((handle, fingerprint, ProtoEvent::Pong(false)))
             .expect("channel closed");
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pong_edge_detects_state_and_endpoint_changes() {
+        let manager = ClientManager::default();
+        let handle = manager.add_client();
+        let first: SocketAddr = "192.0.2.10:5353".parse().unwrap();
+        let second: SocketAddr = "192.0.2.11:5353".parse().unwrap();
+
+        assert!(pong_is_edge(&manager, handle, first, true));
+        manager.set_active_addr(handle, Some(first));
+        manager.set_alive(handle, true);
+        manager.set_remote_ready(handle, true);
+        assert!(!pong_is_edge(&manager, handle, first, true));
+        assert!(pong_is_edge(&manager, handle, second, true));
+        assert!(pong_is_edge(&manager, handle, first, false));
+        manager.set_alive(handle, false);
+        assert!(pong_is_edge(&manager, handle, first, true));
+    }
+
+    #[tokio::test]
+    async fn queued_deleted_peer_events_never_reach_replacement_client() {
+        let manager = ClientManager::default();
+        let deleted = manager.add_client();
+        let certificate = Certificate::generate_self_signed(["test".to_owned()]).unwrap();
+        let mut connection = LanMouseConnection::new(certificate, manager.clone());
+        connection
+            .recv_tx
+            .send((deleted, "old-peer".into(), ProtoEvent::Pong(true)))
+            .unwrap();
+        manager.remove_client(deleted);
+        let replacement = manager.add_client();
+        connection
+            .recv_tx
+            .send((replacement, "new-peer".into(), ProtoEvent::Pong(false)))
+            .unwrap();
+        let (handle, fingerprint, event) = connection.recv().await;
+        assert_eq!(handle, replacement);
+        assert_eq!(fingerprint, "new-peer");
+        assert!(matches!(event, ProtoEvent::Pong(false)));
+    }
+}
+
+async fn peer_certificate_fingerprint(conn: &Arc<dyn Conn + Send + Sync>) -> Option<String> {
+    let dtls_conn: &DTLSConn = conn.as_any().downcast_ref()?;
+    let state = dtls_conn.connection_state().await;
+    state
+        .peer_certificates
+        .first()
+        .map(|cert| crypto::generate_fingerprint(cert))
 }
 
 async fn disconnect(
@@ -351,7 +485,8 @@ async fn disconnect(
     addr: SocketAddr,
     conn: &Arc<dyn Conn + Send + Sync>,
     conns: &Mutex<HashMap<SocketAddr, Arc<dyn Conn + Send + Sync>>>,
-) -> bool {
+    peer_fingerprints: &Mutex<HashMap<SocketAddr, String>>,
+) -> Option<String> {
     let mut conns = conns.lock().await;
     // A newer connection may already have replaced this one on the same
     // address. Cleaning up then would tear down the live transport.
@@ -359,7 +494,7 @@ async fn disconnect(
         Some(current) if Arc::ptr_eq(current, conn) => {}
         _ => {
             log::debug!("stale cleanup for {addr} ignored");
-            return false;
+            return None;
         }
     }
     log::warn!("client ({handle}) @ {addr} connection closed");
@@ -370,5 +505,5 @@ async fn disconnect(
     client_manager.set_peer_commit(handle, None);
     let active: Vec<SocketAddr> = conns.keys().copied().collect();
     log::info!("active connections: {active:?}");
-    true
+    peer_fingerprints.lock().await.remove(&addr)
 }

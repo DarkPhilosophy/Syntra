@@ -17,7 +17,7 @@ use toml;
 use toml_edit::{self, DocumentMut};
 
 use lan_mouse_cli::CliArgs;
-use lan_mouse_ipc::{ClipboardSettings, DEFAULT_PORT, Position};
+use lan_mouse_ipc::{ClipboardSettings, DEFAULT_PORT, FileReceiveSettings, Position};
 
 use input_event::scancode::{
     self,
@@ -43,6 +43,12 @@ pub fn local_commit() -> [u8; 8] {
 const CONFIG_FILE_NAME: &str = "config.toml";
 const CERT_FILE_NAME: &str = "lan-mouse.pem";
 
+#[cfg(target_os = "android")]
+fn default_path() -> Result<PathBuf, VarError> {
+    Err(VarError::NotPresent)
+}
+
+#[cfg(not(target_os = "android"))]
 fn default_path() -> Result<PathBuf, VarError> {
     #[cfg(unix)]
     let default_path = {
@@ -72,6 +78,14 @@ struct ConfigToml {
     clipboard_text: Option<bool>,
     clipboard_image: Option<bool>,
     clipboard_files: Option<bool>,
+    #[serde(default)]
+    file_receive: Option<FileReceiveToml>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+struct FileReceiveToml {
+    auto_accept: Option<bool>,
+    download_directory: Option<PathBuf>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, Eq, PartialEq)]
@@ -83,6 +97,8 @@ struct TomlClient {
     position: Option<Position>,
     activate_on_startup: Option<bool>,
     enter_hook: Option<String>,
+    #[serde(default)]
+    peer_fingerprint: Option<String>,
 }
 
 impl ConfigToml {
@@ -282,50 +298,37 @@ pub struct ConfigClient {
     pub pos: Position,
     pub active: bool,
     pub enter_hook: Option<String>,
+    pub peer_fingerprint: Option<String>,
 }
 
 impl From<TomlClient> for ConfigClient {
     fn from(toml: TomlClient) -> Self {
         let active = toml.activate_on_startup.unwrap_or(false);
-        let enter_hook = toml.enter_hook;
-        let hostname = toml.hostname;
-        let ips = HashSet::from_iter(toml.ips.into_iter().flatten());
-        let port = toml.port.unwrap_or(DEFAULT_PORT);
-        let pos = toml.position.unwrap_or_default();
         Self {
-            ips,
-            hostname,
-            port,
-            pos,
+            ips: HashSet::from_iter(toml.ips.into_iter().flatten()),
+            hostname: toml.hostname,
+            port: toml.port.unwrap_or(DEFAULT_PORT),
+            pos: toml.position.unwrap_or_default(),
             active,
-            enter_hook,
+            enter_hook: toml.enter_hook,
+            peer_fingerprint: toml.peer_fingerprint,
         }
     }
 }
 
 impl From<ConfigClient> for TomlClient {
     fn from(client: ConfigClient) -> Self {
-        let hostname = client.hostname;
-        let host_name = None;
         let mut ips = client.ips.into_iter().collect::<Vec<_>>();
         ips.sort();
-        let ips = Some(ips);
-        let port = if client.port == DEFAULT_PORT {
-            None
-        } else {
-            Some(client.port)
-        };
-        let position = Some(client.pos);
-        let activate_on_startup = if client.active { Some(true) } else { None };
-        let enter_hook = client.enter_hook;
         Self {
-            hostname,
-            host_name,
-            ips,
-            port,
-            position,
-            activate_on_startup,
-            enter_hook,
+            hostname: client.hostname,
+            host_name: None,
+            ips: Some(ips),
+            port: (client.port != DEFAULT_PORT).then_some(client.port),
+            position: Some(client.pos),
+            activate_on_startup: client.active.then_some(true),
+            enter_hook: client.enter_hook,
+            peer_fingerprint: client.peer_fingerprint,
         }
     }
 }
@@ -459,6 +462,11 @@ impl Config {
         &self.cert_path
     }
 
+    /// Daemon-owned application data directory.
+    pub fn app_data_dir(&self) -> &Path {
+        &self.config_dir
+    }
+
     /// optional input-capture backend override
     pub fn capture_backend(&self) -> Option<CaptureBackend> {
         self.args
@@ -492,7 +500,6 @@ impl Config {
         self.args.test_copyfile_e2e
     }
 
-
     pub fn clipboard_settings(&self) -> ClipboardSettings {
         let config = self.config_toml.as_ref();
         ClipboardSettings {
@@ -500,6 +507,46 @@ impl Config {
             image: config.and_then(|c| c.clipboard_image).unwrap_or(true),
             files: config.and_then(|c| c.clipboard_files).unwrap_or(true),
         }
+    }
+    pub fn file_receive_settings(&self) -> FileReceiveSettings {
+        let stored = self
+            .config_toml
+            .as_ref()
+            .and_then(|c| c.file_receive.as_ref());
+        let directory = stored
+            .and_then(|s| s.download_directory.clone())
+            .filter(|p| p.is_absolute())
+            .or_else(|| dirs::download_dir())
+            .or_else(|| dirs::home_dir().map(|p| p.join("Downloads")))
+            .unwrap_or_else(|| PathBuf::from("Downloads"));
+        FileReceiveSettings {
+            auto_accept: stored.and_then(|s| s.auto_accept).unwrap_or(false),
+            download_directory: directory,
+        }
+    }
+
+    pub fn set_file_receive_settings(&mut self, settings: &FileReceiveSettings) {
+        let config = self.config_toml.get_or_insert_with(Default::default);
+        config.file_receive = Some(FileReceiveToml {
+            auto_accept: Some(settings.auto_accept),
+            download_directory: Some(settings.download_directory.clone()),
+        });
+    }
+    /// Persist file receive settings atomically from the service's perspective.
+    ///
+    /// Restore the previous in-memory document if writing fails so callers can
+    /// safely report the error without retaining an unpersisted mutation.
+    pub fn persist_file_receive_settings(
+        &mut self,
+        settings: &FileReceiveSettings,
+    ) -> Result<(), io::Error> {
+        let previous = self.config_toml.clone();
+        self.set_file_receive_settings(settings);
+        if let Err(error) = self.write_back() {
+            self.config_toml = previous;
+            return Err(error);
+        }
+        Ok(())
     }
 
     pub fn set_clipboard_settings(&mut self, settings: ClipboardSettings) {

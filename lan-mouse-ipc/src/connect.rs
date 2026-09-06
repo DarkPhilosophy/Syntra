@@ -3,7 +3,7 @@ use std::{
     cmp::min,
     io::{self, BufReader, LineWriter, Lines, prelude::*},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[cfg(unix)]
@@ -46,7 +46,19 @@ impl FrontendRequestWriter {
 }
 
 pub fn connect() -> Result<(FrontendEventReader, FrontendRequestWriter), ConnectionError> {
-    let rx = wait_for_service()?;
+    connect_inner(None)
+}
+
+pub fn connect_with_timeout(
+    timeout: Duration,
+) -> Result<(FrontendEventReader, FrontendRequestWriter), ConnectionError> {
+    connect_inner(Some(timeout))
+}
+
+fn connect_inner(
+    timeout: Option<Duration>,
+) -> Result<(FrontendEventReader, FrontendRequestWriter), ConnectionError> {
+    let rx = wait_for_service(timeout)?;
     let tx = rx.try_clone()?;
     let buf_reader = BufReader::new(rx);
     let lines = buf_reader.lines();
@@ -58,27 +70,40 @@ pub fn connect() -> Result<(FrontendEventReader, FrontendRequestWriter), Connect
 
 /// wait for the lan-mouse socket to come online
 #[cfg(unix)]
-fn wait_for_service() -> Result<UnixStream, ConnectionError> {
+fn wait_for_service(timeout: Option<Duration>) -> Result<UnixStream, ConnectionError> {
     let socket_path = crate::default_socket_path()?;
-    let mut duration = Duration::from_millis(10);
-    loop {
-        if let Ok(stream) = UnixStream::connect(&socket_path) {
-            break Ok(stream);
-        }
-        // a signaling mechanism or inotify could be used to
-        // improve this
-        thread::sleep(exponential_back_off(&mut duration));
-    }
+    wait_for_service_with(timeout, || UnixStream::connect(&socket_path))
 }
 
 #[cfg(windows)]
-fn wait_for_service() -> Result<TcpStream, ConnectionError> {
-    let mut duration = Duration::from_millis(10);
+fn wait_for_service(timeout: Option<Duration>) -> Result<TcpStream, ConnectionError> {
+    wait_for_service_with(timeout, || TcpStream::connect("127.0.0.1:5252"))
+}
+
+fn wait_for_service_with<S>(
+    timeout: Option<Duration>,
+    mut connect: impl FnMut() -> io::Result<S>,
+) -> Result<S, ConnectionError> {
+    let started = Instant::now();
+    let mut backoff = Duration::from_millis(10);
     loop {
-        if let Ok(stream) = TcpStream::connect("127.0.0.1:5252") {
-            break Ok(stream);
+        if timeout.is_some_and(|limit| started.elapsed() >= limit) {
+            return Err(ConnectionError::Timeout);
         }
-        thread::sleep(exponential_back_off(&mut duration));
+        if let Ok(stream) = connect() {
+            return Ok(stream);
+        }
+
+        let delay = exponential_back_off(&mut backoff);
+        if let Some(timeout) = timeout {
+            let remaining = timeout.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                return Err(ConnectionError::Timeout);
+            }
+            thread::sleep(min(delay, remaining));
+        } else {
+            thread::sleep(delay);
+        }
     }
 }
 

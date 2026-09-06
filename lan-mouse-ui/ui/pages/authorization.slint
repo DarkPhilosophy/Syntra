@@ -1,0 +1,82 @@
+import { LineEdit, ScrollView } from "std-widgets.slint";
+import { Translations } from "../localization.slint";
+import { Theme } from "../theme.slint";
+import { AppButton } from "../components/controls.slint";
+
+export component AuthorizationPage inherits Rectangle {
+    in property <string> local-fingerprint;
+    in property <string> regenerated-fingerprint;
+    callback regenerate-identity();
+    private property <bool> confirm-regenerate: false;
+    in property <string> pending-fingerprint;
+    in property <[string]> authorized-keys;
+    callback authorize-key(string);
+    callback remove-authorized-key(string);
+    callback approve-connection(string);
+    private property <string> dismissed-fingerprint;
+    background: Theme.background;
+
+    ScrollView {
+        VerticalLayout {
+            padding: Theme.content-gap;
+            spacing: Theme.spacing;
+            alignment: start;
+            Text { text: Translations.tr("navigation-authorization"); color: Theme.text; font-size: Theme.title-size; vertical-stretch: 0; }
+            Text { text: Translations.tr("authorization-local-fingerprint"); color: Theme.muted-text; font-size: Theme.caption-size; vertical-stretch: 0; }
+            LineEdit { text: root.local-fingerprint; read-only: true; horizontal-stretch: 1; }
+            if root.regenerated-fingerprint != "": VerticalLayout {
+                spacing: Theme.small-spacing;
+                Text { text: Translations.tr("identity-regenerated"); color: Theme.warning; wrap: word-wrap; font-size: Theme.body-size; }
+                LineEdit { text: root.regenerated-fingerprint; read-only: true; }
+            }
+            if !root.confirm-regenerate && root.regenerated-fingerprint == "": AppButton {
+                text: Translations.tr("identity-regenerate");
+                danger: true;
+                clicked => { root.confirm-regenerate = true; }
+            }
+            if root.confirm-regenerate: VerticalLayout {
+                spacing: Theme.small-spacing;
+                Text { text: Translations.tr("identity-regenerate-warning"); color: Theme.warning; wrap: word-wrap; font-size: Theme.body-size; }
+                HorizontalLayout {
+                    alignment: start;
+                    spacing: Theme.small-spacing;
+                    AppButton { text: Translations.tr("identity-regenerate-confirm"); danger: true; clicked => { root.confirm-regenerate = false; root.regenerate-identity(); } }
+                    AppButton { text: Translations.tr("action-cancel"); clicked => { root.confirm-regenerate = false; } }
+                }
+            }
+            if root.pending-fingerprint != "" && root.pending-fingerprint != root.dismissed-fingerprint: Rectangle {
+                height: pending-content.preferred-height;
+                vertical-stretch: 0;
+                background: Theme.surface;
+                border-radius: Theme.corner-radius;
+                pending-content := VerticalLayout {
+                    padding: Theme.spacing; spacing: Theme.small-spacing;
+                    Text { text: Translations.tr("authorization-incoming"); color: Theme.warning; font-size: Theme.body-size; vertical-stretch: 0; }
+                    LineEdit { text: root.pending-fingerprint; read-only: true; horizontal-stretch: 1; }
+                    HorizontalLayout {
+                        alignment: start; spacing: Theme.small-spacing;
+                        AppButton { text: Translations.tr("authorization-approve"); primary: true; clicked => { root.approve-connection(root.pending-fingerprint); } }
+                        AppButton { text: Translations.tr("authorization-dismiss"); clicked => { root.dismissed-fingerprint = root.pending-fingerprint; } }
+                    }
+                }
+            }
+            Text { text: Translations.tr("authorization-authorized-keys"); color: Theme.text; font-size: Theme.body-size; font-weight: 600; vertical-stretch: 0; }
+            HorizontalLayout {
+                spacing: Theme.small-spacing; vertical-stretch: 0;
+                key-field := LineEdit { horizontal-stretch: 1; placeholder-text: Translations.tr("authorization-key-placeholder"); }
+                AppButton { text: Translations.tr("authorization-authorize"); enabled: key-field.text != ""; clicked => { root.authorize-key(key-field.text); } }
+            }
+            for key in root.authorized-keys: Rectangle {
+                height: key-content.preferred-height;
+                vertical-stretch: 0;
+                background: Theme.surface;
+                border-radius: Theme.small-radius;
+                key-content := HorizontalLayout {
+                    padding: Theme.spacing; spacing: Theme.small-spacing;
+                    LineEdit { text: key; read-only: true; horizontal-stretch: 1; }
+                    AppButton { text: Translations.tr("authorization-remove"); danger: true; clicked => { root.remove-authorized-key(key); } }
+                }
+            }
+        }
+    }
+}

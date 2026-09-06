@@ -1,0 +1,43 @@
+import { LineEdit } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { Translations } from "../localization.slint";
+import { AppButton, AppSwitch } from "controls.slint";
+
+export component FileReceiveSettingsControls inherits Rectangle {
+    in property <bool> known;
+    in property <bool> busy;
+    in property <bool> picker-busy;
+    in property <string> error-message;
+    in-out property <bool> auto-accept;
+    in-out property <string> directory;
+    in-out property <bool> dirty;
+    callback choose-directory();
+    callback save();
+    height: contents.preferred-height;
+    vertical-stretch: 0;
+    background: Theme.surface;
+    border-radius: Theme.corner-radius;
+    contents := VerticalLayout {
+        padding: Theme.spacing;
+        spacing: Theme.spacing;
+        Text { text: Translations.tr("manual-transfer-settings-title"); color: Theme.text; font-size: Theme.body-size; font-weight: 600; }
+        Text { text: Translations.tr("manual-transfer-settings-description"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
+        HorizontalLayout {
+            spacing: Theme.spacing;
+            Text { text: Translations.tr("manual-transfer-auto-accept"); color: Theme.text; font-size: Theme.body-size; horizontal-stretch: 1; vertical-alignment: center; wrap: word-wrap; }
+            AppSwitch { checked: root.auto-accept; enabled: root.known && !root.busy; a11y-label: Translations.tr("manual-transfer-auto-accept"); toggled(value) => { root.auto-accept = value; root.dirty = true; } }
+        }
+        Text { text: Translations.tr("manual-transfer-save-folder"); color: Theme.text; font-size: Theme.body-size; }
+        HorizontalLayout {
+            spacing: Theme.small-spacing;
+            LineEdit { text <=> root.directory; horizontal-stretch: 1; enabled: root.known && !root.busy && !root.picker-busy; edited(value) => { root.dirty = true; } }
+            AppButton { text: Translations.tr("manual-transfer-browse"); enabled: root.known && !root.busy && !root.picker-busy; clicked => { root.choose-directory(); } }
+        }
+        if root.error-message != "": Text { text: root.error-message; color: Theme.danger; font-size: Theme.caption-size; wrap: word-wrap; }
+        if !root.known && root.error-message == "": Text { text: Translations.tr("manual-transfer-service-offline"); color: Theme.warning; font-size: Theme.caption-size; wrap: word-wrap; }
+        HorizontalLayout {
+            Text { text: root.busy ? Translations.tr("manual-transfer-saving") : root.dirty ? Translations.tr("manual-transfer-unsaved") : ""; color: Theme.muted-text; font-size: Theme.caption-size; horizontal-stretch: 1; vertical-alignment: center; }
+            AppButton { text: Translations.tr("action-save"); primary: true; enabled: root.known && !root.busy && !root.picker-busy && root.dirty && root.directory != ""; clicked => { root.save(); } }
+        }
+    }
+}

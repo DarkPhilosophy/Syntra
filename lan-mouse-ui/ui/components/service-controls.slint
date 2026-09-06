@@ -1,0 +1,59 @@
+import { Theme } from "../theme.slint";
+import { Translations } from "../localization.slint";
+import { AppButton, AppSwitch } from "controls.slint";
+
+export component ServiceControls inherits Rectangle {
+    in property <bool> supported;
+    in property <bool> busy;
+    in property <bool> known;
+    in property <bool> installed;
+    in property <bool> running;
+    in property <bool> autostart;
+    in property <bool> connected;
+    in property <string> error;
+    in property <string> binary-path;
+    callback action(string);
+    private property <string> pending: "";
+    background: Theme.surface;
+    border-radius: Theme.corner-radius;
+    height: contents.preferred-height;
+    vertical-stretch: 0;
+    contents := VerticalLayout {
+        padding: Theme.spacing;
+        spacing: Theme.small-spacing;
+        Text { text: Translations.tr("service-title"); color: Theme.text; font-size: Theme.body-size; font-weight: 600; }
+        Text { text: Translations.tr("service-description"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
+        Text { text: Translations.tr("service-interface") + ": " + (root.connected ? Translations.tr("status-connected") : Translations.tr("label-offline")); color: Theme.text; font-size: Theme.body-size; }
+        if root.known : VerticalLayout {
+            spacing: Theme.small-spacing;
+            Text { text: Translations.tr("service-installation") + ": " + Translations.tr(root.installed ? "service-installed" : "service-not-installed"); color: Theme.text; font-size: Theme.body-size; }
+            Text { text: Translations.tr("service-process") + ": " + Translations.tr(root.running ? "service-running" : "service-stopped"); color: root.running ? Theme.success : Theme.muted-text; font-size: Theme.body-size; }
+            HorizontalLayout {
+                Text { text: Translations.tr("service-autostart"); color: Theme.text; font-size: Theme.body-size; horizontal-stretch: 1; vertical-alignment: center; }
+                AppSwitch { checked: root.autostart; enabled: root.installed && !root.busy; a11y-label: Translations.tr("service-autostart"); toggled(value) => { root.pending = value ? "enable" : "disable"; } }
+            }
+        }
+        if root.supported : HorizontalLayout {
+            spacing: Theme.small-spacing;
+            AppButton { text: Translations.tr("service-refresh"); enabled: !root.busy; clicked => { root.action("refresh"); } }
+            if root.known : AppButton { text: Translations.tr(root.installed ? "service-uninstall" : "service-install"); enabled: !root.busy && !root.running; clicked => { root.pending = root.installed ? "uninstall" : "install"; } }
+        }
+        if root.supported && root.known && root.installed : HorizontalLayout {
+            spacing: Theme.small-spacing;
+            AppButton { text: Translations.tr("service-start"); enabled: !root.busy && !root.running; clicked => { root.pending = "start"; } }
+            AppButton { text: Translations.tr("service-stop"); enabled: !root.busy && root.running; clicked => { root.pending = "stop"; } }
+        }
+        if !root.supported : Text { text: Translations.tr("service-unsupported"); color: Theme.muted-text; wrap: word-wrap; }
+        if root.error != "" : Text { text: root.error; color: Theme.danger; wrap: word-wrap; }
+        if root.pending != "" : VerticalLayout {
+            spacing: Theme.small-spacing;
+            Text { text: Translations.tr("service-confirm") + " " + Translations.tr("service-" + root.pending); color: Theme.warning; font-size: Theme.body-size; wrap: word-wrap; }
+            Text { text: root.pending == "install" ? root.binary-path : (root.pending == "start" && root.connected && !root.running ? Translations.tr("service-promote") : Translations.tr("service-impact")); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
+            HorizontalLayout {
+                spacing: Theme.small-spacing;
+                AppButton { text: Translations.tr("action-cancel"); clicked => { root.pending = ""; } }
+                AppButton { text: Translations.tr("action-confirm"); primary: true; enabled: !root.busy; clicked => { root.action(root.pending); root.pending = ""; } }
+            }
+        }
+    }
+}

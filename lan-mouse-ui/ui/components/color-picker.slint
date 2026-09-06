@@ -1,0 +1,75 @@
+import { Slider } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { Translations } from "../localization.slint";
+import { AppButton } from "controls.slint";
+
+export component ColorPicker inherits Rectangle {
+    in property <string> label;
+    in property <color> value;
+    callback selected(color);
+    callback reset();
+    private property <float> hue: 0;
+    private property <float> saturation: 1;
+    private property <float> brightness: 1;
+    private property <color> draft: hsv(hue, saturation, brightness);
+    height: picker-content.preferred-height;
+    vertical-stretch: 0;
+    background: transparent;
+    picker-content := VerticalLayout {
+        spacing: Theme.small-spacing;
+        HorizontalLayout {
+            spacing: Theme.small-spacing;
+            Text { text: root.label; color: Theme.text; font-size: Theme.body-size; horizontal-stretch: 1; vertical-alignment: center; }
+            Rectangle { width: Theme.control-height; height: Theme.control-height; background: root.value; border-width: 1px; border-color: Theme.border; border-radius: Theme.small-radius; }
+            AppButton { text: Translations.tr("action-edit"); clicked => {
+                root.hue = root.value.to-hsv().hue;
+                root.saturation = root.value.to-hsv().saturation;
+                root.brightness = root.value.to-hsv().value;
+                picker-popup.show();
+            } }
+            AppButton { text: Translations.tr("settings-titlebar-default"); clicked => { root.reset(); picker-popup.close(); } }
+        }
+    }
+    picker-popup := PopupWindow {
+        y: root.height;
+        width: 360px;
+        Rectangle {
+            background: Theme.surface;
+            border-color: Theme.border;
+            border-width: Theme.border-width;
+            border-radius: Theme.corner-radius;
+        }
+        VerticalLayout {
+            padding: Theme.spacing;
+            spacing: Theme.small-spacing;
+            Text { text: root.label; color: Theme.text; font-size: Theme.body-size; font-weight: 600; }
+            color-plane := Rectangle {
+                height: 180px;
+                background: @linear-gradient(90deg, #ffffff, hsv(root.hue, 1, 1));
+                border-radius: Theme.small-radius;
+                Rectangle { background: @linear-gradient(0deg, #000000, #00000000); border-radius: Theme.small-radius; }
+                Rectangle { x: root.saturation * (parent.width - self.width); y: (1 - root.brightness) * (parent.height - self.height); width: 14px; height: 14px; border-radius: 7px; border-width: 2px; border-color: white; background: root.draft; }
+                TouchArea {
+                    function update-color() {
+                        root.saturation = min(1, max(0, self.mouse-x / self.width));
+                        root.brightness = 1 - min(1, max(0, self.mouse-y / self.height));
+                    }
+                    changed pressed => { if self.pressed { self.update-color(); } }
+                    moved => { if self.pressed { self.update-color(); } }
+                }
+            }
+            Text { text: Translations.tr("color-hue"); color: Theme.muted-text; font-size: Theme.caption-size; vertical-stretch: 0; }
+            Slider { minimum: 0; maximum: 360; value: root.hue; changed(value) => { root.hue = value; } }
+            Text { text: Translations.tr("color-saturation"); color: Theme.muted-text; font-size: Theme.caption-size; vertical-stretch: 0; }
+            Slider { minimum: 0; maximum: 1; value: root.saturation; changed(value) => { root.saturation = value; } }
+            Text { text: Translations.tr("color-brightness"); color: Theme.muted-text; font-size: Theme.caption-size; vertical-stretch: 0; }
+            Slider { minimum: 0; maximum: 1; value: root.brightness; changed(value) => { root.brightness = value; } }
+            HorizontalLayout {
+                alignment: start; spacing: Theme.small-spacing;
+                Rectangle { width: Theme.control-height; height: Theme.control-height; background: root.draft; border-radius: Theme.small-radius; }
+                AppButton { text: Translations.tr("action-save"); primary: true; clicked => { root.selected(root.draft); picker-popup.close(); } }
+                AppButton { text: Translations.tr("action-cancel"); clicked => { picker-popup.close(); } }
+            }
+        }
+    }
+}

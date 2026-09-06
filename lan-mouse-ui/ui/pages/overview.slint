@@ -1,0 +1,131 @@
+import { Theme } from "../theme.slint";
+import { StatusPill } from "../components/status-pill.slint";
+import { AppButton } from "../components/controls.slint";
+import { ClientItem } from "../components/client-row.slint";
+import { SettingRow } from "../components/setting-row.slint";
+import { Translations } from "../localization.slint";
+import { ScrollView } from "std-widgets.slint";
+import { Avatar } from "../components/avatar.slint";
+
+export component OverviewPage inherits Rectangle {
+    in property <string> status-label;
+    in property <string> status-description;
+    in property <string> connected-label;
+    in property <string> connected-value;
+    in property <string> input-label;
+    in property <string> input-value;
+    in property <bool> connected;
+    in property <[ClientItem]> clients;
+    in property <bool> clipboard-text-enabled;
+    in property <bool> clipboard-image-enabled;
+    in property <bool> clipboard-files-enabled;
+    in property <bool> clipboard-files-supported;
+    in property <bool> service-known;
+    in property <bool> service-installed;
+    in property <bool> service-running;
+    in property <bool> input-sharing;
+    in property <bool> input-sharing-known;
+    in property <bool> capture-enabled;
+    in property <bool> emulation-enabled;
+    callback set-input-sharing(bool);
+    callback activate(string, bool);
+    callback toggle-text(bool);
+    callback toggle-image(bool);
+    callback toggle-files(bool);
+    background: Theme.background;
+
+    ScrollView {
+        VerticalLayout {
+            padding: Theme.content-gap;
+            spacing: Theme.spacing;
+            alignment: start;
+            Text { text: Translations.tr("navigation-overview"); color: Theme.text; font-size: Theme.title-size; vertical-stretch: 0; }
+            if root.status-description != "" : Text { text: root.status-description; color: Theme.muted-text; font-size: Theme.body-size; wrap: word-wrap; vertical-stretch: 0; }
+            Rectangle {
+                height: service-summary.preferred-height;
+                vertical-stretch: 0;
+                background: Theme.surface;
+                border-radius: Theme.corner-radius;
+                service-summary := HorizontalLayout {
+                    padding: Theme.spacing; spacing: Theme.spacing;
+                    Text { text: Translations.tr("overview-engine"); color: Theme.text; font-size: Theme.body-size; font-weight: 600; horizontal-stretch: 1; vertical-alignment: center; }
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 0;
+                    StatusPill {
+                        label: !root.connected ? Translations.tr("label-offline") : !root.input-sharing-known ? Translations.tr("status-pending") : !root.input-sharing ? Translations.tr("input-sharing-stopped") : root.capture-enabled && root.emulation-enabled ? Translations.tr("input-sharing-running") : Translations.tr("input-permissions-required");
+                        tone: root.connected && root.input-sharing && root.capture-enabled && root.emulation-enabled ? Theme.success : root.input-sharing ? Theme.warning : Theme.muted-text;
+                    }
+                    }
+                    AppButton {
+                        text: Translations.tr(root.input-sharing ? "action-stop" : "action-start");
+                        enabled: root.input-sharing-known;
+                        primary: !root.input-sharing;
+                        danger: root.input-sharing;
+                        clicked => { root.set-input-sharing(!root.input-sharing); }
+                    }
+                }
+            }
+            if root.connected && root.input-sharing && (!root.capture-enabled || !root.emulation-enabled): HorizontalLayout {
+                spacing: Theme.spacing;
+                Text {
+                    text: Translations.tr("input-permissions-description");
+                    color: Theme.warning; font-size: Theme.caption-size;
+                    wrap: word-wrap; horizontal-stretch: 1; vertical-alignment: center;
+                }
+                AppButton {
+                    text: Translations.tr("authorization-retry");
+                    clicked => { root.set-input-sharing(true); }
+                }
+            }
+            Text { text: Translations.tr("navigation-devices"); color: Theme.text; font-size: Theme.body-size; font-weight: 600; vertical-stretch: 0; }
+            peer-grid := Rectangle {
+                private property <int> columns: max(1, floor(self.width / (240px + Theme.spacing)));
+                private property <length> tile-size: min(280px, (self.width - (self.columns - 1) * Theme.spacing) / self.columns);
+                private property <length> tile-height: max(176px, Theme.control-height + 5 * Theme.body-size + 4 * Theme.small-spacing);
+                height: max(0px, ceil(root.clients.length / self.columns) * (self.tile-height + Theme.spacing) - Theme.spacing);
+                vertical-stretch: 0;
+            for device[index] in root.clients : Rectangle {
+                x: mod(index, peer-grid.columns) * (peer-grid.tile-size + Theme.spacing);
+                y: floor(index / peer-grid.columns) * (peer-grid.tile-height + Theme.spacing);
+                width: peer-grid.tile-size;
+                height: peer-grid.tile-height;
+                background: Theme.surface;
+                border-radius: Theme.corner-radius;
+                device-content := VerticalLayout {
+                    padding: Theme.spacing;
+                    spacing: Theme.small-spacing;
+                    alignment: start;
+                    HorizontalLayout {
+                        spacing: Theme.spacing;
+                        Avatar { source: device.custom-image; has-image: device.has-custom-image; size: Theme.control-height; }
+                        Text {
+                            text: device.display-name != "" ? device.display-name : device.hostname;
+                            color: Theme.text; font-size: Theme.body-size; font-weight: 600;
+                            horizontal-stretch: 1; vertical-alignment: center; overflow: elide;
+                        }
+                    }
+                    Text { text: device.hostname; color: Theme.muted-text; font-size: Theme.caption-size; overflow: elide; }
+                    Text { text: device.active-address != "" ? device.active-address : device.fixed-ips + ":" + device.port; color: Theme.muted-text; font-size: Theme.caption-size; overflow: elide; }
+                    HorizontalLayout {
+                        spacing: Theme.small-spacing;
+                        StatusPill {
+                            label: device.alive ? (device.remote-ready ? Translations.tr("label-ready") : Translations.tr("label-connected")) : Translations.tr("label-offline");
+                            tone: device.alive ? (device.remote-ready ? Theme.success : Theme.warning) : Theme.muted-text;
+                        }
+                        if device.fingerprint != "" : StatusPill {
+                            label: device.authorized ? Translations.tr("label-authorized") : Translations.tr("label-authorization-required");
+                            tone: device.authorized ? Theme.success : Theme.warning;
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                }
+            }
+            }
+            Text { text: Translations.tr("navigation-clipboard"); color: Theme.text; font-size: Theme.body-size; font-weight: 600; vertical-stretch: 0; }
+            SettingRow { title: Translations.tr("clipboard-text"); description: Translations.tr("clipboard-text-description"); enabled: root.clipboard-text-enabled; toggled(value) => { root.toggle-text(value); } }
+            SettingRow { title: Translations.tr("clipboard-images"); description: Translations.tr("clipboard-images-description"); enabled: root.clipboard-image-enabled; toggled(value) => { root.toggle-image(value); } }
+            SettingRow { title: Translations.tr("clipboard-files"); description: Translations.tr("clipboard-files-description"); interactive: root.clipboard-files-supported; enabled: root.clipboard-files-enabled; toggled(value) => { root.toggle-files(value); } }
+        }
+    }
+}

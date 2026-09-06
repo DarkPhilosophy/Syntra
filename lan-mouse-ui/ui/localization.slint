@@ -1,0 +1,8 @@
+export global Translations {
+    in-out property <string> locale: "en-US";
+    in-out property <int> revision: 0;
+    pure callback translate(string, int) -> string;
+    public pure function tr(key: string) -> string {
+        return root.translate(key, root.revision);
+    }
+}

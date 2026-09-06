@@ -1,0 +1,42 @@
+import { Theme } from "../theme.slint";
+
+export struct DiagnosticEntry {
+    timestamp: string,
+    level: string,
+    stage: string,
+    direction: string,
+    correlation: string,
+    message: string,
+}
+
+export global DiagnosticColumns {
+    out property <length> time-width: Theme.body-size * 19.5;
+    out property <length> level-width: Theme.body-size * 7.5;
+    out property <length> stage-width: Theme.body-size * 12;
+    out property <length> direction-width: Theme.body-size * 9;
+    out property <length> correlation-width: Theme.body-size * 15;
+    out property <length> fixed-width: time-width + level-width + stage-width + direction-width + correlation-width + Theme.small-spacing * 7;
+}
+
+export component DiagnosticRow inherits Rectangle {
+    in property <DiagnosticEntry> entry;
+    in property <bool> compact: false;
+    in property <bool> header: false;
+    height: max(compact || header ? 36px : 44px, Theme.body-size * 2 + Theme.small-spacing);
+    vertical-stretch: 0;
+    horizontal-stretch: 1;
+    background: header ? Theme.elevated-surface : entry.level == "error" ? Theme.danger.with-alpha(0.08) : entry.level == "warning" ? Theme.warning.with-alpha(0.06) : transparent;
+    Rectangle { y: parent.height - 1px; height: 1px; background: Theme.border; }
+    HorizontalLayout {
+        padding-left: Theme.small-spacing;
+        padding-right: Theme.small-spacing;
+        spacing: Theme.small-spacing;
+        alignment: start;
+        Text { width: DiagnosticColumns.time-width; text: entry.timestamp; color: Theme.muted-text; font-family: "monospace"; font-size: Theme.body-size; vertical-alignment: center; }
+        Text { width: DiagnosticColumns.level-width; text: entry.level; color: header ? Theme.muted-text : entry.level == "error" ? Theme.danger : entry.level == "warning" ? Theme.warning : Theme.accent; font-family: "monospace"; font-size: Theme.body-size; vertical-alignment: center; }
+        Text { width: DiagnosticColumns.stage-width; text: entry.stage; color: Theme.muted-text; font-family: "monospace"; font-size: Theme.body-size; vertical-alignment: center; overflow: elide; }
+        Text { width: DiagnosticColumns.direction-width; text: entry.direction; color: Theme.muted-text; font-family: "monospace"; font-size: Theme.body-size; vertical-alignment: center; }
+        Text { width: DiagnosticColumns.correlation-width; text: entry.correlation; color: Theme.muted-text; font-family: "monospace"; font-size: Theme.body-size; vertical-alignment: center; overflow: elide; }
+        Text { horizontal-stretch: 1; text: entry.message; color: header ? Theme.muted-text : Theme.text; font-family: "monospace"; font-size: Theme.body-size; vertical-alignment: center; }
+    }
+}

@@ -1,0 +1,226 @@
+import { Theme } from "../theme.slint";
+import { Translations } from "../localization.slint";
+
+import { ComboBox, LineEdit } from "std-widgets.slint";
+import { AppButton } from "controls.slint";
+import { StatusPill } from "status-pill.slint";
+import { Avatar } from "avatar.slint";
+
+export struct ClientItem {
+    handle: string,
+    identity-key: string,
+    display-name: string,
+    custom-image: image,
+    has-custom-image: bool,
+    hostname: string,
+    fixed-ips: string,
+    port: int,
+    position: int,
+    zone-index: int,
+    active: bool,
+    active-address: string,
+    alive: bool,
+    remote-ready: bool,
+    dns-ips: string,
+    ips: string,
+    has-pressed-keys: bool,
+    resolving: bool,
+    peer-commit: string,
+    fingerprint: string,
+    authorized: bool,
+}
+
+export component ClientRow inherits Rectangle {
+    in property <ClientItem> client;
+    in property <string> label-edit: Translations.tr("action-edit");
+    in property <string> label-save: Translations.tr("action-save");
+    in property <string> label-cancel: Translations.tr("action-cancel");
+    in property <string> label-delete: Translations.tr("action-delete");
+    in property <string> label-start: Translations.tr("action-start");
+    in property <string> label-stop: Translations.tr("action-stop");
+    in property <string> label-resolve-dns: Translations.tr("action-resolve-dns");
+    in property <string> label-active: Translations.tr("label-active");
+    in property <string> label-connected: Translations.tr("label-connected");
+    in property <string> label-ready: Translations.tr("label-ready");
+    in property <string> label-offline: Translations.tr("label-offline");
+    in property <string> label-resolving: Translations.tr("label-resolving");
+    in property <string> label-dns-resolved: Translations.tr("label-dns-resolved");
+    in property <string> label-dns-unresolved: Translations.tr("label-dns-unresolved");
+    in property <string> label-hostname: Translations.tr("label-hostname");
+    in property <string> label-ip-addresses: Translations.tr("label-ip-addresses");
+    in property <string> label-port: Translations.tr("label-port");
+    in property <string> label-position: Translations.tr("label-position");
+    in property <string> label-fingerprint: Translations.tr("label-fingerprint");
+    in property <string> label-authorized: Translations.tr("label-authorized");
+    in property <string> label-authorization-required: Translations.tr("label-authorization-required");
+    in property <[string]> position-options: [Translations.tr("position-left"), Translations.tr("position-right"), Translations.tr("position-top"), Translations.tr("position-bottom")];
+
+    callback activate(string, bool);
+    callback delete-client(string);
+    callback resolve-dns(string);
+    callback update-hostname(string, string);
+    callback update-display-name(string, string);
+    callback choose-display-image(string);
+    callback clear-display-image(string);
+    callback update-port(string, int);
+    callback update-position(string, int);
+    callback update-fixed-ips(string, string);
+    private property <string> draft-display-name: client.display-name;
+    callback authorize(string);
+
+    private property <bool> editing: false;
+    private property <string> draft-hostname: client.hostname;
+    private property <string> draft-fixed-ips: client.fixed-ips;
+    private property <string> draft-port: client.port > 0 ? "\{client.port}" : "";
+    private property <int> draft-position: client.position;
+
+    height: content.preferred-height;
+    vertical-stretch: 0;
+    background: Theme.surface;
+    border-radius: Theme.corner-radius;
+    border-color: client.active ? Theme.accent : Theme.elevated-surface;
+    border-width: 1px;
+
+    content := VerticalLayout {
+        padding: Theme.spacing;
+        spacing: 10px;
+        alignment: start;
+
+        HorizontalLayout {
+            spacing: 10px;
+            Avatar { source: client.custom-image; has-image: client.has-custom-image; size: Theme.control-height; }
+            Text {
+                horizontal-stretch: 1;
+                text: client.display-name != "" ? client.display-name : (client.hostname != "" ? client.hostname : "#\{client.handle}");
+                color: Theme.text;
+                font-size: Theme.body-size;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            StatusPill {
+                label: client.alive ? (client.remote-ready ? root.label-ready : root.label-connected) : root.label-offline;
+                tone: client.alive ? (client.remote-ready ? Theme.success : Theme.warning) : Theme.muted-text;
+            }
+            AppButton {
+                text: client.active ? root.label-stop : root.label-start;
+                enabled: !root.editing;
+                clicked => { root.activate(client.handle, !client.active); }
+            }
+            AppButton {
+                text: root.editing ? root.label-cancel : root.label-edit;
+                clicked => {
+                    if (root.editing) {
+                        root.draft-hostname = client.hostname;
+                        root.draft-fixed-ips = client.fixed-ips;
+                        root.draft-port = client.port > 0 ? "\{client.port}" : "";
+                        root.draft-position = client.position;
+                    } else {
+                        root.draft-hostname = client.hostname;
+                        root.draft-fixed-ips = client.fixed-ips;
+                        root.draft-port = client.port > 0 ? "\{client.port}" : "";
+                        root.draft-position = client.position;
+                    }
+                    root.editing = !root.editing;
+                }
+            }
+            AppButton {
+                text: root.label-delete;
+                enabled: !root.editing;
+                clicked => { root.delete-client(client.handle); }
+            }
+        }
+        if !root.editing : Text {
+            text: client.hostname;
+            color: Theme.muted-text;
+            font-size: Theme.caption-size;
+            overflow: elide;
+            vertical-stretch: 0;
+        }
+
+        if !root.editing : HorizontalLayout {
+            spacing: Theme.spacing;
+            Text {
+                horizontal-stretch: 1;
+                text: client.active-address != "" ? client.active-address : (client.ips != "" ? client.ips : client.fixed-ips);
+                color: Theme.muted-text;
+                font-size: Theme.body-size;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+            StatusPill {
+                label: client.resolving ? root.label-resolving : (client.dns-ips != "" ? root.label-dns-resolved : root.label-dns-unresolved);
+                tone: client.resolving ? Theme.warning : (client.dns-ips != "" ? Theme.success : Theme.muted-text);
+            }
+            AppButton {
+                text: root.label-resolve-dns;
+                enabled: !client.resolving && client.hostname != "";
+                clicked => { root.resolve-dns(client.handle); }
+            }
+        }
+
+        if !root.editing && client.fingerprint != "" : HorizontalLayout {
+            spacing: 10px;
+            Text { text: root.label-fingerprint + ":"; color: Theme.muted-text; font-size: Theme.body-size; vertical-alignment: center; }
+            Text { horizontal-stretch: 1; text: client.fingerprint; color: Theme.text; font-size: Theme.body-size; overflow: elide; vertical-alignment: center; }
+            StatusPill {
+                label: client.authorized ? root.label-authorized : root.label-authorization-required;
+                tone: client.authorized ? Theme.success : Theme.warning;
+            }
+            AppButton {
+                visible: !client.authorized;
+                text: root.label-authorized;
+                clicked => { root.authorize(client.fingerprint); }
+            }
+        }
+
+        if root.editing : VerticalLayout {
+            spacing: 8px;
+            HorizontalLayout {
+                spacing: 10px;
+                Text { width: 110px; text: root.label-hostname; color: Theme.muted-text; vertical-alignment: center; }
+                LineEdit { horizontal-stretch: 1; text <=> root.draft-hostname; }
+            }
+            HorizontalLayout {
+                spacing: 10px;
+                Text { width: 110px; text: Translations.tr("label-display-name"); color: Theme.muted-text; vertical-alignment: center; }
+                LineEdit { horizontal-stretch: 1; text <=> root.draft-display-name; enabled: client.identity-key != ""; }
+            }
+            HorizontalLayout {
+                spacing: 10px;
+                AppButton { text: Translations.tr("device-image-peer"); a11y-label: Translations.tr("device-image-peer") + ": " + client.display-name; enabled: client.identity-key != ""; clicked => { root.choose-display-image(client.identity-key); } }
+                AppButton { text: Translations.tr("label-remove-image"); enabled: client.has-custom-image; clicked => { root.clear-display-image(client.identity-key); } }
+            }
+            HorizontalLayout {
+                spacing: 10px;
+                Text { width: 110px; text: root.label-ip-addresses; color: Theme.muted-text; vertical-alignment: center; }
+                LineEdit { horizontal-stretch: 1; text <=> root.draft-fixed-ips; }
+            }
+            HorizontalLayout {
+                spacing: 10px;
+                Text { width: 110px; text: root.label-port; color: Theme.muted-text; vertical-alignment: center; }
+                LineEdit { width: 140px; input-type: number; text <=> root.draft-port; }
+                Text { width: 110px; text: root.label-position; color: Theme.muted-text; vertical-alignment: center; }
+                ComboBox {
+                    horizontal-stretch: 1;
+                    model: root.position-options;
+                    current-index <=> root.draft-position;
+                }
+            }
+            HorizontalLayout {
+                alignment: end;
+                AppButton {
+                    text: root.label-save;
+                    enabled: root.draft-port.to-float() >= 1 && root.draft-port.to-float() <= 65535;
+                    clicked => {
+                        root.update-display-name(client.identity-key, root.draft-display-name);
+                        root.update-hostname(client.handle, root.draft-hostname);
+                        root.update-fixed-ips(client.handle, root.draft-fixed-ips);
+                        root.update-port(client.handle, root.draft-port.to-float());
+                        root.update-position(client.handle, root.draft-position);
+                        root.editing = false;
+                    }
+                }
+            }
+        }
+    }
+}

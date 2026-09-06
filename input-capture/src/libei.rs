@@ -436,10 +436,7 @@ async fn do_capture(
     }
 }
 
-const FILE_CLIPBOARD_MIME_TYPES: [&str; 2] = [
-    "x-special/gnome-copied-files",
-    "text/uri-list",
-];
+const FILE_CLIPBOARD_MIME_TYPES: [&str; 2] = ["x-special/gnome-copied-files", "text/uri-list"];
 const MAX_FILE_CLIPBOARD_BYTES: u64 = 1024 * 1024;
 
 async fn read_portal_file_clipboard(
@@ -775,7 +772,7 @@ async fn handle_ei_event(
     Ok(())
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl LanMouseInputCapture for LibeiInputCapture {
     async fn create(&mut self, pos: Position) -> Result<(), CaptureError> {
         let _ = self

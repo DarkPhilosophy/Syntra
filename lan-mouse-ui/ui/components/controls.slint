@@ -1,0 +1,44 @@
+import { Theme } from "../theme.slint";
+
+export component AppButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    in property <bool> danger: false;
+    in property <bool> primary: false;
+    in property <string> a11y-label: text;
+    callback clicked();
+    min-width: max(72px, label.preferred-width + 2 * Theme.control-padding);
+    height: Theme.control-height;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    border-radius: Theme.small-radius;
+    border-width: Theme.border-width;
+    border-color: focus-scope.has-focus ? Theme.accent : root.danger ? Theme.danger.with-alpha(0.5) : Theme.border;
+    background: !root.enabled ? Theme.surface : root.danger ? Theme.danger.with-alpha(touch-area.pressed ? 0.25 : touch-area.has-hover ? 0.2 : 0.12) : root.primary ? (touch-area.pressed ? Theme.accent.darker(0.2) : touch-area.has-hover ? Theme.accent.darker(0.12) : Theme.accent) : touch-area.pressed ? Theme.pressed-surface : touch-area.has-hover ? Theme.hover-surface : Theme.elevated-surface;
+    opacity: root.enabled ? 1 : 0.5;
+    animate background, border-color, opacity { duration: Theme.motion-enabled ? Theme.motion-fast : 0ms; easing: ease-out; }
+    accessible-role: button;
+    accessible-enabled: root.enabled;
+    accessible-label: root.a11y-label;
+    accessible-action-default => { root.activate(); }
+    forward-focus: focus-scope;
+    function activate() { if (root.enabled) { root.clicked(); } }
+    label := Text { x: Theme.control-padding; width: parent.width - 2 * Theme.control-padding; height: parent.height; text: root.text; color: root.primary ? Theme.on-accent : root.danger ? Theme.danger : Theme.text; font-size: Theme.body-size; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
+    touch-area := TouchArea { enabled: root.enabled; clicked => { focus-scope.focus(); root.activate(); } }
+    focus-scope := FocusScope { x: 0px; width: 0px; enabled: root.enabled; key-pressed(event) => { if (event.text == " " || event.text == "\n") { root.activate(); return accept; } return reject; } }
+}
+
+export component AppSwitch inherits Rectangle {
+    in-out property <bool> checked;
+    in property <bool> enabled: true;
+    in property <string> a11y-label;
+    callback toggled(bool);
+    width: 44px; height: Theme.hit-area; horizontal-stretch: 0; vertical-stretch: 0;
+    accessible-role: switch; accessible-enabled: root.enabled; accessible-label: root.a11y-label; accessible-checkable: true; accessible-checked <=> root.checked; accessible-action-default => { root.toggle(); }; forward-focus: focus-scope;
+    function toggle() { if (root.enabled) { root.toggled(!root.checked); } }
+    rail := Rectangle { x: 2px; y: (parent.height - self.height) / 2; width: 40px; height: 22px; border-radius: self.height / 2; border-width: focus-scope.has-focus ? Theme.focus-ring-width : Theme.border-width; border-color: focus-scope.has-focus ? Theme.accent : Theme.border; background: root.checked ? Theme.accent : touch-area.pressed ? Theme.pressed-surface : touch-area.has-hover ? Theme.hover-surface : Theme.elevated-surface; opacity: root.enabled ? 1 : 0.5; animate background, border-color, opacity { duration: Theme.motion-enabled ? Theme.motion-fast : 0ms; easing: ease-out; }
+        thumb := Rectangle { x: root.checked ? parent.width - self.width - 3px : 3px; y: (parent.height - self.height) / 2; width: 16px; height: 16px; border-radius: self.height / 2; background: root.checked ? Theme.on-accent : Theme.muted-text; animate x, background { duration: Theme.motion-enabled ? Theme.motion-fast : 0ms; easing: ease-out; } }
+    }
+    touch-area := TouchArea { enabled: root.enabled; clicked => { focus-scope.focus(); root.toggle(); } }
+    focus-scope := FocusScope { x: 0px; width: 0px; enabled: root.enabled; key-pressed(event) => { if (event.text == " " || event.text == "\n") { root.toggle(); return accept; } return reject; } }
+}

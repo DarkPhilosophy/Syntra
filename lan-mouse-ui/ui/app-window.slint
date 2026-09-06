@@ -1,0 +1,343 @@
+import { AppState } from "app-state.slint";
+import { Translations } from "localization.slint";
+import { Theme } from "theme.slint";
+export { AppState, Translations, Theme }
+import { TitleBar } from "components/titlebar.slint";
+import { OverviewPage } from "pages/overview.slint";
+import { InputPage } from "pages/input.slint";
+import { DevicesPage } from "pages/devices.slint";
+import { ClipboardPage } from "pages/clipboard.slint";
+import { HistoryPage } from "pages/history.slint";
+import { TransfersPage } from "pages/transfers.slint";
+import { DiagnosticsPage } from "pages/diagnostics.slint";
+import { SettingsPage } from "pages/settings.slint";
+import { AuthorizationPage } from "pages/authorization.slint";
+import { WelcomeOverlay } from "components/welcome.slint";
+import { Palette, ScrollView } from "std-widgets.slint";
+import { Avatar, AvatarRenderer } from "components/avatar.slint";
+import { IncomingFileDialog } from "components/incoming-file-dialog.slint";
+export { AvatarRenderer }
+
+export component AppWindow inherits Window {
+    init => {
+        Palette.color-scheme = Theme.base-mode == "white" ? ColorScheme.light : ColorScheme.dark;
+    }
+    title: Translations.tr("app-title");
+    icon: @image-url("assets/shell/syntra.svg");
+    no-frame: true;
+    resize-border-width: 6px;
+    preferred-width: Theme.window-preferred-width;
+    preferred-height: Theme.window-preferred-height;
+    min-width: Theme.window-min-width;
+    min-height: Theme.window-min-height;
+    background: Theme.background;
+    in-out property <string> selected-page: "overview";
+    in-out property <bool> sidebar-expanded: true;
+    in-out property <bool> window-maximized: false;
+    in-out property <bool> hide-to-tray-enabled: false;
+    in-out property <string> local-device-name: "";
+    in-out property <image> local-device-image;
+    in-out property <bool> has-local-device-image: false;
+    in-out property <bool> launch-visible: true;
+    in-out property <bool> launch-ready: false;
+    callback navigate(string);
+    callback toggle-sidebar();
+    callback hide-to-tray();
+    callback minimize-window();
+    callback toggle-maximize-window();
+    callback close-window();
+    callback update-display-name(string, string);
+    callback choose-display-image(string);
+    callback clear-display-image(string);
+    callback update-local-name(string);
+    callback choose-local-image();
+    callback clear-local-image();
+    callback local-profile-changed();
+    callback begin-window-drag();
+    property <length> rail-width: sidebar-expanded ? Theme.sidebar-expanded-width : Theme.sidebar-collapsed-width;
+
+    VerticalLayout {
+        spacing: 0;
+        TitleBar {
+            horizontal-stretch: 1;
+            maximized: root.window-maximized;
+            hide-to-tray-enabled: root.hide-to-tray-enabled;
+            sidebar-expanded: root.sidebar-expanded;
+            toggle-sidebar => { root.toggle-sidebar(); }
+            hide-to-tray => { root.hide-to-tray(); }
+            minimize-window => { root.minimize-window(); }
+            toggle-maximize-window => { root.toggle-maximize-window(); }
+            close-window => { root.close-window(); }
+            begin-window-drag => { root.begin-window-drag(); }
+        }
+        HorizontalLayout {
+            spacing: 0;
+            Rectangle {
+                width: rail-width;
+                clip: true;
+                background: Theme.sidebar;
+                animate width { duration: Theme.motion-enabled ? Theme.motion-normal : 0ms; }
+                Rectangle {
+                    x: 0;
+                    y: 0;
+                    clip: true;
+                    width: parent.width;
+                    height: max(0px, parent.height - profile.height - 2 * Theme.small-spacing);
+                    ScrollView {
+                        x: 0;
+                        y: 0;
+                        width: parent.width;
+                        height: parent.height;
+                    VerticalLayout {
+                    alignment: start;
+                    padding: Theme.small-spacing;
+                    spacing: Theme.small-spacing;
+                    for item[index] in [
+                        { id: "overview", icon: @image-url("assets/navigation/overview.svg"), label: Translations.tr("navigation-overview") },
+                        { id: "devices", icon: @image-url("assets/navigation/devices.svg"), label: Translations.tr("navigation-devices") },
+                        { id: "input", icon: @image-url("assets/navigation/input.svg"), label: Translations.tr("navigation-input") },
+                        { id: "clipboard", icon: @image-url("assets/navigation/clipboard.svg"), label: Translations.tr("navigation-clipboard") },
+                        { id: "history", icon: @image-url("assets/navigation/history.svg"), label: Translations.tr("history-title") },
+                        { id: "transfers", icon: @image-url("assets/navigation/transfers.svg"), label: Translations.tr("navigation-transfers") },
+                        { id: "diagnostics", icon: @image-url("assets/navigation/diagnostics.svg"), label: Translations.tr("navigation-diagnostics") },
+                        { id: "authorization", icon: @image-url("assets/navigation/authorization.svg"), label: Translations.tr("navigation-authorization") },
+                        { id: "settings", icon: @image-url("assets/navigation/settings.svg"), label: Translations.tr("navigation-settings") }
+                    ]: Rectangle {
+                        height: Theme.nav-item-height;
+                        vertical-stretch: 0;
+                        accessible-role: button;
+                        accessible-label: item.label;
+                        background: selected-page == item.id ? Theme.accent.with-alpha(0.18) : (nav-touch.has-hover ? Theme.text.with-alpha(0.06) : transparent);
+                        border-radius: Theme.small-radius;
+                        Image { source: item.icon; colorize: selected-page == item.id ? Theme.accent : Theme.muted-text; width: 28px; height: 28px; x: 12px; y: (parent.height - self.height) / 2; image-fit: contain; }
+                        Text { text: item.label; visible: sidebar-expanded; color: selected-page == item.id ? Theme.text : Theme.muted-text; font-size: Theme.body-size; x: 52px; width: max(0px, parent.width - self.x - 8px); vertical-alignment: center; overflow: elide; }
+                        nav-touch := TouchArea { clicked => { selected-page = item.id; root.navigate(item.id); } }
+                    }
+                }
+                }
+                }
+                profile := Rectangle {
+                    x: Theme.small-spacing;
+                    y: parent.height - self.height - Theme.small-spacing;
+                    width: parent.width - 2 * Theme.small-spacing;
+                    height: max(64px, Theme.control-height + 2 * Theme.small-spacing);
+                    background: Theme.surface;
+                    border-radius: Theme.small-radius;
+                    Avatar { source: root.local-device-image; has-image: root.has-local-device-image; size: 40px; height: parent.height; x: 8px; }
+                    if root.sidebar-expanded: Text {
+                        x: 60px; width: max(0px, parent.width - self.x - 8px); height: parent.height;
+                        text: root.local-device-name; color: Theme.text; font-size: Theme.body-size;
+                        vertical-alignment: center; overflow: elide;
+                    }
+                    TouchArea { clicked => { root.selected-page = "devices"; root.navigate("devices"); } }
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+                background: Theme.background;
+                if selected-page == "history": HistoryPage {
+                    records: AppState.history-records;
+                    query: AppState.history-query;
+                    busy: AppState.history-busy;
+                    has-more: AppState.history-has-more;
+                    load-more => { AppState.history-load-more(); }
+                    connected: AppState.connected;
+                    error-message: AppState.history-error;
+                    operation-status: AppState.history-status;
+                    search(query) => { AppState.history-search(query); }
+                    refresh => { AppState.history-refresh(); }
+                    pin(origin, sequence, pinned) => { AppState.history-pin(origin, sequence, pinned); }
+                    clear-global => { AppState.history-clear-global(); }
+                }
+                if selected-page == "overview": OverviewPage {
+                    connected: AppState.connected;
+                    input-sharing: AppState.input-sharing;
+                    input-sharing-known: AppState.input-sharing-known;
+                    capture-enabled: AppState.capture-enabled;
+                    emulation-enabled: AppState.emulation-enabled;
+                    set-input-sharing(enabled) => { AppState.set-input-sharing(enabled); }
+                    clients: AppState.clients;
+                    service-known: AppState.service-known;
+                    service-installed: AppState.service-installed;
+                    service-running: AppState.service-running;
+                    clipboard-text-enabled: AppState.clipboard-text-enabled;
+                    clipboard-image-enabled: AppState.clipboard-image-enabled;
+                    clipboard-files-enabled: AppState.clipboard-files-enabled;
+                    clipboard-files-supported: AppState.clipboard-files-supported;
+                    activate(handle, enabled) => { AppState.activate-client(handle, enabled); }
+                    toggle-text(enabled) => { AppState.set-clipboard-text(enabled); }
+                    toggle-image(enabled) => { AppState.set-clipboard-image(enabled); }
+                    toggle-files(enabled) => { AppState.set-clipboard-files(enabled); }
+                }
+                if selected-page == "input": InputPage {
+                    capture-enabled: AppState.capture-enabled;
+                    emulation-enabled: AppState.emulation-enabled;
+                    capture-supported: AppState.capture-supported;
+                    emulation-supported: AppState.emulation-supported;
+                    enable-capture => { AppState.enable-capture(); }
+                    enable-emulation => { AppState.enable-emulation(); }
+                }
+                if selected-page == "clipboard": ClipboardPage {
+                    text-enabled: AppState.clipboard-text-enabled;
+                    image-enabled: AppState.clipboard-image-enabled;
+                    files-enabled: AppState.clipboard-files-enabled;
+                    files-supported: AppState.clipboard-files-supported;
+                    flatpak-applications: AppState.flatpak-applications;
+                    flatpak-applications-loading: AppState.flatpak-applications-loading;
+                    flatpak-applications-error: AppState.flatpak-applications-error;
+                    search: AppState.flatpak-search;
+                    search-changed(query) => { AppState.search-flatpak-apps(query); }
+                    status-message: AppState.flatpak-grant-status;
+                    refresh-flatpak-apps => { AppState.refresh-flatpak-apps(); }
+                    grant-flatpak-access(application-id) => { AppState.grant-flatpak-access(application-id); }
+                    text-toggled(value) => { AppState.set-clipboard-text(value); }
+                    image-toggled(value) => { AppState.set-clipboard-image(value); }
+                    files-toggled(value) => { AppState.set-clipboard-files(value); }
+                }
+                if selected-page == "devices": DevicesPage {
+                    clients: AppState.clients;
+                    peer-zone-depth: AppState.peer-zone-depth;
+                    discovered-peers: AppState.discovered-peers;
+                    discover-peers => { AppState.discover-peers(); }
+                    local-name: root.local-device-name;
+                    local-image: root.local-device-image;
+                    has-local-image: root.has-local-device-image;
+                    update-local-name(n) => { root.update-local-name(n); }
+                    choose-local-image => { root.choose-local-image(); }
+                    clear-local-image => { root.clear-local-image(); }
+                    add-client => { AppState.create-client(); }
+                    activate(h, v) => { AppState.activate-client(h, v); }
+                    delete-client(h) => { AppState.delete-client(h); }
+                    resolve-dns(h) => { AppState.resolve-dns(h); }
+                    update-hostname(h, v) => { AppState.update-hostname(h, v); }
+                    update-display-name(k, n) => { root.update-display-name(k, n); }
+                    choose-display-image(k) => { root.choose-display-image(k); }
+                    clear-display-image(k) => { root.clear-display-image(k); }
+                    update-port(h, v) => { AppState.update-port(h, v); }
+                    update-position(h, v) => { AppState.update-position(h, v); }
+                    update-fixed-ips(h, v) => { AppState.update-fixed-ips(h, v); }
+                    authorize(key) => { AppState.authorize-key(key, key); }
+                }
+                if selected-page == "transfers": TransfersPage {
+                    active-transfers: AppState.active-transfers;
+                    completed-transfers: AppState.completed-transfers;
+                    cancelled-transfers: AppState.cancelled-transfers;
+                    failed-transfers: AppState.failed-transfers;
+                    peers: AppState.transfer-peers;
+                    connected: AppState.connected;
+                    error-message: AppState.manual-transfer-error;
+                    picker-busy: AppState.manual-picker-busy;
+                    native-drop-supported: AppState.manual-drop-supported;
+                    bounds-generation: AppState.manual-drop-generation;
+                    hovered-peer: AppState.manual-hover-peer;
+                    choose-files(peer) => { AppState.choose-manual-files(peer); }
+                    cancel-manual(peer, id) => { AppState.cancel-manual-transfer(peer, id); }
+                    report-drop-bounds(peer, x, y, width, height) => { AppState.register-manual-drop-target(peer, x, y, width, height); }
+                    report-drop-viewport(x, y, width, height) => { AppState.register-manual-drop-viewport(x, y, width, height); }
+                    cancel-transfer(t, f) => { AppState.cancel-transfer(t); }
+                    retry => { AppState.synchronize(); }
+                }
+                if selected-page == "diagnostics": DiagnosticsPage {
+                    entries: AppState.diagnostics;
+                    message-columns: AppState.diagnostics-message-columns;
+                    selected-level: AppState.diagnostics-level;
+                    selected-stage: AppState.diagnostics-stage;
+                    selected-direction: AppState.diagnostics-direction;
+                    text-filter: AppState.diagnostics-text;
+                    paused: AppState.diagnostics-paused;
+                    level-filter-changed(v) => { AppState.diagnostics-level-changed(v); }
+                    stage-filter-changed(v) => { AppState.diagnostics-stage-changed(v); }
+                    direction-filter-changed(v) => { AppState.diagnostics-direction-changed(v); }
+                    text-filter-changed(v) => { AppState.diagnostics-text-changed(v); }
+                    pause-toggled(v) => { AppState.diagnostics-pause(v); }
+                    clear-requested => { AppState.diagnostics-clear(); }
+                }
+                if selected-page == "settings": SettingsPage {
+                    file-receive-known: AppState.file-receive-known;
+                    file-receive-busy: AppState.file-receive-busy;
+                    file-receive-picker-busy: AppState.file-receive-picker-busy;
+                    file-receive-error: AppState.file-receive-error;
+                    file-auto-accept <=> AppState.file-receive-auto-accept;
+                    download-directory <=> AppState.file-receive-directory;
+                    file-receive-dirty <=> AppState.file-receive-dirty;
+                    choose-download-directory => { AppState.choose-download-directory(); }
+                    save-file-receive-settings => { AppState.save-file-receive-settings(); }
+                    service-supported: AppState.service-supported;
+                    service-busy: AppState.service-busy;
+                    service-known: AppState.service-known;
+                    service-installed: AppState.service-installed;
+                    service-running: AppState.service-running;
+                    service-autostart: AppState.service-autostart;
+                    backend-connected: AppState.connected;
+                    service-error: AppState.service-error;
+                    service-binary-path: AppState.service-binary-path;
+                    service-action(value) => { AppState.service-action(value); }
+                    update-repository: AppState.update-repository;
+                    update-automatic-check: AppState.update-automatic-check;
+                    update-busy: AppState.update-busy;
+                    update-status: AppState.update-status;
+                    configure-updates(value) => { AppState.configure-updates(value); }
+                    set-automatic-update-check(value) => { AppState.set-automatic-update-check(value); }
+                    check-updates => { AppState.check-updates(); }
+                    locale: AppState.locale;
+                    locale-options: AppState.locale-options;
+                    language-import-supported: AppState.language-import-supported;
+                    import-language => { AppState.import-language(); }
+                    base-mode: AppState.base-mode;
+                    palette: AppState.palette;
+                    density: AppState.density;
+                    reduced-motion: AppState.reduced-motion;
+                    zoom-percent: AppState.zoom-percent;
+                    change-zoom(value) => { AppState.change-zoom(value); }
+                    locale-changed(v) => { AppState.change-locale(v); }
+                    change-base-mode(v) => { AppState.change-base-mode(v); }
+                    change-palette(v) => { AppState.change-palette(v); }
+                    change-accent-color(value) => { AppState.change-accent-color(value); }
+                    change-titlebar-color-value(value) => { AppState.change-titlebar-color-value(value); }
+                    reset-accent => { AppState.change-accent(""); }
+                    reset-titlebar => { AppState.change-titlebar-color(""); }
+                    change-density(v) => { AppState.change-density(v); }
+                    change-reduced-motion(v) => { AppState.change-reduced-motion(v); }
+                    port: "\{AppState.listen-port}";
+                    port-changed(value) => { AppState.change-port(round(value.to-float())); }
+                    save-requested => { AppState.save-configuration(); }
+                }
+                if selected-page == "authorization": AuthorizationPage {
+                    local-fingerprint: AppState.local-fingerprint;
+                    regenerated-fingerprint: AppState.regenerated-fingerprint;
+                    regenerate-identity => { AppState.regenerate-identity(); }
+                    pending-fingerprint: AppState.pending-fingerprint;
+                    authorized-keys: AppState.authorized-keys;
+                    authorize-key(key) => { AppState.authorize-key(key, key); }
+                    approve-connection(key) => { AppState.authorize-key(key, key); }
+                    remove-authorized-key(key) => { AppState.remove-authorized-key(key); }
+                }
+            }
+        }
+    }
+    WelcomeOverlay {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        launch-visible <=> root.launch-visible;
+        launch-ready: root.launch-ready;
+    }
+    if AppState.manual-offer-visible && !root.launch-visible: IncomingFileDialog {
+        width: parent.width; height: parent.height;
+        peer-name: AppState.manual-offer-peer-name;
+        peer-avatar: AppState.manual-offer-peer-image;
+        has-peer-avatar: AppState.manual-offer-has-peer-image;
+        file-name: AppState.manual-offer-file-name;
+        size-label: AppState.manual-offer-size;
+        destination-directory <=> AppState.manual-offer-directory;
+        error-message: AppState.manual-offer-error;
+        busy: AppState.manual-offer-busy;
+        picker-busy: AppState.manual-offer-picker-busy;
+        connected: AppState.connected;
+        queued-count: AppState.manual-offer-count;
+        choose-directory => { AppState.choose-incoming-directory(); }
+        accept => { AppState.accept-incoming-file(); }
+        decline => { AppState.decline-incoming-file(); }
+    }
+}

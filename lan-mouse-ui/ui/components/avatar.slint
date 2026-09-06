@@ -1,0 +1,39 @@
+import { Theme } from "../theme.slint";
+
+export global AvatarRenderer {
+    pure callback circular(image) -> image;
+}
+
+export component Avatar inherits Rectangle {
+    in property <image> source;
+    in property <bool> has-image: false;
+    in property <length> size: 40px;
+    width: root.size;
+    min-height: root.size;
+    preferred-height: root.size;
+    horizontal-stretch: 0;
+
+    Rectangle {
+        width: root.size;
+        height: root.size;
+        y: (parent.height - self.height) / 2;
+        border-radius: root.size / 2;
+        clip: true;
+        background: root.has-image ? transparent : Theme.elevated-surface;
+        if root.has-image: Image {
+            source: AvatarRenderer.circular(root.source);
+            width: parent.width;
+            height: parent.height;
+            image-fit: cover;
+        }
+        if !root.has-image: Image {
+            source: @image-url("../assets/navigation/devices.svg");
+            width: parent.width * 0.65;
+            height: parent.height * 0.65;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            colorize: Theme.muted-text;
+            image-fit: contain;
+        }
+    }
+}

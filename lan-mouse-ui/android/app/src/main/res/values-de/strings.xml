@@ -1,0 +1,5 @@
+<resources>
+    <string name="notification_channel_name">Syntra</string>
+    <string name="notification_title">Syntra</string>
+    <string name="notification_background_service">Syntra läuft im Hintergrund</string>
+</resources>

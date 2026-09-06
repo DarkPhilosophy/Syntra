@@ -1,0 +1,12 @@
+import { Theme } from "../theme.slint";
+import { Translations } from "../localization.slint";
+
+export component EmptyState inherits Rectangle {
+    in property <string> title;
+    in property <string> description;
+    background: Theme.surface;
+    border-radius: Theme.corner-radius;
+    vertical-stretch: 1;
+    Text { y: parent.height / 2 - 30px; width: parent.width; text: title; color: Theme.text; font-size: Theme.title-size; horizontal-alignment: center; }
+    Text { y: parent.height / 2 + 10px; width: parent.width; text: description; color: Theme.muted-text; font-size: Theme.body-size; horizontal-alignment: center; }
+}

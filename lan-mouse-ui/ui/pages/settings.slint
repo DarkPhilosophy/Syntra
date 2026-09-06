@@ -1,0 +1,155 @@
+import { ComboBox, LineEdit, ScrollView, Slider } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { AppButton, AppSwitch } from "../components/controls.slint";
+import { ColorPicker } from "../components/color-picker.slint";
+import { Translations } from "../localization.slint";
+import { ServiceControls } from "../components/service-controls.slint";
+import { UpdateControls } from "../components/update-controls.slint";
+import { FileReceiveSettingsControls } from "../components/file-receive-settings.slint";
+
+export component SettingsPage inherits Rectangle {
+    in property <string> locale;
+    in property <[string]> locale-options;
+    in property <bool> language-import-supported;
+    in property <string> base-mode;
+    in property <string> palette;
+    in property <string> density;
+    in property <bool> reduced-motion;
+    in property <int> zoom-percent: 100;
+    in property <bool> service-supported;
+    in property <bool> service-busy;
+    in property <bool> service-known;
+    in property <bool> service-installed;
+    in property <bool> service-running;
+    in property <bool> service-autostart;
+    in property <bool> backend-connected;
+    in property <string> service-error;
+    in property <string> service-binary-path;
+    in property <string> port;
+    in property <string> status-message;
+    in property <string> update-repository;
+    in property <bool> update-automatic-check;
+    in property <bool> update-busy;
+    in property <string> update-status;
+    in property <bool> file-receive-known;
+    in property <bool> file-receive-busy;
+    in property <bool> file-receive-picker-busy;
+    in property <string> file-receive-error;
+    in-out property <bool> file-auto-accept;
+    in-out property <string> download-directory;
+    in-out property <bool> file-receive-dirty;
+    callback choose-download-directory();
+    callback save-file-receive-settings();
+    callback configure-updates(string);
+    callback set-automatic-update-check(bool);
+    callback check-updates();
+    callback locale-changed(string);
+    callback import-language();
+    callback change-base-mode(string);
+    callback change-palette(string);
+    callback change-accent-color(color);
+    callback change-titlebar-color-value(color);
+    callback reset-accent();
+    callback reset-titlebar();
+    callback change-density(string);
+    callback change-reduced-motion(bool);
+    callback change-zoom(int);
+    callback service-action(string);
+    callback port-changed(string);
+    callback save-requested();
+    private property <[string]> palette-ids: ["army", "forest", "ocean", "slate", "sand", "graphite", "aubergine", "copper", "rose", "ice"];
+    background: Theme.background;
+
+    ScrollView {
+        VerticalLayout {
+            padding: Theme.content-gap; spacing: Theme.spacing; alignment: start;
+            Text { text: Translations.tr("navigation-settings"); color: Theme.text; font-size: Theme.title-size; vertical-stretch: 0; }
+            FileReceiveSettingsControls {
+                known: root.file-receive-known;
+                busy: root.file-receive-busy;
+                picker-busy: root.file-receive-picker-busy;
+                error-message: root.file-receive-error;
+                auto-accept <=> root.file-auto-accept;
+                directory <=> root.download-directory;
+                dirty <=> root.file-receive-dirty;
+                choose-directory => { root.choose-download-directory(); }
+                save => { root.save-file-receive-settings(); }
+            }
+            Rectangle {
+                height: language-content.preferred-height; vertical-stretch: 0;
+                background: Theme.surface; border-radius: Theme.corner-radius;
+                language-content := HorizontalLayout {
+                    padding: Theme.spacing; spacing: Theme.spacing;
+                    Text { text: Translations.tr("settings-locale"); color: Theme.text; font-size: Theme.body-size; horizontal-stretch: 1; vertical-alignment: center; }
+                    ComboBox { model: root.locale-options; current-value: root.locale; selected(value) => { root.locale-changed(value); } }
+                    AppButton { text: Translations.tr("language-import"); enabled: root.language-import-supported; clicked => { root.import-language(); } }
+                }
+            }
+            Rectangle {
+                height: appearance-content.preferred-height; vertical-stretch: 0;
+                background: Theme.surface; border-radius: Theme.corner-radius;
+                appearance-content := VerticalLayout {
+                    padding: Theme.spacing; spacing: Theme.spacing;
+                    HorizontalLayout {
+                        spacing: Theme.spacing;
+                        Text { text: Translations.tr("settings-base-mode"); color: Theme.text; font-size: Theme.body-size; horizontal-stretch: 1; vertical-alignment: center; }
+                        Text { text: Translations.tr("settings-white"); color: Theme.muted-text; font-size: Theme.caption-size; vertical-alignment: center; }
+                        AppSwitch { checked: root.base-mode == "black"; a11y-label: Translations.tr("settings-base-mode"); toggled(dark) => { root.change-base-mode(dark ? "black" : "white"); } }
+                        Text { text: Translations.tr("settings-black"); color: Theme.muted-text; font-size: Theme.caption-size; vertical-alignment: center; }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.spacing;
+                        Text { text: Translations.tr("settings-palette"); color: Theme.text; font-size: Theme.body-size; horizontal-stretch: 1; vertical-alignment: center; }
+                        ComboBox {
+                            model: [Translations.tr("palette-army"), Translations.tr("palette-forest"), Translations.tr("palette-ocean"), Translations.tr("palette-slate"), Translations.tr("palette-sand"), Translations.tr("palette-graphite"), Translations.tr("palette-aubergine"), Translations.tr("palette-copper"), Translations.tr("palette-rose"), Translations.tr("palette-ice")];
+                            current-value: Translations.tr("palette-" + root.palette);
+                            selected(value) => { root.change-palette(root.palette-ids[self.current-index]); }
+                        }
+                    }
+                    ColorPicker { label: Translations.tr("settings-accent"); value: Theme.accent; selected(value) => { root.change-accent-color(value); } reset => { root.reset-accent(); } }
+                    ColorPicker { label: Translations.tr("settings-titlebar-color"); value: Theme.titlebar; selected(value) => { root.change-titlebar-color-value(value); } reset => { root.reset-titlebar(); } }
+                    HorizontalLayout {
+                        spacing: Theme.spacing;
+                        Text { text: Translations.tr("settings-density"); color: Theme.text; font-size: Theme.body-size; horizontal-stretch: 1; vertical-alignment: center; }
+                        ComboBox { model: [Translations.tr("settings-comfortable"), Translations.tr("settings-compact")]; current-index: root.density == "compact" ? 1 : 0; selected(value) => { root.change-density(self.current-index == 1 ? "compact" : "comfortable"); } }
+                    }
+                    HorizontalLayout {
+                        Text { text: Translations.tr("settings-reduced-motion"); color: Theme.text; font-size: Theme.body-size; horizontal-stretch: 1; vertical-alignment: center; }
+                        AppSwitch { checked: root.reduced-motion; a11y-label: Translations.tr("settings-reduced-motion-label"); toggled(value) => { root.change-reduced-motion(value); } }
+                    }
+                    HorizontalLayout {
+                        Text { text: Translations.tr("settings-zoom"); color: Theme.text; font-size: Theme.body-size; horizontal-stretch: 1; }
+                        Text { text: "\{root.zoom-percent}%"; color: Theme.muted-text; font-size: Theme.body-size; }
+                    }
+                    Slider { minimum: 75; maximum: 200; value: root.zoom-percent; changed(value) => { root.change-zoom(round(value)); } }
+                }
+            }
+            ServiceControls {
+                supported: root.service-supported; busy: root.service-busy; known: root.service-known;
+                installed: root.service-installed; running: root.service-running; autostart: root.service-autostart;
+                connected: root.backend-connected; error: root.service-error; binary-path: root.service-binary-path;
+                action(value) => { root.service-action(value); }
+            }
+            UpdateControls {
+                repository: root.update-repository;
+                automatic-check: root.update-automatic-check;
+                busy: root.update-busy;
+                status: root.update-status;
+                configure(value) => { root.configure-updates(value); }
+                automatic-check-changed(value) => { root.set-automatic-update-check(value); }
+                check => { root.check-updates(); }
+            }
+            Rectangle {
+                height: network-content.preferred-height; vertical-stretch: 0;
+                background: Theme.surface; border-radius: Theme.corner-radius;
+                network-content := HorizontalLayout {
+                    padding: Theme.spacing; spacing: Theme.spacing;
+                    Text { text: Translations.tr("settings-listen-port"); color: Theme.text; font-size: Theme.body-size; horizontal-stretch: 1; vertical-alignment: center; }
+                    LineEdit { width: 100px; text: root.port; accepted => { root.port-changed(self.text); } }
+                    AppButton { text: Translations.tr("settings-save"); clicked => { root.save-requested(); } }
+                }
+            }
+            if root.status-message != "": Text { text: root.status-message; color: Theme.muted-text; font-size: Theme.body-size; wrap: word-wrap; vertical-stretch: 0; }
+        }
+    }
+}

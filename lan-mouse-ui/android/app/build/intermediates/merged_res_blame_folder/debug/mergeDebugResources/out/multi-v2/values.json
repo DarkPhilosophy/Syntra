@@ -1,0 +1,26 @@
+{
+    "logs": [
+        {
+            "outputFile": "de.feschber.lanmouse.app-mergeDebugResources-2:/values/values.xml",
+            "map": [
+                {
+                    "source": "/var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/res/values/styles.xml",
+                    "from": {
+                        "startLines": "1",
+                        "startColumns": "4",
+                        "startOffsets": "16",
+                        "endColumns": "85",
+                        "endOffsets": "97"
+                    },
+                    "to": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endColumns": "84",
+                        "endOffsets": "135"
+                    }
+                }
+            ]
+        }
+    ]
+}

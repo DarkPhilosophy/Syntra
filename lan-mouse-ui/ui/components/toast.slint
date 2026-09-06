@@ -1,0 +1,13 @@
+import { Theme } from "../theme.slint";
+export component Toast inherits Rectangle {
+    in property <string> message;
+    in property <bool> shown: true;
+    width: message-text.width + 32px;
+    height: 48px;
+    visible: root.shown;
+    background: Theme.elevated-surface;
+    border-radius: Theme.small-radius;
+    border-color: Theme.accent;
+    border-width: 1px;
+    message-text := Text { x: 16px; y: 0px; height: parent.height; text: message; color: Theme.text; font-size: Theme.body-size; vertical-alignment: center; }
+}

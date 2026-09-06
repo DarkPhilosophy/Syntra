@@ -11,11 +11,9 @@ This is also known as a Software KVM switch.
 Goal of this project is to be an open-source alternative to proprietary tools like [Synergy 2/3](https://symless.com/synergy), [Share Mouse](https://www.sharemouse.com/de/)
 and other open source tools like [Deskflow](https://github.com/deskflow/deskflow) or [Input Leap](https://github.com/input-leap) (Synergy fork).
 
-Focus lies on performance, ease of use and a maintainable implementation that can be expanded to support additional backends for e.g. Android, iOS, ... in the future.
-
-***blazingly fast™*** because it's written in rust.
-
-- _Now with a gtk frontend_
+The desktop application uses a native [Slint](https://slint.dev/) frontend on Linux, Windows,
+and macOS. Android build and lifecycle integration is present in the source tree but is not yet
+a verified, supported application.
 
 <picture>
     <source media="(prefers-color-scheme: dark)" srcset="/screenshots/dark.png?raw=true">
@@ -55,10 +53,16 @@ Most current desktop environments and operating systems are fully supported, thi
 
 For more detailed information about os support see [Detailed OS Support](#detailed-os-support)
 
-### Android & IOS
+### Android and iOS
 
-A proof of concept for an Android / IOS Application by [rohitsangwan01](https://github.com/rohitsangwan01) can be found [here](https://github.com/rohitsangwan01/lan-mouse-mobile).
-It can be used as a remote control for any device supported by Lan Mouse.
+The in-tree Android work currently provides a Gradle project, lifecycle/transport foundations,
+and explicit capability reporting. It is not yet a verified release target: the Android UI
+host does not currently establish a complete runnable Lan Mouse session, and input capture,
+input emulation, and file clipboard transfer are reported as unavailable. Do not treat an APK
+produced by the build pipeline as proof of those capabilities.
+
+The separate historical [Android/iOS proof of concept](https://github.com/rohitsangwan01/lan-mouse-mobile)
+is not the supported desktop application described by this README.
 
 ## Installation
 
@@ -116,43 +120,43 @@ dnf install lan-mouse
 
 First make sure to [install the necessary dependencies](#installing-dependencies-for-development--compiling-from-source).
 
-Precompiled release binaries for Windows, MacOS and Linux are available in the [releases section](https://github.com/feschber/lan-mouse/releases).
-For Windows, the depenedencies are included in the .zip file, for other operating systems see [Installing Dependencies](#installing-dependencies-for-development--compiling-from-source).
+Upstream Lan Mouse binaries are available in the [releases section](https://github.com/feschber/lan-mouse/releases). Those releases may not include the Syntra changes in this working tree.
+The current Windows packaging workflow creates a ZIP containing `lan-mouse.exe`; it does not bundle additional DLLs. See [Installing Dependencies](#installing-dependencies-for-development--compiling-from-source) for platform prerequisites.
 
-Alternatively, the `lan-mouse` binary can be compiled from source (see below).
+Alternatively, Lan Mouse and its required helper executables can be compiled from source.
 
-### Installing desktop file, app icon and firewall rules (optional)
+### Installing the desktop file, app icon, and firewall rules (optional)
 ```sh
-# install lan-mouse (replace path/to/ with the correct path)
-sudo cp path/to/lan-mouse /usr/local/bin/
+# install lan-mouse and the Linux clipboard/file-transfer helpers
+sudo install -Dm755 target/release/lan-mouse /usr/local/bin/lan-mouse
+sudo install -Dm755 target/release/lan-mouse-adapter-gtk-clipboard /usr/local/bin/lan-mouse-adapter-gtk-clipboard
+sudo install -Dm755 target/release/lan-mouse-adapter-fuse /usr/local/bin/lan-mouse-adapter-fuse
 
-# install app icon
-sudo mkdir -p /usr/local/share/icons/hicolor/scalable/apps
-sudo cp lan-mouse-gtk/resources/de.feschber.LanMouse.svg /usr/local/share/icons/hicolor/scalable/apps
+# install app icon and desktop entry
+sudo install -Dm644 lan-mouse-ui/ui/assets/shell/syntra.svg /usr/local/share/icons/hicolor/scalable/apps/syntra.svg
+sudo install -Dm644 de.feschber.LanMouse.desktop /usr/local/share/applications/de.feschber.LanMouse.desktop
 
 # update icon cache
 gtk-update-icon-cache /usr/local/share/icons/hicolor/
 
-# install desktop entry
-sudo mkdir -p /usr/local/share/applications
-sudo cp de.feschber.LanMouse.desktop /usr/local/share/applications
-
 # when using firewalld: install firewall rule
-sudo cp firewall/lan-mouse.xml /etc/firewalld/services
+sudo install -Dm644 firewall/lan-mouse.xml /etc/firewalld/services/lan-mouse.xml
 # -> enable the service in firewalld settings
 ```
 
-Instead of downloading from the releases, the `lan-mouse` binary
-can be easily compiled via cargo or nix:
+The `lan-mouse-adapter-gtk-clipboard` binary is a separate Linux runtime helper used for
+clipboard integration. It is **not** the application frontend. Linux packages must ship it
+beside `lan-mouse` until a verified non-GTK clipboard adapter replaces it; packages supporting
+file transfer must also ship `lan-mouse-adapter-fuse`.
 
-### Compiling and installing manually:
+Instead of downloading a release, build the Slint desktop application and Linux helpers with:
+
 ```sh
-# compile in release mode
-cargo build --release
-
-# install lan-mouse
-sudo cp target/release/lan-mouse /usr/local/bin/
+cargo build --release \
+  -p lan-mouse -p lan-mouse-adapter-gtk-clipboard -p lan-mouse-adapter-fuse
 ```
+
+The default feature set selects Slint and preserves all Linux capture and emulation backends.
 
 ### Compiling and installing via cargo:
 ```sh
@@ -166,19 +170,18 @@ cargo install lan-mouse
 nix-build
 ```
 ### Conditional compilation
-Support for other platforms is omitted automatically based on the active
-rust toolchain.
 
-Additionally, available backends and frontends can be configured manually via
-[cargo features](https://doc.rust-lang.org/cargo/reference/features.html).
+Support for unavailable platform backends is omitted automatically based on the active Rust
+toolchain. Capture and emulation backends can also be selected manually with
+[Cargo features](https://doc.rust-lang.org/cargo/reference/features.html).
 
-E.g. if only support for sway is needed, the following command produces
-an executable with support for only the `layer-shell` capture backend
-and `wlroots` emulation backend:
+For example, this builds Slint with only layer-shell capture and wlroots emulation:
+
 ```sh
-cargo build --no-default-features --features layer_shell_capture,wlroots_emulation
+cargo build --no-default-features --features slint-ui,layer_shell_capture,wlroots_emulation
 ```
-For a detailed list of available features, checkout the [Cargo.toml](./Cargo.toml)
+
+See [Cargo.toml](./Cargo.toml) for the complete feature list.
 </details>
 
 
@@ -201,22 +204,21 @@ chmod +x .githooks/pre-commit
 git config core.hooksPath .githooks
 ```
 
-The `pre-commit` script runs `cargo fmt --all` (and fails if files were modified), `cargo clippy --workspace --all-targets --all-features -- -D warnings`, and `cargo test --workspace --all-features`.
+The `pre-commit` script runs `cargo fmt --all`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, and `cargo test --workspace --all-features`.
 
-### Dependencies & Compiling from Source
+### Dependencies and compiling from source
+
+The Slint application does not require GTK or libadwaita on Windows or macOS. Linux requires
+GTK 4 only for the separately packaged `lan-mouse-adapter-gtk-clipboard` helper.
+
 <details>
-    <summary>MacOS</summary>
+    <summary>macOS</summary>
 
 ```sh
-# Install dependencies
-brew install libadwaita pkg-config imagemagick
+brew install pkg-config imagemagick
 cargo install cargo-bundle
-# Create the macOS icon file
 scripts/makeicns.sh
-# Create the .app bundle
 cargo bundle
-# Copy all dynamic libraries into the bundle, and update the bundle to find them there
-scripts/copy-macos-dylib.sh
 ```
 </details>
 
@@ -224,7 +226,7 @@ scripts/copy-macos-dylib.sh
     <summary>Ubuntu and derivatives</summary>
 
 ```sh
-sudo apt install libadwaita-1-dev libgtk-4-dev libx11-dev libxtst-dev
+sudo apt install libgtk-4-dev libx11-dev libxtst-dev
 ```
 </details>
 
@@ -232,7 +234,7 @@ sudo apt install libadwaita-1-dev libgtk-4-dev libx11-dev libxtst-dev
     <summary>Arch and derivatives</summary>
 
 ```sh
-sudo pacman -S libadwaita gtk libx11 libxtst
+sudo pacman -S gtk4 libx11 libxtst
 ```
 </details>
 
@@ -240,7 +242,7 @@ sudo pacman -S libadwaita gtk libx11 libxtst
     <summary>Fedora and derivatives</summary>
 
 ```sh
-sudo dnf install libadwaita-devel libXtst-devel libX11-devel
+sudo dnf install gtk4-devel libXtst-devel libX11-devel
 ```
 </details>
 <details>
@@ -258,66 +260,44 @@ nix develop
 ```
 </details>
 
-<details>
-    <summary>Windows</summary>
-
-- First install [Rust](https://www.rust-lang.org/tools/install).
-
-- Then follow the instructions at [gtk-rs.org](https://gtk-rs.org/gtk4-rs/stable/latest/book/installation_windows.html)
-
-*TLDR:*
-
-Build gtk from source
-
-- The following commands should be run in an **admin power shell** instance:
-```sh
-# install chocolatey
-Set-ExecutionPolicy Bypass -Scope Process -Force; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-
-# install gvsbuild dependencies
-choco install python git msys2 visualstudio2022-workload-vctools
-```
-
-- The following commands should be run in a **regular power shell** instance:
-
-```sh
-# install gvsbuild with python
-python -m pip install --user pipx
-python -m pipx ensurepath
-```
-
-- Relaunch your powershell instance so the changes in the environment are reflected.
-```sh
-pipx install gvsbuild
-
-# build gtk + libadwaita
-gvsbuild build gtk4 libadwaita librsvg adwaita-icon-theme
-```
-
-- **Make sure to add the directory** `C:\gtk-build\gtk\x64\release\bin`
-[**to the `PATH` environment variable**]((https://learn.microsoft.com/en-us/previous-versions/office/developer/sharepoint-2010/ee537574(v=office.14))). Otherwise the project will fail to build.
-
-To avoid building GTK from source, it is possible to disable
-the gtk frontend (see conditional compilation).
-</details>
 
 ## Usage
+
 <details>
-    <summary>Gtk Frontend</summary>
+    <summary>Slint frontend</summary>
 
-By default the gtk frontend will open when running `lan-mouse`.
+The Syntra Slint frontend uses the existing daemon/service IPC boundary. The titlebar
+toggle collapses the navigation to an icon rail without changing the selected page.
+Presentation settings include locale, independent White/Black mode and palette, density,
+interface scale, sidebar state, and local device names and images.
 
-To connect a device you want to control, simply click the `Add` button and enter the hostname
-of the device.
+The localization runtime embeds `en-US`, `de-DE`, `ro-RO`, and the `en-XA` pseudo-locale.
+Locale changes update the localization state and observers without requiring a process
+restart. The current UI migration is still replacing remaining hard-coded visible strings,
+so this is infrastructure behavior rather than a claim that every screen is fully translated.
 
-On the *remote* device, authorize your *local* device for incoming traffic using the `Authorize` button
-under the "Incoming Connections" section.
-The fingerprint for authorization can be found under the general section of your *local* device.
-It is of the form "aa:bb:cc:..."
+To connect a device you want to control, add its hostname. On the remote device, authorize
+the local device for incoming traffic. If it cannot be reached, ensure UDP port `4242` (or
+the configured port) is open in the firewall.
 
-Authorized devices can be persisted using the configuration file (see [Configuration](#configuration)).
+The Devices page discovers nearby peers through mDNS (`_syntra._udp.local.`).
+Discovery is informational: a discovered device is not automatically configured or authorized.
+Refresh restarts discovery; unavailable mDNS does not prevent manually configured connections.
 
-If the device still can not be entered, make sure you have UDP port `4242` (or the one selected) opened up in your firewall.
+Manual file transfer is separate from automatic clipboard and FUSE synchronization. Files can
+be sent only to connected, authenticated peers, either by clicking a peer in the transfer
+picker or by using native file drag-and-drop. Before acceptance, the receiver sees metadata
+only. Accepted files default to the Downloads directory, and the destination can be edited;
+an existing file is never overwritten. Automatic acceptance is opt-in and defaults to
+`false`.
+
+On Linux, native file drag-and-drop in the Slint UI requires XWayland. This UI dependency does
+not change the daemon's Wayland input-capture backend. Windows and macOS support is not
+runtime-verified by these instructions.
+
+The Clipboard page lists installed Flatpak applications. Granting access is an explicit
+per-application action restricted to `xdg-run/lan-mouse:ro`; it does not grant general
+home-directory access. Restart the affected Flatpak application to apply its override.
 </details>
 
 <details>
@@ -346,9 +326,20 @@ To do so, use the `daemon` subcommand:
 ```sh
 lan-mouse daemon
 ```
+
+The frontend first attaches to an existing daemon. If none is reachable, it starts an
+installed Linux user service or, without one, a temporary child daemon. Closing the
+frontend stops only a temporary child it owns; an independently running service survives.
 </details>
 
 ## Systemd Service
+
+On Linux, Settings shows installation, running state, and autostart independently.
+Installation writes a user unit for the current production executable and reloads systemd;
+it does not implicitly enable autostart. Start, stop, uninstall, and autostart changes are
+separate confirmed actions. Starting the installed service while a temporary daemon is
+connected briefly interrupts sharing while the frontend reconnects. Non-Linux service
+management is reported as unavailable.
 
 In order to start lan-mouse with a graphical session automatically,
 the [systemd-service](service/lan-mouse.service) can be used:
@@ -416,7 +407,7 @@ port = 4242
 Where `left` can be either `left`, `right`, `top` or `bottom`.
 
 ## Roadmap
-- [x] Graphical frontend (gtk + libadwaita)
+- [x] Slint is the default and sole graphical frontend; GTK remains only in the separately packaged Linux clipboard helper.
 - [x] respect xdg-config-home for config file location.
 - [x] IP Address switching
 - [x] Liveness tracking Automatically ungrab mouse when client unreachable

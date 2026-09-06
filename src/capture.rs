@@ -1,15 +1,17 @@
 use std::{
     cell::{Cell, RefCell},
     collections::HashSet,
+    future::Future,
     rc::Rc,
     time::{Duration, Instant},
 };
 
 use futures::StreamExt;
 use input_capture::{
-    CaptureError, CaptureEvent, CaptureHandle, InputCapture, InputCaptureError, Position,
+    CaptureCreationError, CaptureError, CaptureEvent, CaptureHandle, InputCapture,
+    InputCaptureError, Position,
 };
-use input_event::{Event, KeyboardEvent, scancode};
+use input_event::{Event, KeyboardEvent, PointerEvent, scancode};
 use lan_mouse_proto::{MAX_CLIPBOARD_CHUNK_SIZE, ProtoEvent};
 use local_channel::mpsc::{Receiver, Sender, channel};
 use tokio::task::{JoinHandle, spawn_local};
@@ -28,10 +30,15 @@ pub(crate) struct Capture {
 }
 
 pub(crate) enum ICaptureEvent {
-    /// A clipboard protocol event received from a connected peer.
     Clipboard {
         handle: CaptureHandle,
+        fingerprint: String,
         event: ProtoEvent,
+    },
+    /// Certificate identity bound to the outgoing DTLS transport.
+    PeerAuthenticated {
+        handle: CaptureHandle,
+        fingerprint: String,
     },
     FileClipboard {
         handle: CaptureHandle,
@@ -40,6 +47,8 @@ pub(crate) enum ICaptureEvent {
     },
     /// The transport to a peer died: transfers bound to it are dead too.
     PeerLost(CaptureHandle),
+    /// A Pong or transport loss changed the outgoing client's live state.
+    PeerStateChanged(CaptureHandle),
     /// a client was entered
     CaptureBegin(CaptureHandle),
     /// capture disabled
@@ -75,6 +84,8 @@ enum CaptureRequest {
     Destroy(CaptureHandle),
     /// reenable input capture
     Reenable,
+    /// globally enable or disable outgoing capture
+    SetInputSharing(bool),
     /// set release bind
     SetReleaseBind(Vec<scancode::Linux>),
     /// send a protocol event without tying it to input readiness
@@ -110,6 +121,7 @@ impl Capture {
             event_tx,
             request_rx,
             release_bind: Rc::new(RefCell::new(release_bind)),
+            input_sharing: true,
             state: Default::default(),
         };
         let task = spawn_local(capture_task.run());
@@ -124,6 +136,12 @@ impl Capture {
     pub(crate) fn reenable(&self) {
         self.request_tx
             .send(CaptureRequest::Reenable)
+            .expect("channel closed");
+    }
+
+    pub(crate) fn set_input_sharing(&self, enabled: bool) {
+        self.request_tx
+            .send(CaptureRequest::SetInputSharing(enabled))
             .expect("channel closed");
     }
 
@@ -218,6 +236,7 @@ struct CaptureTask {
     event_tx: Sender<ICaptureEvent>,
     release_bind: Rc<RefCell<Vec<scancode::Linux>>>,
     request_rx: Receiver<CaptureRequest>,
+    input_sharing: bool,
     state: State,
 }
 
@@ -263,58 +282,85 @@ impl CaptureTask {
     /// Re-establish transports for peers whose connection died.
     /// [`LanMouseConnection::connect`] is a no-op while a peer is connected.
     async fn reconnect_lost_peers(&self) {
-        for handle in self.captures.iter().map(|(h, ..)| *h).collect::<Vec<_>>() {
-            if !self.conn.peer_connected(handle) {
+        for &(handle, _, kind) in &self.captures {
+            if kind == CaptureType::Default && !self.conn.peer_connected(handle) {
                 self.conn.connect(handle).await;
+            }
+        }
+    }
+
+    async fn handle_inactive_request(&mut self, request: CaptureRequest) -> bool {
+        match request {
+            CaptureRequest::Reenable => return true,
+            CaptureRequest::Create(handle, position, kind) => {
+                self.add_capture(handle, position, kind);
+                if kind == CaptureType::Default {
+                    self.conn.connect(handle).await;
+                }
+            }
+            CaptureRequest::Destroy(handle) => self.remove_capture(handle),
+            CaptureRequest::Release => {}
+            CaptureRequest::SetInputSharing(enabled) => self.input_sharing = enabled,
+            CaptureRequest::SetReleaseBind(bind) => {
+                self.release_bind.borrow_mut().clone_from(&bind);
+            }
+            CaptureRequest::SendProto { handle, event } => {
+                if let Err(error) = self.conn.send(event, handle).await {
+                    log::warn!("failed to send clipboard protocol event: {error}");
+                }
+            }
+            CaptureRequest::SendClipboard {
+                handle,
+                transfer_id,
+                data,
+                image_dimensions,
+            } => {
+                self.send_clipboard_transfer(handle, transfer_id, data, image_dimensions)
+                    .await;
+            }
+        }
+        false
+    }
+
+    fn handle_inactive_event(&self, handle: CaptureHandle, fingerprint: String, event: ProtoEvent) {
+        self.event_tx
+            .send(ICaptureEvent::PeerAuthenticated {
+                handle,
+                fingerprint: fingerprint.clone(),
+            })
+            .expect("channel closed");
+        if Self::is_forwarded_protocol(&event) {
+            self.event_tx
+                .send(ICaptureEvent::Clipboard {
+                    handle,
+                    fingerprint,
+                    event,
+                })
+                .expect("channel closed");
+        } else if matches!(&event, ProtoEvent::Pong(_)) {
+            self.event_tx
+                .send(ICaptureEvent::PeerStateChanged(handle))
+                .expect("channel closed");
+            if matches!(&event, ProtoEvent::Pong(false)) && !self.conn.peer_connected(handle) {
+                self.notify_peer_lost(handle);
             }
         }
     }
 
     async fn run(mut self) {
         loop {
-            if let Err(e) = self.do_capture().await {
-                log::warn!("input capture exited: {e}");
+            if let Err(error) = self.do_capture().await {
+                log::warn!("input capture exited: {error}");
             }
             loop {
                 tokio::select! {
-                    r = self.request_rx.recv() => match r.expect("channel closed") {
-                        CaptureRequest::Reenable => break,
-                        CaptureRequest::Create(h, p, t) => {
-                            self.add_capture(h, p, t);
-                            self.conn.connect(h).await;
+                    request = self.request_rx.recv() => {
+                        if self.handle_inactive_request(request.expect("channel closed")).await {
+                            break;
                         }
-                        CaptureRequest::Destroy(h) => self.remove_capture(h),
-                        CaptureRequest::Release => { /* nothing to do */ }
-                        CaptureRequest::SetReleaseBind(bind) => {
-                            self.release_bind.borrow_mut().clone_from(&bind);
-                        }
-                        CaptureRequest::SendProto { handle, event } => {
-                            if let Err(e) = self.conn.send(event, handle).await {
-                                log::warn!("failed to send clipboard protocol event: {e}");
-                            }
-                        }
-                        CaptureRequest::SendClipboard { handle, transfer_id, data, image_dimensions } => {
-                            self.send_clipboard_transfer(handle, transfer_id, data, image_dimensions).await;
-                        }
-                    },
-                    (handle, event) = self.conn.recv() => {
-                        if matches!(
-                            &event,
-                            ProtoEvent::ClipboardStart { .. }
-                                | ProtoEvent::ClipboardImageStart { .. }
-                                | ProtoEvent::ClipboardChunk { .. }
-                                | ProtoEvent::ClipboardCapabilities(_)
-                                | ProtoEvent::ClipboardManifest { .. }
-                                | ProtoEvent::ClipboardFileRequest { .. }
-                                | ProtoEvent::ClipboardFileChunk { .. }
-                                | ProtoEvent::ClipboardFileComplete { .. }
-                                | ProtoEvent::ClipboardTransferCancel { .. }
-                                | ProtoEvent::ClipboardTransferProgress { .. }
-                        ) {
-                            self.event_tx.send(ICaptureEvent::Clipboard { handle, event }).expect("channel closed");
-                        } else if matches!(&event, ProtoEvent::Pong(false)) && !self.conn.peer_connected(handle) {
-                            self.notify_peer_lost(handle);
-                        }
+                    }
+                    (handle, fingerprint, event) = self.conn.recv() => {
+                        self.handle_inactive_event(handle, fingerprint, event)
                     },
                     _ = tokio::time::sleep(RECONNECT_INTERVAL) => self.reconnect_lost_peers().await,
                     _ = self.cancellation_token.cancelled() => return,
@@ -323,11 +369,34 @@ impl CaptureTask {
         }
     }
 
+    async fn initialize_capture(
+        &mut self,
+        initialization: impl Future<Output = Result<InputCapture, CaptureCreationError>>,
+    ) -> Result<Option<InputCapture>, CaptureCreationError> {
+        // A portal permission dialog must not block peer transport or clipboard traffic.
+        tokio::pin!(initialization);
+        loop {
+            tokio::select! {
+                result = &mut initialization => return result.map(Some),
+                request = self.request_rx.recv() => {
+                    // Reenable while initialization is pending must not open a second dialog.
+                    self.handle_inactive_request(request.expect("channel closed")).await;
+                }
+                (handle, fingerprint, event) = self.conn.recv() => {
+                    self.handle_inactive_event(handle, fingerprint, event)
+                },
+                _ = tokio::time::sleep(RECONNECT_INTERVAL) => self.reconnect_lost_peers().await,
+                _ = self.cancellation_token.cancelled() => return Ok(None),
+            }
+        }
+    }
+
     async fn do_capture(&mut self) -> Result<(), InputCaptureError> {
-        /* allow cancelling capture request */
-        let mut capture = tokio::select! {
-            r = InputCapture::new(self.backend) => r?,
-            _ = self.cancellation_token.cancelled() => return Ok(()),
+        let Some(mut capture) = self
+            .initialize_capture(InputCapture::new(self.backend))
+            .await?
+        else {
+            return Ok(());
         };
 
         let _capture_guard = DropGuard::new(
@@ -359,7 +428,7 @@ impl CaptureTask {
             // session. GNOME requires a new approval whenever barriers are
             // removed and recreated. Readiness is enforced on Begin below:
             // an unavailable destination is released locally without sending.
-            let should_exist = true;
+            let should_exist = self.input_sharing;
             log::debug!(
                 "peer gate handle={handle} type={capture_type:?} ready={} barrier={} active={}",
                 self.conn.remote_ready(handle),
@@ -399,25 +468,24 @@ impl CaptureTask {
                     Some(event) => self.handle_capture_event(capture, event?).await?,
                     None => return Ok(()),
                 },
-                (handle, event) = self.conn.recv() => {
-                    let is_clipboard = matches!(
-                        &event,
-                        ProtoEvent::ClipboardStart { .. }
-                            | ProtoEvent::ClipboardImageStart { .. }
-                            | ProtoEvent::ClipboardChunk { .. }
-                            | ProtoEvent::ClipboardCapabilities(_)
-                            | ProtoEvent::ClipboardManifest { .. }
-                            | ProtoEvent::ClipboardFileRequest { .. }
-                            | ProtoEvent::ClipboardFileChunk { .. }
-                            | ProtoEvent::ClipboardFileComplete { .. }
-                            | ProtoEvent::ClipboardTransferCancel { .. }
-                            | ProtoEvent::ClipboardTransferProgress { .. }
-                    );
+                (handle, fingerprint, event) = self.conn.recv() => {
+                    self.event_tx
+                        .send(ICaptureEvent::PeerAuthenticated {
+                            handle,
+                            fingerprint: fingerprint.clone(),
+                        })
+                        .expect("channel closed");
+                    let is_clipboard = Self::is_forwarded_protocol(&event);
                     if is_clipboard {
                         self.event_tx
-                            .send(ICaptureEvent::Clipboard { handle, event })
+                            .send(ICaptureEvent::Clipboard { handle, fingerprint, event })
                             .expect("channel closed");
                         continue;
+                    }
+                    if matches!(&event, ProtoEvent::Pong(_)) {
+                        self.event_tx
+                            .send(ICaptureEvent::PeerStateChanged(handle))
+                            .expect("channel closed");
                     }
                     if matches!(&event, ProtoEvent::Pong(false)) && !self.conn.peer_connected(handle) {
                         self.notify_peer_lost(handle);
@@ -454,9 +522,18 @@ impl CaptureTask {
                 e = self.request_rx.recv() => match e.expect("channel closed") {
                     CaptureRequest::Reenable => { /* already active */ },
                     CaptureRequest::Release => self.release_capture(capture).await?,
+                    CaptureRequest::SetInputSharing(enabled) => {
+                        self.input_sharing = enabled;
+                        if !enabled {
+                            self.release_capture(capture).await?;
+                        }
+                        self.sync_captures(capture).await?;
+                    }
                     CaptureRequest::Create(h, p, t) => {
                         self.add_capture(h, p, t);
-                        self.conn.connect(h).await;
+                        if t == CaptureType::Default {
+                            self.conn.connect(h).await;
+                        }
                         self.sync_captures(capture).await?;
                     }
                     CaptureRequest::Destroy(h) => {
@@ -488,6 +565,41 @@ impl CaptureTask {
             }
         }
         Ok(())
+    }
+
+    fn is_forwarded_protocol(event: &ProtoEvent) -> bool {
+        matches!(
+            event,
+            ProtoEvent::ClipboardStart { .. }
+                | ProtoEvent::ClipboardImageStart { .. }
+                | ProtoEvent::ClipboardChunk { .. }
+                | ProtoEvent::ClipboardCapabilities(_)
+                | ProtoEvent::ClipboardManifest { .. }
+                | ProtoEvent::ClipboardFileRequest { .. }
+                | ProtoEvent::ClipboardFileChunk { .. }
+                | ProtoEvent::ClipboardFileComplete { .. }
+                | ProtoEvent::ClipboardTransferCancel { .. }
+                | ProtoEvent::ClipboardTransferProgress { .. }
+                | ProtoEvent::ManualFileOffer { .. }
+                | ProtoEvent::ManualFileDecision { .. }
+                | ProtoEvent::ManualFileRequest { .. }
+                | ProtoEvent::ManualFileChunk { .. }
+                | ProtoEvent::ManualFileComplete { .. }
+                | ProtoEvent::ManualFileResult { .. }
+                | ProtoEvent::ManualFileCancel { .. }
+                | ProtoEvent::HistorySyncRequest { .. }
+                | ProtoEvent::HistoryRecordStart { .. }
+                | ProtoEvent::HistoryRecordChunk { .. }
+                | ProtoEvent::HistorySyncPageEnd { .. }
+                | ProtoEvent::HistoryClearBoundaryRequest { .. }
+                | ProtoEvent::HistoryClearBoundary { .. }
+                | ProtoEvent::HistoryClearApply { .. }
+                | ProtoEvent::HistoryClearAck { .. }
+                | ProtoEvent::ProfileStart { .. }
+                | ProtoEvent::ProfileChunk { .. }
+                | ProtoEvent::ProfileRequest { .. }
+                | ProtoEvent::ProfileChanged
+        )
     }
     async fn send_clipboard_transfer(
         &mut self,
@@ -653,6 +765,16 @@ impl CaptureTask {
                     log::warn!("failed to send key-up to client {handle}: {e}");
                 }
             }
+            for button in capture.take_pressed_buttons() {
+                let button_up = ProtoEvent::Input(Event::Pointer(PointerEvent::Button {
+                    time: 0,
+                    button,
+                    state: 0,
+                }));
+                if let Err(e) = self.conn.send(button_up, handle).await {
+                    log::warn!("failed to send button-up to client {handle}: {e}");
+                }
+            }
             // Reset the modifier mask too. The peer's input-emulation
             // layer keeps a separate XKB-style modifier state that's
             // updated by KeyboardEvent::Modifiers, distinct from the
@@ -724,5 +846,65 @@ impl<T> Drop for DropGuard<T> {
         self.tx
             .send(self.on_drop.take().expect("item"))
             .expect("channel closed");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::ClientManager;
+    use webrtc_dtls::crypto::Certificate;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn pending_permission_keeps_control_requests_responsive() {
+        let (requests, request_rx) = channel();
+        let (event_tx, _events) = channel();
+        let cancellation_token = CancellationToken::new();
+        let release_bind = Rc::new(RefCell::new(Vec::new()));
+        let mut task = CaptureTask {
+            active_client: None,
+            ack_deadline: None,
+            backend: None,
+            cancellation_token: cancellation_token.clone(),
+            enabled_captures: HashSet::new(),
+            captures: vec![(7, Position::Left, CaptureType::Default)],
+            conn: LanMouseConnection::new(
+                Certificate::generate_self_signed(["ignored".to_owned()]).unwrap(),
+                ClientManager::default(),
+            ),
+            event_tx,
+            request_rx,
+            release_bind: Rc::clone(&release_bind),
+            input_sharing: true,
+            state: State::default(),
+        };
+        requests.send(CaptureRequest::Destroy(7)).unwrap();
+        requests
+            .send(CaptureRequest::SetInputSharing(false))
+            .unwrap();
+        requests
+            .send(CaptureRequest::SetReleaseBind(vec![
+                scancode::Linux::KeyLeftCtrl,
+            ]))
+            .unwrap();
+        let initialization = task.initialize_capture(std::future::pending());
+        let observe = async {
+            while release_bind.borrow().is_empty() {
+                tokio::task::yield_now().await;
+            }
+            cancellation_token.cancel();
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::join!(initialization, observe)
+        })
+        .await
+        .expect("permission wait blocked the request channel");
+        assert!(result.unwrap().is_none());
+        assert!(
+            task.captures.is_empty(),
+            "Stop must apply before permission resolves"
+        );
+        assert!(!task.input_sharing);
+        assert_eq!(*release_bind.borrow(), vec![scancode::Linux::KeyLeftCtrl]);
     }
 }

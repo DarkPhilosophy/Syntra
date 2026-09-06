@@ -1,0 +1,1 @@
+de.feschber.lanmouse:style/AppTheme = 0x7f010000

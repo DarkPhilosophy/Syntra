@@ -100,7 +100,7 @@ impl AsyncFrontendListener {
         // TODO do simultaneously
         for tx in self.tx_streams.iter_mut() {
             // write len + payload
-            if tx.write(json.as_bytes()).await.is_err() {
+            if tx.write_all(json.as_bytes()).await.is_err() {
                 keep.push(false);
                 continue;
             }

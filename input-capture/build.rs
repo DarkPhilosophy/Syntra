@@ -1,13 +1,14 @@
-fn main() {
-    let unix = cfg!(unix);
-    let layer_shell = cfg!(feature = "layer_shell");
-    let libei = cfg!(feature = "libei");
-    let x11 = cfg!(feature = "x11");
-    let macos = cfg!(target_os = "macos");
+fn desktop_unix_target(family: &str, os: &str) -> bool {
+    family == "unix" && os != "macos" && os != "android"
+}
 
-    let libei = unix && !macos && libei;
-    let layer_shell = unix && !macos && layer_shell;
-    let x11 = unix && !macos && x11;
+fn main() {
+    let family = std::env::var("CARGO_CFG_TARGET_FAMILY").unwrap_or_default();
+    let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let desktop_unix = desktop_unix_target(&family, &os);
+    let layer_shell = desktop_unix && cfg!(feature = "layer_shell");
+    let libei = desktop_unix && cfg!(feature = "libei");
+    let x11 = desktop_unix && cfg!(feature = "x11");
 
     println!("cargo::rustc-check-cfg=cfg(layer_shell)");
     println!("cargo::rustc-check-cfg=cfg(libei)");
@@ -21,5 +22,20 @@ fn main() {
     }
     if x11 {
         println!("cargo::rustc-cfg=x11");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::desktop_unix_target;
+
+    #[test]
+    fn android_is_not_a_desktop_unix_target() {
+        assert!(!desktop_unix_target("unix", "android"));
+    }
+
+    #[test]
+    fn linux_remains_a_desktop_unix_target() {
+        assert!(desktop_unix_target("unix", "linux"));
     }
 }

@@ -1,0 +1,74 @@
+[package]
+name = "lan-mouse-ui"
+description = "frontend-neutral presentation state and transport boundary for lan-mouse"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/feschber/lan-mouse"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[package.metadata.android]
+package = "de.feschber.lanmouse"
+build_targets = ["aarch64-linux-android"]
+apk_name = "lan-mouse"
+resources = "android/app/src/main/res"
+
+[package.metadata.android.sdk]
+
+min_sdk_version = 26
+target_sdk_version = 35
+
+[package.metadata.android.application]
+label = "Lan Mouse"
+theme = "@style/AppTheme"
+
+[package.metadata.android.application.activity]
+exported = true
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.FOREGROUND_SERVICE"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"
+
+[dependencies]
+lan-mouse-ipc = { path = "../lan-mouse-ipc" }
+lan-mouse-history = { path = "../lan-mouse-history" }
+log = "0.4"
+fluent-bundle = "0.16"
+fluent-syntax = "0.12"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0.0"
+unic-langid = "0.9"
+hostname = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+semver = { version = "1.0", features = ["serde"] }
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+image = { version = "0.25", default-features = false }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = { version = "0.3.6", default-features = false, features = ["blocking", "async-io"] }
+x11rb = "0.13"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+slint = { version = "1.17.1", default-features = false, features = ["std", "backend-default", "renderer-femtovg", "renderer-software", "accessibility", "compat-1-2", "unstable-winit-030"] }
+rfd = "0.15"
+interprocess = { version = "2.4.4", default-features = false }
+fs2 = "0.4.3"
+
+[target.'cfg(target_os = "android")'.dependencies]
+slint = { version = "1.17.1", default-features = false, features = ["std", "compat-1-2", "backend-android-activity-06", "renderer-femtovg"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSEvent", "NSView", "NSWindow"] }
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+
+[build-dependencies]
+slint-build = "1.17.1"
+toml = "0.8"
+
+

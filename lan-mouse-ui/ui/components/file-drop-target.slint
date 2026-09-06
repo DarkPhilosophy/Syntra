@@ -1,0 +1,67 @@
+import { Theme } from "../theme.slint";
+import { Translations } from "../localization.slint";
+import { Avatar } from "avatar.slint";
+
+export struct TransferPeerItem {
+    fingerprint: string,
+    name: string,
+    avatar: image,
+    has-avatar: bool,
+    connected: bool,
+}
+
+export component FileDropTarget inherits Rectangle {
+    in property <TransferPeerItem> peer;
+    in property <bool> highlighted;
+    in property <bool> picker-busy;
+    in property <bool> native-drop-supported;
+    in property <int> bounds-generation;
+    callback choose(string);
+    callback report-bounds(string, float, float, float, float);
+    private property <length> window-x: self.absolute-position.x;
+    private property <length> window-y: self.absolute-position.y;
+    function update-bounds() {
+        root.report-bounds(root.peer.fingerprint, root.window-x / 1px, root.window-y / 1px, root.width / 1px, root.height / 1px);
+    }
+    init => { root.update-bounds(); }
+    changed bounds-generation => { root.update-bounds(); }
+    changed window-x => { root.update-bounds(); }
+    changed window-y => { root.update-bounds(); }
+    changed width => { root.update-bounds(); }
+    changed height => { root.update-bounds(); }
+    changed peer => { root.update-bounds(); }
+
+    height: max(160px, contents.preferred-height);
+    vertical-stretch: 0;
+    border-radius: Theme.corner-radius;
+    border-width: root.highlighted && root.peer.connected ? 2px : 1px;
+    border-color: root.highlighted && root.peer.connected ? Theme.accent : Theme.border;
+    background: root.highlighted && root.peer.connected ? Theme.selection : touch.has-hover && root.peer.connected ? Theme.hover-surface : Theme.surface;
+    contents := VerticalLayout {
+        padding: Theme.spacing;
+        spacing: Theme.small-spacing;
+        alignment: center;
+        HorizontalLayout {
+            spacing: Theme.spacing;
+            Avatar { source: root.peer.avatar; has-image: root.peer.has-avatar; size: 40px; }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                spacing: 2px;
+                Text { text: root.peer.name; color: Theme.text; font-size: Theme.body-size; font-weight: 600; overflow: elide; }
+                Text { text: Translations.tr(root.peer.connected ? "label-connected" : "label-offline"); color: root.peer.connected ? Theme.success : Theme.muted-text; font-size: Theme.caption-size; }
+            }
+        }
+        Text {
+            text: !root.peer.connected ? Translations.tr("manual-transfer-connect-peer") : root.picker-busy ? Translations.tr("manual-transfer-choosing") : root.native-drop-supported ? Translations.tr("manual-transfer-drop-here") : Translations.tr("manual-transfer-choose-files");
+            color: root.peer.connected ? Theme.accent : Theme.muted-text;
+            font-size: Theme.body-size; font-weight: 600; wrap: word-wrap;
+        }
+        if root.peer.connected: Text { text: Translations.tr("manual-transfer-picker-hint"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
+    }
+    touch := TouchArea {
+        enabled: root.peer.connected && !root.picker-busy;
+        mouse-cursor: self.enabled ? pointer : default;
+        clicked => { root.choose(root.peer.fingerprint); }
+    }
+}

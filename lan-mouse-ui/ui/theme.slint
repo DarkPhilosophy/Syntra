@@ -1,0 +1,57 @@
+import { Palette } from "std-widgets.slint";
+export global Theme {
+    in-out property <color> background: #000000;
+    in-out property <color> surface: #182128;
+    in-out property <color> elevated-surface: #222d36;
+    in-out property <color> accent: #80c7ff;
+    in-out property <color> success: #8bd5a5;
+    in-out property <color> warning: #f5c36b;
+    in-out property <color> danger: #f28b82;
+    in-out property <color> text: #edf3f7;
+    in-out property <color> muted-text: #aab8c2;
+    in-out property <length> sidebar-expanded-width: 248px;
+    in-out property <length> sidebar-collapsed-width: 68px;
+    in-out property <length> sidebar-mobile-width: 76px;
+    in-out property <length> compact-breakpoint: 720px;
+    in-out property <length> window-min-width: 360px;
+    in-out property <length> window-min-height: 480px;
+    in-out property <length> window-preferred-width: 1120px;
+    in-out property <length> window-preferred-height: 720px;
+    in-out property <length> content-gap: 24px;
+    in-out property <length> corner-radius: 12px;
+    in-out property <length> small-radius: 8px;
+    in-out property <length> spacing: 16px;
+    in-out property <length> small-spacing: 8px;
+    in-out property <length> large-spacing: 32px;
+    in-out property <length> card-padding: 20px;
+    in-out property <length> hit-area: 44px;
+    in-out property <length> nav-item-height: 48px;
+    in-out property <length> status-indicator-size: 10px;
+    in-out property <length> border-width: 1px;
+    in-out property <length> title-size: 26px;
+    in-out property <length> body-size: 16px;
+    in-out property <length> caption-size: 14px;
+    in-out property <duration> motion-fast: 120ms;
+    in-out property <duration> motion-normal: 180ms;
+    in-out property <length> density-scale: 1px;
+    in-out property <length> elevation-size: 12px;
+    in-out property <color> header: #11150e;
+    in-out property <color> sidebar: #161d13;
+    in-out property <color> border: #35412f;
+    in-out property <color> selection: #718355;
+    in-out property <color> on-accent: #ffffff;
+    in-out property <color> hover-surface: #263322;
+    in-out property <color> pressed-surface: #33442b;
+    in-out property <color> titlebar: #11150e;
+    in-out property <length> control-height: 40px;
+    in-out property <length> control-padding: 12px;
+    in-out property <length> row-height: 48px;
+    in-out property <length> focus-ring-width: 2px;
+    in-out property <duration> motion-emphasis: 240ms;
+    in-out property <bool> motion-enabled: true;
+    in-out property <string> base-mode: "black";
+    changed base-mode => {
+        Palette.color-scheme = root.base-mode == "white" ? ColorScheme.light : ColorScheme.dark;
+    }
+    in-out property <string> palette: "army";
+}

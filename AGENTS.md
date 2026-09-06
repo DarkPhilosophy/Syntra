@@ -2,7 +2,7 @@
 
 ## Overview
 
-Lan Mouse is an open-source Software KVM sharing mouse/keyboard input across local networks. The Rust workspace combines a GTK frontend, CLI/daemon mode, and multi-OS capture/emulation backends for Linux, Windows, and macOS.
+Lan Mouse is an open-source Software KVM sharing mouse/keyboard input across local networks. The desktop presentation uses Slint by default. GTK remains only in the separately packaged Linux clipboard helper.
 
 ## Core principles
 
@@ -19,12 +19,20 @@ Lan Mouse is an open-source Software KVM sharing mouse/keyboard input across loc
 
 ## Architecture
 
-**Pipeline:** `input-capture` → `lan-mouse-ipc` → `input-emulation`
+**Frontend pipeline:** service state → `lan-mouse-ipc` → frontend-neutral view models → Slint presentation.
+
+The Slint UI is responsible for rendering snapshots and sending typed intents; it does not own
+networking, capture, emulation, clipboard, transfer, or authorization state machines.
+
+**Input pipeline:** `input-capture` → `lan-mouse-ipc` → `input-emulation`
 
 - **input-capture:** Reads OS events into a `Stream<CaptureEvent>`. Backends tried in priority order (libei → layer-shell → X11 → fallback). Tracks `pressed_keys` to avoid stuck modifiers. `position_map` queues events when multiple clients share a screen edge.
 - **input-emulation:** Replays events via the `Emulation` trait (`consume`, `create`, `destroy`, `terminate`). Maintains `pressed_keys` and releases them on disconnect.
 - **lan-mouse-ipc / lan-mouse-proto:** Protocol glue and serialization. Events are UDP; connection requests are TCP on the same port. Version bumps required when serialization changes.
 - **input-event:** Shared scancode enums and abstract event types—extend here, don't duplicate translations.
+
+The Linux `lan-mouse-adapter-gtk-clipboard` executable is a runtime helper, not a GUI. Keep it
+packaged on Linux until a verified replacement exists; the FUSE helper remains separate as well.
 
 ## Feature & cfg discipline
 
@@ -41,11 +49,11 @@ Lan Mouse is an open-source Software KVM sharing mouse/keyboard input across loc
 ## Commands
 
 ```sh
-cargo build --workspace                                    # full build
+cargo build -p lan-mouse --no-default-features --features slint-ui,layer_shell_capture,x11_capture,libei_capture,wlroots_emulation,libei_emulation,rdp_emulation,x11_emulation  # Slint Linux build during cutover
 cargo build -p <crate>                                     # single crate
-cargo test --workspace                                     # all tests
-cargo fmt && cargo clippy --workspace --all-targets --all-features  # lint
-RUST_LOG=lan_mouse=debug cargo run                         # debug logging
+cargo test -p lan-mouse-ui                                      # Slint UI tests
+cargo fmt && cargo clippy -p lan-mouse --all-targets --no-default-features --features slint-ui,layer_shell_capture,x11_capture,libei_capture,wlroots_emulation,libei_emulation,rdp_emulation,x11_emulation  # lint
+RUST_LOG=lan_mouse=debug cargo run -p lan-mouse --no-default-features --features slint-ui,layer_shell_capture,x11_capture,libei_capture,wlroots_emulation,libei_emulation,rdp_emulation,x11_emulation  # Slint runtime
 ```
 
 Run from repo root—no `cd` in scripts.
@@ -53,7 +61,7 @@ Run from repo root—no `cd` in scripts.
 ## Testing
 
 - Unit tests for utilities; integration tests for protocol behavior.
-- OS-specific backends: test via GTK/CLI on target OS or document manual verification.
+- OS-specific backends: test via the Slint frontend or CLI on the target OS, or document manual verification.
 - Dummy backend exercises pipeline without real dependencies.
 - Verify `terminate()` releases keys on unexpected disconnect.
 
@@ -62,4 +70,4 @@ Run from repo root—no `cd` in scripts.
 1. Clarify ambiguous requirements, especially OS-specific behavior.
 2. Implement minimal change; flag follow-up work.
 3. Add proportional tests; run `cargo test` on affected crates.
-4. Run `cargo fmt` and `cargo clippy --workspace --all-targets --all-features`.
+4. Run `cargo fmt` and package-scoped `cargo clippy` with the selected feature set; Linux builds also include the separate clipboard and FUSE helpers.

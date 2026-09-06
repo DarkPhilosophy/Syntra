@@ -69,3 +69,36 @@ pub(crate) fn generate_key_and_cert(path: &Path) -> Result<Certificate, Error> {
     writer.write_all(serialized.as_bytes())?;
     Ok(cert)
 }
+
+/// Replace the persisted identity atomically. Existing sessions keep their
+/// certificate until the engine is restarted; failed writes preserve the key.
+pub(crate) fn regenerate_key_and_cert(path: &Path) -> Result<String, Error> {
+    let cert = Certificate::generate_self_signed(["ignored".to_owned()])?;
+    let fingerprint = certificate_fingerprint(&cert);
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("certificate path has no parent"))?;
+    let temporary = parent.join(format!(".identity-{}.tmp", fingerprint.replace(':', "")));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let result = (|| -> io::Result<()> {
+        let mut file = options.open(&temporary)?;
+        file.write_all(cert.serialize_pem().as_bytes())?;
+        #[cfg(unix)]
+        file.set_permissions(fs::Permissions::from_mode(0o400))?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&temporary, path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result?;
+    Ok(fingerprint)
+}

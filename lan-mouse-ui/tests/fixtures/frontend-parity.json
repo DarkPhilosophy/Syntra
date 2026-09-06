@@ -1,0 +1,57 @@
+{
+  "schema": 2,
+  "events": [
+    {"variant":"Created","classification":"destination","model":"clients","page":"clients","action":"insert","origin":"ipc_event"},
+    {"variant":"NoSuchClient","classification":"destination","model":"diagnostics","page":"diagnostics","action":"record_missing_client","origin":"ipc_event"},
+    {"variant":"State","classification":"destination","model":"clients","page":"clients","action":"update","origin":"ipc_event"},
+    {"variant":"Deleted","classification":"destination","model":"clients","page":"clients","action":"remove","origin":"ipc_event"},
+    {"variant":"PortChanged","classification":"destination","model":"status","page":"settings","action":"set_listen_port_result","origin":"ipc_event"},
+    {"variant":"Enumerate","classification":"destination","model":"clients","page":"clients","action":"replace_all","origin":"ipc_event"},
+    {"variant":"Error","classification":"destination","model":"diagnostics","page":"diagnostics","action":"record_error","origin":"ipc_event"},
+    {"variant":"CaptureStatus","classification":"destination","model":"input_health","page":"status","action":"set_capture_status","origin":"ipc_event"},
+    {"variant":"EmulationStatus","classification":"destination","model":"input_health","page":"status","action":"set_emulation_status","origin":"ipc_event"},
+    {"variant":"AuthorizedUpdated","classification":"destination","model":"authorization","page":"authorization","action":"replace_authorized_keys","origin":"ipc_event"},
+    {"variant":"PublicKeyFingerprint","classification":"destination","model":"authorization","page":"authorization","action":"set_local_fingerprint","origin":"ipc_event"},
+    {"variant":"DeviceConnected","classification":"destination","model":"diagnostics","page":"diagnostics","action":"record_device_connected","origin":"ipc_event"},
+    {"variant":"DeviceEntered","classification":"destination","model":"diagnostics","page":"diagnostics","action":"record_device_entered","origin":"ipc_event"},
+    {"variant":"IncomingDisconnected","classification":"destination","model":"diagnostics","page":"diagnostics","action":"record_device_disconnected","origin":"ipc_event"},
+    {"variant":"ConnectionAttempt","classification":"destination","model":"authorization","page":"authorization","action":"prompt_connection_approval","origin":"ipc_event"},
+    {"variant":"ClipboardSettings","classification":"destination","model":"clipboard","page":"settings","action":"replace_settings","origin":"ipc_event"},
+    {"variant":"ClipboardTransferStatus","classification":"destination","model":"transfers","page":"transfers","action":"upsert_transfer","origin":"ipc_event"}
+  ],
+  "requests": [
+    {"variant":"Activate","classification":"destination","model":"clients","page":"clients","action":"set_active","origin":"gtk_ui"},
+    {"variant":"Create","classification":"destination","model":"clients","page":"clients","action":"create","origin":"gtk_ui"},
+    {"variant":"ChangePort","classification":"destination","model":"status","page":"settings","action":"change_listen_port","origin":"gtk_ui"},
+    {"variant":"Delete","classification":"destination","model":"clients","page":"clients","action":"delete","origin":"gtk_ui"},
+    {"variant":"Enumerate","classification":"service-only","reason":"cli_only_enumeration","origin":"cli"},
+    {"variant":"ResolveDns","classification":"destination","model":"clients","page":"clients","action":"resolve_dns","origin":"gtk_ui"},
+    {"variant":"UpdateHostname","classification":"destination","model":"clients","page":"clients","action":"update_hostname","origin":"gtk_ui"},
+    {"variant":"UpdatePort","classification":"destination","model":"clients","page":"clients","action":"update_port","origin":"gtk_ui"},
+    {"variant":"UpdatePosition","classification":"destination","model":"clients","page":"clients","action":"update_position","origin":"gtk_ui"},
+    {"variant":"UpdateFixIps","classification":"destination","model":"clients","page":"clients","action":"update_fixed_ips","origin":"gtk_ui"},
+    {"variant":"EnableCapture","classification":"destination","model":"input_health","page":"status","action":"enable_capture","origin":"gtk_ui"},
+    {"variant":"EnableEmulation","classification":"destination","model":"input_health","page":"status","action":"enable_emulation","origin":"gtk_ui"},
+    {"variant":"Sync","classification":"service-only","reason":"ipc_listener_synthesized_reconnect_resync","origin":"ipc_listener"},
+    {"variant":"AuthorizeKey","classification":"destination","model":"authorization","page":"authorization","action":"authorize_key","origin":"gtk_ui"},
+    {"variant":"RemoveAuthorizedKey","classification":"destination","model":"authorization","page":"authorization","action":"remove_authorized_key","origin":"gtk_ui"},
+    {"variant":"UpdateEnterHook","classification":"destination","model":"clients","page":"clients","action":"update_enter_hook","origin":"cli"},
+    {"variant":"SaveConfiguration","classification":"service-only","reason":"explicit_cli_persistence_flush","origin":"cli"},
+    {"variant":"SetClipboardText","classification":"destination","model":"clipboard","page":"settings","action":"set_text_enabled","origin":"gtk_ui"},
+    {"variant":"SetClipboardImage","classification":"destination","model":"clipboard","page":"settings","action":"set_image_enabled","origin":"gtk_ui"},
+    {"variant":"SetClipboardFiles","classification":"destination","model":"clipboard","page":"settings","action":"set_files_enabled","origin":"gtk_ui"},
+    {"variant":"CancelClipboardTransfer","classification":"destination","model":"transfers","page":"transfers","action":"cancel_transfer","origin":"gtk_ui"}
+  ],
+  "transport_lifecycle": [
+    {"variant":"DaemonUnavailable","classification":"destination","model":"status","page":"status","action":"show_daemon_unavailable","origin":"transport"},
+    {"variant":"Reconnecting","classification":"destination","model":"status","page":"status","action":"show_reconnecting","origin":"transport"},
+    {"variant":"Resynchronized","classification":"destination","model":"status","page":"status","action":"show_connected","origin":"transport"}
+  ],
+  "platform_actions": [
+    {"variant":"HideWindow","classification":"destination","model":"navigation","page":"status","action":"hide_window","origin":"platform"},
+    {"variant":"Quit","classification":"destination","model":"navigation","page":"status","action":"quit_application","origin":"platform"},
+    {"variant":"OpenAccessibilitySettings","classification":"destination","model":"capabilities","page":"status","action":"open_accessibility_settings","origin":"platform"},
+    {"variant":"RelaunchAfterPermissionGrant","classification":"destination","model":"capabilities","page":"status","action":"relaunch_application","origin":"platform"},
+    {"variant":"GrantFlatpakFilesystem","classification":"destination","model":"capabilities","page":"settings","action":"grant_file_transfer_access","origin":"platform"}
+  ]
+}

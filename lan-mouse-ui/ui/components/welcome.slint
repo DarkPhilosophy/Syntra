@@ -1,0 +1,124 @@
+import { Translations } from "../localization.slint";
+import { Theme } from "../theme.slint";
+
+export component WelcomeOverlay inherits Rectangle {
+    in-out property <bool> launch-visible: true;
+    in property <bool> launch-ready: false;
+    private property <bool> tonal-phase: false;
+    private property <bool> phase-shift: tonal-phase != root.launch-ready;
+    TouchArea {
+        width: parent.width;
+        height: parent.height;
+    }
+    private property <length> wordmark-size: self.width < Theme.compact-breakpoint ? 54px : 76px;
+
+    visible: launch-visible;
+    opacity: launch-ready ? 0 : 1;
+    background: Theme.background;
+    clip: true;
+    animate opacity {
+        duration: Theme.motion-enabled ? 420ms : 0ms;
+        easing: ease-out;
+    }
+
+    tonal-timer := Timer {
+        interval: 1800ms;
+        running: root.launch-visible && !root.launch-ready && Theme.motion-enabled;
+        triggered => { root.tonal-phase = !root.tonal-phase; }
+    }
+
+    dismiss-timer := Timer {
+        interval: Theme.motion-enabled ? 420ms : 1ms;
+        running: root.launch-visible && root.launch-ready;
+        triggered => { root.launch-visible = false; }
+    }
+
+    Rectangle {
+        width: parent.width * 0.72;
+        height: self.width;
+        x: root.phase-shift ? parent.width * 0.42 : parent.width * 0.34;
+        y: root.phase-shift ? -self.height * 0.48 : -self.height * 0.56;
+        border-radius: self.width / 2;
+        background: Theme.accent.with-alpha(0.08);
+        opacity: root.phase-shift ? 0.84 : 1;
+        animate x, y, opacity {
+            duration: Theme.motion-enabled && root.launch-visible ? 1800ms : 0ms;
+            easing: ease-in-out;
+        }
+    }
+
+    Rectangle {
+        width: parent.width * 0.58;
+        height: self.width;
+        x: root.phase-shift ? -self.width * 0.30 : -self.width * 0.22;
+        y: root.phase-shift ? parent.height * 0.62 : parent.height * 0.54;
+        border-radius: self.width / 2;
+        background: Theme.selection.with-alpha(0.10);
+        opacity: root.phase-shift ? 1 : 0.76;
+        animate x, y, opacity {
+            duration: Theme.motion-enabled && root.launch-visible ? 1800ms : 0ms;
+            easing: ease-in-out;
+        }
+    }
+
+    Rectangle {
+        width: parent.width * 0.36;
+        height: self.width;
+        x: root.phase-shift ? parent.width * 0.62 : parent.width * 0.68;
+        y: root.phase-shift ? parent.height * 0.68 : parent.height * 0.74;
+        border-radius: self.width / 2;
+        background: Theme.elevated-surface.with-alpha(0.56);
+        animate x, y {
+            duration: Theme.motion-enabled && root.launch-visible ? 1800ms : 0ms;
+            easing: ease-in-out;
+        }
+    }
+
+    VerticalLayout {
+        x: Theme.large-spacing;
+        y: 0;
+        width: parent.width - Theme.large-spacing * 2;
+        height: parent.height;
+        alignment: center;
+        spacing: Theme.small-spacing;
+
+        Text {
+            text: Translations.tr("welcome-title");
+            color: Theme.text;
+            font-size: root.wordmark-size;
+            font-weight: 700;
+            letter-spacing: root.width < Theme.compact-breakpoint ? 3px : 5px;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+
+        Rectangle {
+            height: root.width < Theme.compact-breakpoint ? 42px : 48px;
+            background: transparent;
+
+            Rectangle {
+                width: min(parent.width - 16px, 340px);
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                height: 8px;
+                border-radius: 4px;
+                background: Theme.accent.with-alpha(0.025);
+                drop-shadow-blur: 24px;
+                drop-shadow-color: Theme.accent.with-alpha(0.28);
+                drop-shadow-offset-x: 0px;
+                drop-shadow-offset-y: 0px;
+            }
+
+            Text {
+                width: parent.width;
+                height: parent.height;
+                text: Translations.tr("welcome-motto");
+                color: Theme.text;
+                font-size: root.width < Theme.compact-breakpoint ? Theme.body-size : 16px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+    }
+}

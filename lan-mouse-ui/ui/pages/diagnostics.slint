@@ -1,0 +1,70 @@
+import { LineEdit, ComboBox, ScrollView } from "std-widgets.slint";
+import { Translations } from "../localization.slint";
+
+import { Theme } from "../theme.slint";
+import { DiagnosticEntry, DiagnosticRow, DiagnosticColumns } from "../components/diagnostic-row.slint";
+import { AppButton } from "../components/controls.slint";
+
+export component DiagnosticsPage inherits Rectangle {
+    in property <[DiagnosticEntry]> entries;
+    in property <int> message-columns: 80;
+    in property <string> selected-level: "all";
+    in property <string> selected-stage: "all";
+    in property <string> selected-direction: "all";
+    in property <string> text-filter;
+    in property <bool> paused: false;
+    in-out property <bool> follow-tail: true;
+    in property <bool> compact: false;
+    in property <int> visible-count: entries.length;
+    callback level-filter-changed(string);
+    callback stage-filter-changed(string);
+    callback direction-filter-changed(string);
+    callback text-filter-changed(string);
+    callback pause-toggled(bool);
+    callback clear-requested();
+    callback follow-tail-toggled(bool);
+
+    background: Theme.background;
+    vertical-stretch: 1;
+
+    VerticalLayout {
+        spacing: Theme.spacing;
+        padding: Theme.content-gap;
+        Text { text: "Diagnostics"; color: Theme.text; font-size: Theme.title-size; }
+        HorizontalLayout {
+            spacing: 8px;
+            ComboBox { model: ["all", "info", "warning", "error"]; current-value: selected-level; selected(value) => { root.level-filter-changed(value); } }
+            ComboBox { model: ["all", "capture", "network", "clipboard", "authorization"]; current-value: selected-stage; selected(value) => { root.stage-filter-changed(value); } }
+            ComboBox { model: ["all", "local", "incoming", "outgoing"]; current-value: selected-direction; selected(value) => { root.direction-filter-changed(value); } }
+            LineEdit { horizontal-stretch: 1; placeholder-text: "Filter messages"; text: text-filter; edited => { root.text-filter-changed(self.text); } }
+            AppButton { text: paused ? "Resume" : "Pause"; clicked => { root.pause-toggled(!paused); } }
+            AppButton { text: "Clear"; clicked => { root.clear-requested(); } }
+        }
+        HorizontalLayout {
+            height: 30px;
+            Text { text: paused ? "Paused — new events are retained" : "Live"; color: paused ? Theme.warning : Theme.success; font-size: Theme.body-size; vertical-alignment: center; }
+            Text { text: "\{visible-count} events"; color: Theme.muted-text; font-size: Theme.body-size; horizontal-stretch: 1; horizontal-alignment: right; vertical-alignment: center; }
+            AppButton { text: follow-tail ? "Following tail" : "Follow tail"; clicked => { root.follow-tail = !root.follow-tail; } }
+        }
+        table-scroll := ScrollView {
+            vertical-stretch: 1;
+            viewport-width: max(self.visible-width, DiagnosticColumns.fixed-width + root.message-columns * Theme.body-size * 0.75);
+            viewport-height: table.preferred-height;
+            changed viewport-height => {
+                if root.follow-tail {
+                    self.viewport-y = min(0px, self.visible-height - self.viewport-height);
+                }
+            }
+            table := VerticalLayout {
+                width: table-scroll.viewport-width;
+                spacing: 0px;
+                alignment: start;
+                DiagnosticRow {
+                    header: true;
+                    entry: { timestamp: "Time", level: "Level", stage: "Stage", direction: "Direction", correlation: "Event", message: "Message" };
+                }
+                for entry in entries: DiagnosticRow { entry: entry; compact: root.compact; }
+            }
+        }
+    }
+}

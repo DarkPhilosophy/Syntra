@@ -1,0 +1,87 @@
+import { ScrollView, LineEdit } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { Translations } from "../localization.slint";
+import { AppButton } from "../components/controls.slint";
+import { Avatar } from "../components/avatar.slint";
+
+export struct HistoryItem {
+    origin: string,
+    sequence: string,
+    timestamp: string,
+    source-label: string,
+    source-image: image,
+    has-source-image: bool,
+    kind-label: string,
+    preview-text: string,
+    thumbnail: image,
+    has-thumbnail: bool,
+    pinned: bool,
+}
+
+export component HistoryPage inherits Rectangle {
+    in property <[HistoryItem]> records;
+    in property <string> query;
+    in property <bool> busy;
+    in property <bool> connected;
+    in property <bool> has-more;
+    in property <string> error-message;
+    in property <string> operation-status;
+    private property <bool> confirm-clear: false;
+    callback search(string);
+    callback refresh();
+    callback load-more();
+    callback pin(string, string, bool);
+    callback clear-global();
+    background: Theme.background;
+
+    VerticalLayout {
+        padding: Theme.content-gap;
+        spacing: Theme.spacing;
+        HorizontalLayout {
+            Text { text: Translations.tr("history-title"); color: Theme.text; font-size: Theme.title-size; font-weight: 600; horizontal-stretch: 1; vertical-alignment: center; }
+            AppButton { text: Translations.tr("history-refresh"); enabled: root.connected && !root.busy; clicked => { root.refresh(); } }
+        }
+        Text { text: Translations.tr("history-description"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; vertical-stretch: 0; }
+        LineEdit { text: root.query; placeholder-text: Translations.tr("history-search"); edited(value) => { root.search(value); } }
+        if root.error-message != "": Text { text: root.error-message; color: Theme.danger; font-size: Theme.caption-size; wrap: word-wrap; vertical-stretch: 0; }
+        if root.operation-status != "": Text { text: root.operation-status; color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; vertical-stretch: 0; }
+        if !root.connected: Text { text: Translations.tr("history-disconnected"); color: Theme.warning; font-size: Theme.caption-size; wrap: word-wrap; vertical-stretch: 0; }
+        if root.busy: Text { text: Translations.tr("history-loading"); color: Theme.muted-text; font-size: Theme.caption-size; vertical-stretch: 0; }
+        ScrollView {
+            VerticalLayout {
+                alignment: start;
+                spacing: Theme.small-spacing;
+                if root.records.length == 0 && !root.busy: Text { text: Translations.tr("history-empty"); color: Theme.muted-text; font-size: Theme.body-size; wrap: word-wrap; }
+                for record in root.records: Rectangle {
+                    height: record-content.preferred-height;
+                    vertical-stretch: 0;
+                    background: Theme.surface;
+                    border-radius: Theme.small-radius;
+                    record-content := VerticalLayout {
+                        padding: Theme.spacing;
+                        spacing: Theme.small-spacing;
+                        HorizontalLayout {
+                            spacing: Theme.small-spacing;
+                            Avatar { source: record.source-image; has-image: record.has-source-image; size: 32px; }
+                            Text { text: record.source-label; color: Theme.text; font-size: Theme.body-size; font-weight: 600; horizontal-stretch: 1; vertical-alignment: center; overflow: elide; }
+                            AppButton { text: Translations.tr(record.pinned ? "history-unpin" : "history-pin"); enabled: root.connected && !root.busy; clicked => { root.pin(record.origin, record.sequence, !record.pinned); } }
+                        }
+                        Text { text: record.kind-label + " · " + record.timestamp; color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
+                        if record.has-thumbnail: Image { source: record.thumbnail; height: 160px; image-fit: contain; }
+                        if record.preview-text != "": Text { text: record.preview-text; color: Theme.text; font-size: Theme.body-size; wrap: word-wrap; overflow: elide; max-height: Theme.body-size * 5; }
+                    }
+                }
+            }
+        }
+        if root.has-more: AppButton { text: Translations.tr("history-more"); enabled: root.connected && !root.busy; clicked => { root.load-more(); } }
+        if root.confirm-clear: VerticalLayout {
+            spacing: Theme.small-spacing;
+            Text { text: Translations.tr("history-clear-confirm"); color: Theme.warning; font-size: Theme.caption-size; wrap: word-wrap; }
+            HorizontalLayout {
+                AppButton { text: Translations.tr("history-clear"); danger: true; enabled: root.connected && !root.busy; clicked => { root.confirm-clear = false; root.clear-global(); } }
+                AppButton { text: Translations.tr("action-cancel"); clicked => { root.confirm-clear = false; } }
+            }
+        }
+        if !root.confirm-clear: AppButton { text: Translations.tr("history-clear"); danger: true; enabled: root.connected && !root.busy; clicked => { root.confirm-clear = true; } }
+    }
+}

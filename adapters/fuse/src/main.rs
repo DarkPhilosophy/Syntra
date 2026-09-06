@@ -90,7 +90,12 @@ mod linux {
         }
 
         fn snapshot(&self) -> (u64, u64, u64, u64) {
-            (self.completed_entries, self.total_entries, self.completed_bytes, self.total_bytes)
+            (
+                self.completed_entries,
+                self.total_entries,
+                self.completed_bytes,
+                self.total_bytes,
+            )
         }
     }
 
@@ -230,7 +235,11 @@ mod linux {
             let started = Instant::now();
             let (file_id, outcome, errno) =
                 if flags & (libc::O_WRONLY | libc::O_RDWR | libc::O_TRUNC | libc::O_CREAT) != 0 {
-                    (self.nodes.get(&ino).map(|node| node.entry_id), "error", Some(EROFS))
+                    (
+                        self.nodes.get(&ino).map(|node| node.entry_id),
+                        "error",
+                        Some(EROFS),
+                    )
                 } else if let Some(node) = self.nodes.get(&ino) {
                     (Some(node.entry_id), "opened", None)
                 } else {
@@ -275,7 +284,13 @@ mod linux {
                     "clipboard-trace event=read direction=local transfer_id={} file_id={:?} \
                      ino={} offset={} requested_bytes={} returned_bytes=0 outcome=cancelled \
                      errno={} elapsed_ms={}",
-                    self.transfer_id, file_id, ino, offset, size, EIO, started.elapsed().as_millis()
+                    self.transfer_id,
+                    file_id,
+                    ino,
+                    offset,
+                    size,
+                    EIO,
+                    started.elapsed().as_millis()
                 );
                 reply.error(EIO);
                 return;
@@ -284,7 +299,12 @@ mod linux {
                 eprintln!(
                     "clipboard-trace event=read direction=local transfer_id={} ino={} \
                      offset={} requested_bytes={} returned_bytes=0 outcome=error errno={} elapsed_ms={}",
-                    self.transfer_id, ino, offset, size, ENOENT, started.elapsed().as_millis()
+                    self.transfer_id,
+                    ino,
+                    offset,
+                    size,
+                    ENOENT,
+                    started.elapsed().as_millis()
                 );
                 reply.error(ENOENT);
                 return;
@@ -293,7 +313,12 @@ mod linux {
                 eprintln!(
                     "clipboard-trace event=read direction=local transfer_id={} file_id={} \
                      ino={} offset={} requested_bytes={} returned_bytes=0 outcome=error errno={} elapsed_ms={}",
-                    self.transfer_id, node.entry_id, ino, offset, size, EINVAL,
+                    self.transfer_id,
+                    node.entry_id,
+                    ino,
+                    offset,
+                    size,
+                    EINVAL,
                     started.elapsed().as_millis()
                 );
                 reply.error(EINVAL);
@@ -304,7 +329,12 @@ mod linux {
                 eprintln!(
                     "clipboard-trace event=read direction=local transfer_id={} file_id={} \
                      ino={} offset={} requested_bytes={} returned_bytes=0 outcome=eof errno=none elapsed_ms={}",
-                    self.transfer_id, node.entry_id, ino, offset, size, started.elapsed().as_millis()
+                    self.transfer_id,
+                    node.entry_id,
+                    ino,
+                    offset,
+                    size,
+                    started.elapsed().as_millis()
                 );
                 reply.data(&[]);
                 return;
@@ -319,7 +349,9 @@ mod linux {
             let cancelled = Arc::clone(&self.cancelled);
             let out = Arc::clone(&self.out);
             let reserved_requests = total.div_ceil(MAX_CHUNK) as u64 * MAX_RANGE_ATTEMPTS;
-            let next_request = self.next_request.fetch_add(reserved_requests, Ordering::Relaxed);
+            let next_request = self
+                .next_request
+                .fetch_add(reserved_requests, Ordering::Relaxed);
             thread::spawn(move || {
                 let mut data = Vec::with_capacity(total as usize);
                 while data.len() < total as usize {
@@ -327,7 +359,13 @@ mod linux {
                         eprintln!(
                             "clipboard-trace event=read direction=local transfer_id={} file_id={} \
                              offset={} requested_bytes={} returned_bytes={} outcome=cancelled errno={} elapsed_ms={}",
-                            transfer_id, entry_id, offset, total, data.len(), EIO, started.elapsed().as_millis()
+                            transfer_id,
+                            entry_id,
+                            offset,
+                            total,
+                            data.len(),
+                            EIO,
+                            started.elapsed().as_millis()
                         );
                         reply.error(EIO);
                         return;
@@ -341,52 +379,119 @@ mod linux {
                         eprintln!(
                             "clipboard-trace event=range-request direction=outbound transfer_id={} \
                              file_id={} request_id={} offset={} requested_bytes={} attempt={}",
-                            transfer_id, entry_id, request_id, chunk_offset, length, attempt + 1
+                            transfer_id,
+                            entry_id,
+                            request_id,
+                            chunk_offset,
+                            length,
+                            attempt + 1
                         );
                         let (tx, rx) = mpsc::channel();
                         pending.lock().insert(request_id, tx);
                         let request = Message::RangeRequest(RangeRequest {
-                            transfer_id: transfer_id.clone(), request_id, entry_id, offset: chunk_offset, length,
+                            transfer_id: transfer_id.clone(),
+                            request_id,
+                            entry_id,
+                            offset: chunk_offset,
+                            length,
                         });
                         if write_message(&mut *out.lock(), &request).is_err() {
                             pending.lock().remove(&request_id);
-                            eprintln!("clipboard-trace event=range-request direction=outbound transfer_id={} file_id={} request_id={} outcome=error errno={} elapsed_ms={}",
-                                transfer_id, entry_id, request_id, EIO, started.elapsed().as_millis());
+                            eprintln!(
+                                "clipboard-trace event=range-request direction=outbound transfer_id={} file_id={} request_id={} outcome=error errno={} elapsed_ms={}",
+                                transfer_id,
+                                entry_id,
+                                request_id,
+                                EIO,
+                                started.elapsed().as_millis()
+                            );
                             reply.error(EIO);
                             return;
                         }
                         match rx.recv_timeout(RANGE_ATTEMPT_TIMEOUT) {
-                            Ok(received) => { response = Some((request_id, received)); break; }
-                            Err(_) => { pending.lock().remove(&request_id); }
+                            Ok(received) => {
+                                response = Some((request_id, received));
+                                break;
+                            }
+                            Err(_) => {
+                                pending.lock().remove(&request_id);
+                            }
                         }
                     }
-                    let Some((request_id, response)) = response else { reply.error(EIO); return; };
-                    let Ok(bytes) = response.decode_data(length as usize) else { reply.error(EIO); return; };
-                    if response.transfer_id != transfer_id || response.request_id != request_id ||
-                        response.offset != chunk_offset || response.error.is_some() ||
-                        bytes.is_empty() || bytes.len() > length as usize ||
-                        (!response.eof && bytes.len() != length as usize) {
-                        eprintln!("clipboard-trace event=range-response direction=inbound transfer_id={} file_id={} request_id={} offset={} requested_bytes={} returned_bytes={} outcome=error errno={} elapsed_ms={}",
-                            transfer_id, entry_id, request_id, chunk_offset, length, bytes.len(), EIO, started.elapsed().as_millis());
+                    let Some((request_id, response)) = response else {
+                        reply.error(EIO);
+                        return;
+                    };
+                    let Ok(bytes) = response.decode_data(length as usize) else {
+                        reply.error(EIO);
+                        return;
+                    };
+                    if response.transfer_id != transfer_id
+                        || response.request_id != request_id
+                        || response.offset != chunk_offset
+                        || response.error.is_some()
+                        || bytes.is_empty()
+                        || bytes.len() > length as usize
+                        || (!response.eof && bytes.len() != length as usize)
+                    {
+                        eprintln!(
+                            "clipboard-trace event=range-response direction=inbound transfer_id={} file_id={} request_id={} offset={} requested_bytes={} returned_bytes={} outcome=error errno={} elapsed_ms={}",
+                            transfer_id,
+                            entry_id,
+                            request_id,
+                            chunk_offset,
+                            length,
+                            bytes.len(),
+                            EIO,
+                            started.elapsed().as_millis()
+                        );
                         reply.error(EIO);
                         return;
                     }
-                    eprintln!("clipboard-trace event=range-response direction=inbound transfer_id={} file_id={} request_id={} offset={} requested_bytes={} returned_bytes={} outcome={} elapsed_ms={}",
-                        transfer_id, entry_id, request_id, chunk_offset, length, bytes.len(), if response.eof {"eof"} else {"ok"}, started.elapsed().as_millis());
+                    eprintln!(
+                        "clipboard-trace event=range-response direction=inbound transfer_id={} file_id={} request_id={} offset={} requested_bytes={} returned_bytes={} outcome={} elapsed_ms={}",
+                        transfer_id,
+                        entry_id,
+                        request_id,
+                        chunk_offset,
+                        length,
+                        bytes.len(),
+                        if response.eof { "eof" } else { "ok" },
+                        started.elapsed().as_millis()
+                    );
                     data.extend_from_slice(&bytes);
-                    if response.eof { break; }
+                    if response.eof {
+                        break;
+                    }
                 }
                 let returned = data.len();
                 reply.data(&data);
-                eprintln!("clipboard-trace event=progress direction=local transfer_id={} file_id={} offset={} requested_bytes={} returned_bytes={} outcome=progress elapsed_ms={}",
-                    transfer_id, entry_id, offset, total, returned, started.elapsed().as_millis());
-                if progress.lock().record(entry_id, offset, returned as u64, node_size) {
-                    let (completed_entries, total_entries, completed_bytes, total_bytes) = progress.lock().snapshot();
+                eprintln!(
+                    "clipboard-trace event=progress direction=local transfer_id={} file_id={} offset={} requested_bytes={} returned_bytes={} outcome=progress elapsed_ms={}",
+                    transfer_id,
+                    entry_id,
+                    offset,
+                    total,
+                    returned,
+                    started.elapsed().as_millis()
+                );
+                if progress
+                    .lock()
+                    .record(entry_id, offset, returned as u64, node_size)
+                {
+                    let (completed_entries, total_entries, completed_bytes, total_bytes) =
+                        progress.lock().snapshot();
                     let mut writer = progress_out.lock();
-                    let _ = write_message(&mut *writer, &Message::Progress(Progress {
-                        transfer_id: transfer_id.clone(), completed_entries, total_entries,
-                        completed_bytes: Some(completed_bytes), total_bytes: Some(total_bytes),
-                    }));
+                    let _ = write_message(
+                        &mut *writer,
+                        &Message::Progress(Progress {
+                            transfer_id: transfer_id.clone(),
+                            completed_entries,
+                            total_entries,
+                            completed_bytes: Some(completed_bytes),
+                            total_bytes: Some(total_bytes),
+                        }),
+                    );
                 }
             });
         }
@@ -544,26 +649,50 @@ mod linux {
                 adapter_id: "fuse".into(),
                 name: "Read-only Clipboard FUSE".into(),
                 capabilities: lan_mouse_adapter_api::Capabilities {
-                    clipboard_read: true, paste: true, cancel: true, requires_live_mount: true,
-                    mime_types: vec!["text/uri-list".into(), "x-special/gnome-copied-files".into()],
+                    clipboard_read: true,
+                    paste: true,
+                    cancel: true,
+                    requires_live_mount: true,
+                    mime_types: vec![
+                        "text/uri-list".into(),
+                        "x-special/gnome-copied-files".into(),
+                    ],
                 },
             },
-        ).map_err(|error| io::Error::other(error.to_string()))?;
+        )
+        .map_err(|error| io::Error::other(error.to_string()))?;
         let mut reader = BufReader::new(io::stdin());
         let mut first_line = String::new();
         reader.read_line(&mut first_line)?;
         let manifest = match Message::decode_line(first_line.trim_end()) {
             Ok(Message::RemoteManifest(manifest)) => {
-                eprintln!("clipboard-trace event=manifest-receipt direction=inbound transfer_id={} file_count={} total_bytes={} outcome=accepted elapsed_ms=0",
-                    manifest.transfer_id, manifest.entries.len(), manifest.entries.iter().filter_map(|entry| entry.size).sum::<u64>());
+                eprintln!(
+                    "clipboard-trace event=manifest-receipt direction=inbound transfer_id={} file_count={} total_bytes={} outcome=accepted elapsed_ms=0",
+                    manifest.transfer_id,
+                    manifest.entries.len(),
+                    manifest
+                        .entries
+                        .iter()
+                        .filter_map(|entry| entry.size)
+                        .sum::<u64>()
+                );
                 manifest
             }
             Ok(_) => {
-                eprintln!("clipboard-trace event=manifest-receipt direction=inbound transfer_id=unknown outcome=error errno={} elapsed_ms=0", EINVAL);
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "expected remote manifest"));
+                eprintln!(
+                    "clipboard-trace event=manifest-receipt direction=inbound transfer_id=unknown outcome=error errno={} elapsed_ms=0",
+                    EINVAL
+                );
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "expected remote manifest",
+                ));
             }
             Err(error) => {
-                eprintln!("clipboard-trace event=manifest-receipt direction=inbound transfer_id=unknown outcome=error errno={} elapsed_ms=0", EINVAL);
+                eprintln!(
+                    "clipboard-trace event=manifest-receipt direction=inbound transfer_id=unknown outcome=error errno={} elapsed_ms=0",
+                    EINVAL
+                );
                 return Err(io::Error::new(io::ErrorKind::InvalidData, error));
             }
         };
@@ -572,10 +701,16 @@ mod linux {
             HashMap::<u64, mpsc::Sender<RangeResponse>>::new(),
         ));
         let progress = Arc::new(Mutex::new(TransferProgress {
-            covered: HashMap::new(), completed: HashSet::new(), completed_bytes: 0,
+            covered: HashMap::new(),
+            completed: HashSet::new(),
+            completed_bytes: 0,
             total_bytes: manifest.entries.iter().filter_map(|e| e.size).sum(),
             completed_entries: 0,
-            total_entries: manifest.entries.iter().filter(|e| matches!(e.kind, EntryKind::File)).count() as u64,
+            total_entries: manifest
+                .entries
+                .iter()
+                .filter(|e| matches!(e.kind, EntryKind::File))
+                .count() as u64,
         }));
         let cancelled = Arc::new(AtomicBool::new(false));
         let (fs, roots) = build_fs(

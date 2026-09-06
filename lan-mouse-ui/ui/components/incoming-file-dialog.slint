@@ -1,0 +1,66 @@
+import { ScrollView, LineEdit } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { Translations } from "../localization.slint";
+import { Avatar } from "avatar.slint";
+import { AppButton } from "controls.slint";
+
+export component IncomingFileDialog inherits Rectangle {
+    in property <string> peer-name;
+    in property <image> peer-avatar;
+    in property <bool> has-peer-avatar;
+    in property <string> file-name;
+    in property <string> size-label;
+    in-out property <string> destination-directory;
+    in property <string> error-message;
+    in property <bool> busy;
+    in property <bool> picker-busy;
+    in property <bool> connected;
+    in property <int> queued-count;
+    callback choose-directory();
+    callback accept();
+    callback decline();
+    background: #00000099;
+    TouchArea { }
+    panel := Rectangle {
+        width: min(680px, max(0px, parent.width - 2 * Theme.spacing));
+        height: min(max(0px, parent.height - 2 * Theme.spacing), contents.preferred-height);
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Theme.surface;
+        border-radius: Theme.corner-radius;
+        border-width: 1px;
+        border-color: Theme.border;
+        ScrollView {
+            contents := VerticalLayout {
+                padding: Theme.content-gap;
+                spacing: Theme.spacing;
+                alignment: start;
+                Text { text: Translations.tr("manual-transfer-incoming-title"); color: Theme.text; font-size: Theme.title-size; font-weight: 600; wrap: word-wrap; }
+                HorizontalLayout {
+                    spacing: Theme.spacing;
+                    Avatar { source: root.peer-avatar; has-image: root.has-peer-avatar; size: 40px; }
+                    Text { text: root.peer-name; color: Theme.text; font-size: Theme.body-size; font-weight: 600; horizontal-stretch: 1; vertical-alignment: center; overflow: elide; }
+                }
+                Text { text: root.file-name; color: Theme.text; font-size: Theme.body-size; wrap: word-wrap; max-height: Theme.body-size * 4; overflow: elide; }
+                Text { text: root.size-label; color: Theme.muted-text; font-size: Theme.caption-size; }
+                Text { text: Translations.tr("manual-transfer-save-folder"); color: Theme.text; font-size: Theme.body-size; }
+                HorizontalLayout {
+                    spacing: Theme.small-spacing;
+                    destination := LineEdit { text <=> root.destination-directory; horizontal-stretch: 1; enabled: !root.busy && !root.picker-busy; }
+                    AppButton { text: Translations.tr("manual-transfer-browse"); enabled: !root.busy && !root.picker-busy; clicked => { root.choose-directory(); } }
+                }
+                Text { text: Translations.tr("manual-transfer-consent-hint"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
+                if root.queued-count > 1: Text { text: Translations.tr("manual-transfer-queued") + ": " + root.queued-count; color: Theme.muted-text; font-size: Theme.caption-size; }
+                if root.error-message != "": Text { text: root.error-message; color: Theme.danger; font-size: Theme.caption-size; wrap: word-wrap; }
+                if root.busy: Text { text: Translations.tr("manual-transfer-preparing-destination"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
+                HorizontalLayout {
+                    spacing: Theme.spacing;
+                    Rectangle { horizontal-stretch: 1; }
+                    AppButton { text: Translations.tr("manual-transfer-decline"); enabled: root.connected && !root.busy; clicked => { root.decline(); } }
+                    AppButton { text: Translations.tr("manual-transfer-accept"); primary: true; enabled: root.connected && !root.busy && !root.picker-busy && root.destination-directory != ""; clicked => { root.accept(); } }
+                }
+            }
+        }
+    }
+    init => { destination.focus(); }
+}

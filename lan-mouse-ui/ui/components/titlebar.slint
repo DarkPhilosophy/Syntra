@@ -1,0 +1,61 @@
+import { Theme } from "../theme.slint";
+import { Translations } from "../localization.slint";
+
+component TitleButton inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> enabled: true;
+    in property <bool> danger: false;
+    callback clicked;
+    width: 44px;
+    height: 44px;
+    background: btn-touch.pressed ? Theme.accent.with-alpha(0.32) : (btn-touch.has-hover ? (danger ? Theme.danger.with-alpha(0.28) : Theme.surface.with-alpha(0.42)) : transparent);
+    opacity: enabled ? 1 : 0.35;
+    accessible-role: button;
+    accessible-label: label;
+    Image { source: icon; colorize: danger ? Theme.danger : Theme.text; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; image-fit: contain; }
+    btn-touch := TouchArea { enabled: root.enabled; clicked => { root.clicked(); } }
+}
+
+export component TitleBar inherits Rectangle {
+    in property <bool> maximized;
+    in property <bool> hide-to-tray-enabled;
+    in property <bool> sidebar-expanded;
+    callback toggle-sidebar();
+    callback hide-to-tray();
+    callback minimize-window();
+    callback toggle-maximize-window();
+    callback close-window();
+    callback begin-window-drag();
+    height: 44px;
+    background: Theme.titlebar;
+    Rectangle {
+        x: 0; y: 0; width: min(Theme.large-spacing + 136px, parent.width - 220px); height: parent.height;
+        background: transparent;
+        
+        Image { source: @image-url("../assets/shell/syntra.svg"); width: 32px; height: 32px; x: Theme.large-spacing; y: (parent.height - self.height) / 2; image-fit: contain; }
+        Text { x: Theme.large-spacing + 40px; y: 0; width: max(0px, parent.width - self.x); height: parent.height; text: Translations.tr("app-title"); color: Theme.text; font-size: 20px; font-weight: 600; vertical-alignment: center; overflow: elide; }
+        TouchArea { changed pressed => { if (self.pressed) { root.begin-window-drag(); } } }
+    }
+    TitleButton {
+        x: min(Theme.large-spacing + 136px, parent.width - 220px);
+        y: 0;
+        icon: root.sidebar-expanded ? @image-url("../assets/shell/chevron.svg") : @image-url("../assets/shell/expand.svg");
+        label: root.sidebar-expanded ? Translations.tr("nav-collapse") : Translations.tr("nav-expand");
+        clicked => { root.toggle-sidebar(); }
+    }
+    TouchArea {
+        x: min(Theme.large-spacing + 136px, parent.width - 220px) + 44px;
+        y: 0;
+        width: max(0px, parent.width - 176px - self.x);
+        height: parent.height;
+        changed pressed => { if (self.pressed) { root.begin-window-drag(); } }
+    }
+    HorizontalLayout {
+        x: parent.width - 176px; y: 0; width: 176px; height: parent.height; spacing: 0;
+        TitleButton { icon: @image-url("../assets/shell/hide-to-tray.svg"); label: Translations.tr("window-hide-to-tray"); enabled: hide-to-tray-enabled; clicked => { root.hide-to-tray(); } }
+        TitleButton { icon: @image-url("../assets/shell/minimize.svg"); label: Translations.tr("window-minimize"); clicked => { root.minimize-window(); } }
+        TitleButton { icon: maximized ? @image-url("../assets/shell/restore.svg") : @image-url("../assets/shell/maximize.svg"); label: maximized ? Translations.tr("window-restore") : Translations.tr("window-maximize"); clicked => { root.toggle-maximize-window(); } }
+        TitleButton { icon: @image-url("../assets/shell/close.svg"); label: Translations.tr("window-close"); danger: true; clicked => { root.close-window(); } }
+    }
+}

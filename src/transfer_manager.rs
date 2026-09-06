@@ -573,7 +573,10 @@ where
             .first()
             .map(|owner| self.transfer_totals(owner).1)
             .unwrap_or(0);
-        if progress.total_bytes.is_some_and(|reported| reported != total) {
+        if progress
+            .total_bytes
+            .is_some_and(|reported| reported != total)
+        {
             return Err(TransferStateError::InvalidRange(
                 "adapter progress total differs from manifest".into(),
             ));

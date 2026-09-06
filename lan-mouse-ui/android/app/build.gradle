@@ -1,0 +1,40 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+android {
+    namespace 'de.feschber.lanmouse'
+    compileSdk 35
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = '17' }
+
+    defaultConfig {
+        applicationId 'de.feschber.lanmouse'
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName '0.1.0'
+    }
+
+    sourceSets {
+        main { jniLibs.srcDirs = [layout.buildDirectory.dir('generated/jniLibs')] }
+    }
+}
+
+def uiCrateDir = layout.projectDirectory.dir('../..')
+def generatedJni = layout.buildDirectory.dir('generated/jniLibs')
+
+tasks.register('buildRustRelease', Exec) {
+    workingDir uiCrateDir
+    commandLine 'cargo', 'ndk', '-t', 'arm64-v8a', '-o', generatedJni.get().asFile, 'build', '--release', '-p', 'lan-mouse-ui'
+    inputs.file uiCrateDir.file('Cargo.toml')
+    inputs.dir uiCrateDir.dir('src')
+    outputs.dir generatedJni
+}
+
+tasks.named('preBuild') { dependsOn 'buildRustRelease' }

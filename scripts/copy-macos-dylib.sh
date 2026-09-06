@@ -13,7 +13,7 @@ OPTIONS:
   -h, --help    Show this help message and exit
   -b            Path to Homebrew installation (default: $homebrew_path)
   exec_path     Path to the main executable in the app bundle
-                (default: get from `brew --prefix`)
+                (default: target/debug/bundle/osx/Lan Mouse.app/Contents/MacOS/lan-mouse)
 
 When macOS apps are linked to dynamic libraries (.dylib files),
 the fully qualified path to the library is embedded in the binary.
@@ -29,7 +29,7 @@ EOF
 while test $# -gt 0; do
     case "$1" in
         -h | --help ) usage; exit 0;;
-        -b | --homebrew ) homebrew_path="$1"; shift 2;;
+        -b | --homebrew ) homebrew_path="$2"; shift 2;;
         * ) exec_path="$1"; shift;;
     esac
 done
@@ -43,9 +43,8 @@ bundle_path=$(dirname "$(dirname "$(dirname "$exec_path")")")
 # Path to the Frameworks directory
 fwks_path="$bundle_path/Contents/Frameworks"
 mkdir -p "$fwks_path"
-# Path to bundled GTK/GSettings data
+# Path to bundled resources
 resources_path="$bundle_path/Contents/Resources"
-share_path="$resources_path/share"
 
 # Copy and fix references for a binary (executable or dylib)
 #
@@ -88,33 +87,10 @@ fix_references() {
 
 fix_references "$exec_path"
 
-copy_runtime_data() {
-  mkdir -p "$share_path"
-
-  if [ -d "$homebrew_path/share/glib-2.0/schemas" ]; then
-    mkdir -p "$share_path/glib-2.0"
-    rm -rf "$share_path/glib-2.0/schemas"
-    cp -RL "$homebrew_path/share/glib-2.0/schemas" "$share_path/glib-2.0/schemas"
-    if command -v glib-compile-schemas >/dev/null 2>&1; then
-      glib-compile-schemas "$share_path/glib-2.0/schemas"
-    elif [ -x "$homebrew_path/bin/glib-compile-schemas" ]; then
-      "$homebrew_path/bin/glib-compile-schemas" "$share_path/glib-2.0/schemas"
-    fi
-  fi
-
-  if [ -d "$homebrew_path/share/gtk-4.0" ]; then
-    rm -rf "$share_path/gtk-4.0"
-    cp -RL "$homebrew_path/share/gtk-4.0" "$share_path/gtk-4.0"
-  fi
-
-  if [ -d "$homebrew_path/share/icons/Adwaita" ]; then
-    mkdir -p "$share_path/icons"
-    rm -rf "$share_path/icons/Adwaita"
-    cp -RL "$homebrew_path/share/icons/Adwaita" "$share_path/icons/Adwaita"
-  fi
-}
-
-copy_runtime_data
+if [ ! -x "$exec_path" ]; then
+  echo "Missing bundled executable: $exec_path" >&2
+  exit 1
+fi
 
 # cargo-bundle preserves the source path under Contents/Resources (so
 # `target/menubar-template.png` lands at `Resources/target/...`). Flatten it

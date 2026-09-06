@@ -225,7 +225,6 @@ impl InputEmulation {
         self.emulation.set_file_clipboard(contents).await
     }
 
-
     pub fn has_pressed_keys(&self, handle: EmulationHandle) -> bool {
         self.pressed_keys
             .get(&handle)
@@ -267,7 +266,6 @@ trait Emulation: Send {
         )
         .into())
     }
-
 
     async fn consume(
         &mut self,

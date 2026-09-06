@@ -1,0 +1,39 @@
+import { Theme } from "../theme.slint";
+import { Translations } from "../localization.slint";
+import { StatusPill } from "../components/status-pill.slint";
+import { AppButton } from "../components/controls.slint";
+export component InputPage inherits Rectangle {
+    in property <bool> capture-enabled: false;
+    in property <bool> emulation-enabled: false;
+    in property <bool> capture-supported: true;
+    in property <bool> emulation-supported: true;
+    callback enable-capture();
+    callback enable-emulation();
+    background: Theme.background;
+    VerticalLayout {
+        padding: Theme.content-gap; spacing: Theme.spacing;
+        Text { text: Translations.tr("navigation-input"); color: Theme.text; font-size: Theme.title-size; }
+        Text { text: Translations.tr("input-description"); color: Theme.muted-text; font-size: Theme.body-size; }
+        Rectangle { min-height: 88px; vertical-stretch: 0; background: Theme.surface; border-radius: Theme.corner-radius;
+            HorizontalLayout { padding: Theme.card-padding; spacing: Theme.spacing;
+                VerticalLayout { horizontal-stretch: 1; spacing: Theme.small-spacing;
+                    Text { text: Translations.tr("input-capture"); color: Theme.text; font-size: Theme.body-size; }
+                    Text { text: capture-supported ? Translations.tr("input-capture-available") : Translations.tr("input-capture-unavailable"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; horizontal-stretch: 1; }
+                }
+                StatusPill { label: capture-enabled ? Translations.tr("status-enabled") : Translations.tr("status-disabled"); tone: capture-enabled ? Theme.success : Theme.warning; }
+                AppButton { text: Translations.tr("input-enable-capture"); enabled: capture-supported && !capture-enabled; clicked => { root.enable-capture(); } }
+            }
+        }
+        Rectangle { min-height: 88px; vertical-stretch: 0; background: Theme.surface; border-radius: Theme.corner-radius;
+            HorizontalLayout { padding: Theme.card-padding; spacing: Theme.spacing;
+                VerticalLayout { horizontal-stretch: 1; spacing: Theme.small-spacing;
+                    Text { text: Translations.tr("input-emulation"); color: Theme.text; font-size: Theme.body-size; }
+                    Text { text: emulation-supported ? Translations.tr("input-emulation-available") : Translations.tr("input-emulation-unavailable"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; horizontal-stretch: 1; }
+                }
+                StatusPill { label: emulation-enabled ? Translations.tr("status-enabled") : Translations.tr("status-disabled"); tone: emulation-enabled ? Theme.success : Theme.warning; }
+                AppButton { text: Translations.tr("input-enable-emulation"); enabled: emulation-supported && !emulation-enabled; clicked => { root.enable-emulation(); } }
+            }
+        }
+        Rectangle { vertical-stretch: 1; }
+    }
+}

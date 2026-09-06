@@ -1,0 +1,161 @@
+import { Theme } from "../theme.slint";
+import { Translations } from "../localization.slint";
+
+import { ScrollView, LineEdit } from "std-widgets.slint";
+import { ClientItem, ClientRow } from "../components/client-row.slint";
+import { EmptyState } from "../components/empty-state.slint";
+import { AppButton } from "../components/controls.slint";
+import { PeerMap } from "../components/peer-map.slint";
+import { DiscoveredPeerItem } from "../app-state.slint";
+import { Avatar } from "../components/avatar.slint";
+
+export component DevicesPage inherits Rectangle {
+    in property <[ClientItem]> clients: [];
+    in property <int> peer-zone-depth: 1;
+    in property <[DiscoveredPeerItem]> discovered-peers;
+    callback discover-peers();
+    in property <string> title: Translations.tr("navigation-devices");
+    in property <string> add-label: Translations.tr("devices-add");
+    in property <string> empty-title: Translations.tr("devices-empty");
+    in property <string> empty-description: Translations.tr("devices-empty-description");
+    in property <string> edit-label: Translations.tr("action-edit");
+    in property <string> save-label: Translations.tr("action-save");
+    in property <string> cancel-label: Translations.tr("action-cancel");
+    in property <string> delete-label: Translations.tr("action-delete");
+    in property <string> start-label: Translations.tr("action-start");
+    in property <string> stop-label: Translations.tr("action-stop");
+    in property <string> resolve-dns-label: Translations.tr("action-resolve-dns");
+    in property <string> active-label: Translations.tr("label-active");
+    in property <string> connected-label: Translations.tr("label-connected");
+    in property <string> ready-label: Translations.tr("label-ready");
+    in property <string> offline-label: Translations.tr("label-offline");
+    in property <string> resolving-label: Translations.tr("label-resolving");
+    in property <string> dns-resolved-label: Translations.tr("label-dns-resolved");
+    in property <string> dns-unresolved-label: Translations.tr("label-dns-unresolved");
+    in property <string> hostname-label: Translations.tr("label-hostname");
+    in property <string> ip-addresses-label: Translations.tr("label-ip-addresses");
+    in property <string> port-label: Translations.tr("label-port");
+    in property <string> position-label: Translations.tr("label-position");
+    in property <string> fingerprint-label: Translations.tr("label-fingerprint");
+    in property <string> authorized-label: Translations.tr("label-authorized");
+    in property <string> authorization-required-label: Translations.tr("label-authorization-required");
+    in property <string> local-name;
+    in property <image> local-image;
+    in property <bool> has-local-image;
+    private property <string> draft-local-name: root.local-name;
+    callback update-local-name(string);
+    callback choose-local-image();
+    callback clear-local-image();
+    callback add-client();
+    callback activate(string, bool);
+    callback delete-client(string);
+    callback resolve-dns(string);
+    callback update-hostname(string, string);
+    callback update-position(string, int);
+    callback update-fixed-ips(string, string);
+    callback update-display-name(string, string);
+    callback choose-display-image(string);
+    callback clear-display-image(string);
+    callback update-port(string, int);
+    callback authorize(string);
+
+    background: Theme.background;
+    ScrollView {
+    VerticalLayout {
+        padding: Theme.content-gap;
+        spacing: Theme.spacing;
+        alignment: start;
+        HorizontalLayout {
+            Text { text: root.title; color: Theme.text; font-size: Theme.title-size; horizontal-stretch: 1; vertical-alignment: center; }
+            AppButton { text: root.add-label; clicked => { root.add-client(); } }
+        }
+        Rectangle {
+            height: local-profile.preferred-height;
+            vertical-stretch: 0;
+            background: Theme.surface;
+            border-radius: Theme.corner-radius;
+            local-profile := VerticalLayout {
+                padding: Theme.spacing;
+                spacing: Theme.small-spacing;
+                Text { text: Translations.tr("device-local"); color: Theme.text; font-size: Theme.body-size; font-weight: 600; }
+                HorizontalLayout {
+                    spacing: Theme.small-spacing;
+                    Avatar { source: root.local-image; has-image: root.has-local-image; size: Theme.control-height; }
+                    LineEdit { horizontal-stretch: 1; text: root.draft-local-name; edited(value) => { root.draft-local-name = value; } accepted => { root.update-local-name(self.text); } }
+                    AppButton { text: root.save-label; clicked => { root.update-local-name(root.draft-local-name); } }
+                }
+                HorizontalLayout {
+                    spacing: Theme.small-spacing;
+                    AppButton { text: Translations.tr("device-image-local"); clicked => { root.choose-local-image(); } }
+                    AppButton { text: Translations.tr("label-remove-image"); enabled: root.has-local-image; clicked => { root.clear-local-image(); } }
+                }
+            }
+        }
+        Text { text: Translations.tr("device-presentation-note"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; vertical-stretch: 0; }
+        PeerMap {
+            clients: root.clients;
+            zone-depth: root.peer-zone-depth;
+            local-name: root.local-name;
+            local-image: root.local-image;
+            has-local-image: root.has-local-image;
+            move-peer(handle, position) => { root.update-position(handle, position); }
+        }
+        HorizontalLayout {
+            Text { text: Translations.tr("discovery-title"); color: Theme.text; font-size: Theme.body-size; horizontal-stretch: 1; }
+            AppButton { text: Translations.tr("discovery-refresh"); clicked => { root.discover-peers(); } }
+        }
+        if root.discovered-peers.length > 0 : VerticalLayout {
+            spacing: Theme.small-spacing;
+            for peer in root.discovered-peers : Rectangle {
+                height: 72px;
+                background: Theme.surface;
+                VerticalLayout {
+                    padding: Theme.small-spacing;
+                    Text { text: peer.display-name; color: Theme.text; font-size: Theme.body-size; overflow: elide; }
+                    Text { text: peer.addresses + " · " + peer.port; color: Theme.muted-text; font-size: Theme.caption-size; overflow: elide; }
+                }
+            }
+        }
+        Text { text: Translations.tr("discovery-description"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; vertical-stretch: 0; }
+        if root.clients.length == 0 : EmptyState { title: root.empty-title; description: root.empty-description; }
+        if root.clients.length > 0 : VerticalLayout {
+            spacing: Theme.spacing;
+            for client in root.clients : ClientRow {
+                client: client;
+                label-edit: root.edit-label;
+                label-save: root.save-label;
+                label-cancel: root.cancel-label;
+                label-delete: root.delete-label;
+                label-start: root.start-label;
+                label-stop: root.stop-label;
+                label-resolve-dns: root.resolve-dns-label;
+                label-active: root.active-label;
+                label-connected: root.connected-label;
+                label-ready: root.ready-label;
+                label-offline: root.offline-label;
+                label-resolving: root.resolving-label;
+                label-dns-resolved: root.dns-resolved-label;
+                label-dns-unresolved: root.dns-unresolved-label;
+                label-hostname: root.hostname-label;
+                label-ip-addresses: root.ip-addresses-label;
+                label-port: root.port-label;
+                label-position: root.position-label;
+                label-fingerprint: root.fingerprint-label;
+                label-authorized: root.authorized-label;
+                label-authorization-required: root.authorization-required-label;
+                activate(handle, active) => { root.activate(handle, active); }
+                delete-client(handle) => { root.delete-client(handle); }
+                resolve-dns(handle) => { root.resolve-dns(handle); }
+                update-hostname(handle, hostname) => { root.update-hostname(handle, hostname); }
+                update-display-name(key, name) => { root.update-display-name(key, name); }
+                choose-display-image(key) => { root.choose-display-image(key); }
+                clear-display-image(key) => { root.clear-display-image(key); }
+                update-port(handle, port) => { root.update-port(handle, port); }
+                update-position(handle, position) => { root.update-position(handle, position); }
+                update-fixed-ips(handle, ips) => { root.update-fixed-ips(handle, ips); }
+                authorize(fingerprint) => { root.authorize(fingerprint); }
+            }
+        }
+    }
+    }
+}

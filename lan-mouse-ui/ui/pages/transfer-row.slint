@@ -1,0 +1,90 @@
+import { AppButton } from "../components/controls.slint";
+import { Avatar } from "../components/avatar.slint";
+import { Theme } from "../theme.slint";
+import { Translations } from "../localization.slint";
+
+export enum TransferDirection { incoming, outgoing }
+export enum TransferState { active, completed, cancelled, failed }
+
+export struct TransferItem {
+    transfer-id: string,
+    file-id: string,
+    name: string,
+    kind-label: string,
+    direction: TransferDirection,
+    transferred-label: string,
+    total-label: string,
+    rate-label: string,
+    progress: float,
+    state: TransferState,
+    error-message: string,
+    cancellable: bool,
+    manual: bool,
+    peer-fingerprint: string,
+    peer-label: string,
+    peer-image: image,
+    has-peer-image: bool,
+    status-label: string,
+    destination-label: string,
+    show-progress: bool,
+}
+
+export component TransferRow inherits Rectangle {
+    in property <TransferItem> transfer;
+    in property <string> incoming-label: Translations.tr("transfer-incoming");
+    in property <string> outgoing-label: Translations.tr("transfer-outgoing");
+    in property <string> active-label: Translations.tr("transfer-active");
+    in property <string> completed-label: Translations.tr("transfer-completed");
+    in property <string> failed-label: Translations.tr("transfer-failed");
+    in property <string> cancel-label: Translations.tr("action-cancel");
+    callback cancel(string, string);
+    callback cancel-manual(string, string);
+    private property <bool> is-active: transfer.state == TransferState.active;
+    private property <color> state-color: transfer.state == TransferState.completed ? Theme.success : transfer.state == TransferState.failed ? Theme.danger : transfer.state == TransferState.cancelled ? Theme.muted-text : Theme.accent;
+    private property <float> bounded-progress: max(0, min(1, transfer.progress));
+    height: content.preferred-height;
+    vertical-stretch: 0;
+    background: Theme.surface;
+    border-radius: Theme.small-radius;
+    border-width: 1px;
+    border-color: root.state-color.with-alpha(0.35);
+
+    content := VerticalLayout {
+        padding: Theme.spacing;
+        spacing: Theme.small-spacing;
+        HorizontalLayout {
+            spacing: Theme.spacing;
+            if root.transfer.manual: Avatar { source: root.transfer.peer-image; has-image: root.transfer.has-peer-image; size: 40px; }
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 1;
+                spacing: 2px;
+                Text { text: root.transfer.name; color: Theme.text; font-size: Theme.body-size; font-weight: 600; overflow: elide; }
+                if root.transfer.peer-label != "": Text { text: root.transfer.peer-label; color: Theme.muted-text; font-size: Theme.caption-size; overflow: elide; }
+            }
+            if root.is-active && root.transfer.cancellable: AppButton {
+                text: root.cancel-label;
+                clicked => {
+                    if root.transfer.manual { root.cancel-manual(root.transfer.peer-fingerprint, root.transfer.transfer-id); }
+                    else { root.cancel(root.transfer.transfer-id, root.transfer.file-id); }
+                }
+            }
+        }
+        Text {
+            text: (root.transfer.direction == TransferDirection.incoming ? root.incoming-label : root.outgoing-label) + " · " + root.transfer.kind-label + " · " + (root.transfer.status-label != "" ? root.transfer.status-label : root.transfer.state == TransferState.completed ? root.completed-label : root.transfer.state == TransferState.failed ? root.failed-label : root.transfer.state == TransferState.cancelled ? Translations.tr("transfer-cancelled") : root.active-label);
+            color: root.state-color; font-size: Theme.caption-size; wrap: word-wrap;
+        }
+        if root.is-active && root.transfer.show-progress: Rectangle {
+            height: 6px;
+            background: Theme.elevated-surface;
+            border-radius: 3px;
+            Rectangle { width: parent.width * root.bounded-progress; height: parent.height; background: root.state-color; border-radius: parent.border-radius; }
+        }
+        Text {
+            text: root.transfer.error-message != "" ? root.transfer.error-message : (!root.transfer.show-progress && root.is-active ? root.transfer.total-label : root.transfer.transferred-label + (root.transfer.total-label == "" ? "" : " / " + root.transfer.total-label) + (root.is-active && root.transfer.rate-label != "" ? " · " + root.transfer.rate-label : ""));
+            color: root.transfer.error-message != "" ? Theme.danger : Theme.muted-text;
+            font-size: Theme.caption-size; wrap: word-wrap;
+        }
+        if root.transfer.destination-label != "": Text { text: root.transfer.destination-label; color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
+    }
+}

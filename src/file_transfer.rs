@@ -1,7 +1,9 @@
 use lan_mouse_proto::{
     ClipboardEntryKind, ClipboardManifestEntry, MAX_CLIPBOARD_FILE_CHUNK_SIZE,
     MAX_CLIPBOARD_MANIFEST_ENTRIES, MAX_CLIPBOARD_PATH_SIZE, MAX_CLIPBOARD_SIZE,
+    MAX_MANUAL_FILE_CHUNK_SIZE,
 };
+use same_file::Handle as FileIdentity;
 use sha2::{Digest, Sha256};
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
@@ -20,6 +22,18 @@ use tokio::{
 
 pub(crate) type TransferId = u64;
 pub(crate) type FileId = u64;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SizeLimitPolicy {
+    Clipboard,
+    Unbounded,
+}
+
+impl SizeLimitPolicy {
+    fn allows(self, total: u64) -> bool {
+        matches!(self, Self::Unbounded) || total <= MAX_CLIPBOARD_SIZE as u64
+    }
+}
 
 #[derive(Debug, Error)]
 pub(crate) enum TransferError {
@@ -128,6 +142,38 @@ impl FileOffer {
             return Err(TransferError::InvalidUri("empty URI list".into()));
         }
         Self::from_paths(transfer_id, &roots)
+    }
+
+    pub(crate) fn from_regular_file(
+        transfer_id: TransferId,
+        path: PathBuf,
+    ) -> Result<Self, TransferError> {
+        if transfer_id == 0 {
+            return Err(TransferError::StaleTransfer(transfer_id));
+        }
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(TransferError::UnsupportedEntry(path));
+        }
+        let name = path
+            .file_name()
+            .and_then(OsStr::to_str)
+            .ok_or_else(|| TransferError::UnsafePath("invalid file name".into()))?;
+        lan_mouse_proto::validate_manual_file_name(name)
+            .map_err(|_| TransferError::UnsafePath("invalid file name".into()))?;
+        let entry = ClipboardManifestEntry {
+            file_id: 1,
+            path: name.to_owned(),
+            kind: ClipboardEntryKind::File,
+            size: metadata.len(),
+        };
+        let mut sources = HashMap::new();
+        sources.insert(1, (path, SourceIdentity::from_metadata(&metadata)));
+        Ok(Self {
+            transfer_id,
+            entries: vec![entry],
+            sources,
+        })
     }
 
     fn from_paths(transfer_id: TransferId, roots: &[PathBuf]) -> Result<Self, TransferError> {
@@ -268,7 +314,7 @@ impl OutgoingFile {
         if self.offset == self.size {
             return Ok(None);
         }
-        if max_len == 0 || max_len > MAX_CLIPBOARD_FILE_CHUNK_SIZE {
+        if max_len == 0 || max_len > MAX_CLIPBOARD_FILE_CHUNK_SIZE.max(MAX_MANUAL_FILE_CHUNK_SIZE) {
             return Err(TransferError::UnexpectedOffset {
                 file_id: self.file_id,
                 expected: self.offset,
@@ -360,7 +406,7 @@ pub(crate) struct IncomingTransfer {
     destination: PathBuf,
     entries: HashMap<FileId, ClipboardManifestEntry>,
     files: HashMap<FileId, IncomingFile>,
-    created_files: HashSet<PathBuf>,
+    created_files: HashMap<PathBuf, FileIdentity>,
     created_dirs: HashSet<PathBuf>,
     cancelled: bool,
     finished: bool,
@@ -374,11 +420,54 @@ struct IncomingFile {
     hasher: Sha256,
     started: Instant,
 }
+
+struct CreatedFileGuard {
+    path: PathBuf,
+    identity: Option<FileIdentity>,
+}
+
+impl CreatedFileGuard {
+    fn new(path: PathBuf, identity: FileIdentity) -> Self {
+        Self {
+            path,
+            identity: Some(identity),
+        }
+    }
+
+    fn disarm(mut self) -> FileIdentity {
+        self.identity.take().expect("created file identity present")
+    }
+}
+
+impl Drop for CreatedFileGuard {
+    fn drop(&mut self) {
+        if let Some(identity) = &self.identity {
+            if owns_created_file(&self.path, identity) {
+                let _ = std::fs::remove_file(&self.path);
+            }
+        }
+    }
+}
 impl IncomingTransfer {
     pub(crate) async fn new(
         transfer_id: TransferId,
         entries: Vec<ClipboardManifestEntry>,
         destination: PathBuf,
+    ) -> Result<Self, TransferError> {
+        Self::new_with_size_policy(
+            transfer_id,
+            entries,
+            destination,
+            SizeLimitPolicy::Clipboard,
+        )
+        .await
+    }
+
+    pub(crate) async fn new_with_size_policy(
+        transfer_id: TransferId,
+        entries: Vec<ClipboardManifestEntry>,
+        destination: PathBuf,
+        size_limit: SizeLimitPolicy,
     ) -> Result<Self, TransferError> {
         if entries.is_empty() || entries.len() > MAX_CLIPBOARD_MANIFEST_ENTRIES {
             return Err(TransferError::TooManyEntries);
@@ -405,7 +494,7 @@ impl IncomingTransfer {
             total = total
                 .checked_add(entry.size)
                 .ok_or(TransferError::TooLarge)?;
-            if total > MAX_CLIPBOARD_SIZE as u64 {
+            if !size_limit.allows(total) {
                 return Err(TransferError::TooLarge);
             }
             by_id.insert(entry.file_id, entry);
@@ -415,11 +504,15 @@ impl IncomingTransfer {
             destination,
             entries: by_id,
             files: HashMap::new(),
-            created_files: HashSet::new(),
+            created_files: HashMap::new(),
             created_dirs: HashSet::new(),
             cancelled: false,
             finished: false,
         })
+    }
+
+    pub(crate) fn destination_path(&self) -> PathBuf {
+        self.destination.clone()
     }
 
     pub(crate) async fn prepare(&mut self) -> Result<Vec<(FileId, u64)>, TransferError> {
@@ -443,8 +536,30 @@ impl IncomingTransfer {
                         .write(true)
                         .create_new(true)
                         .open(&target)
-                        .await?;
-                    self.created_files.insert(target.clone());
+                        .await?
+                        .into_std()
+                        .await;
+                    let writer = match file.try_clone() {
+                        Ok(writer) => writer,
+                        Err(error) => {
+                            if let Ok(identity) = FileIdentity::from_file(file) {
+                                drop(CreatedFileGuard::new(target.clone(), identity));
+                            }
+                            return Err(error.into());
+                        }
+                    };
+                    let identity = match FileIdentity::from_file(file) {
+                        Ok(identity) => identity,
+                        Err(error) => {
+                            if let Ok(identity) = FileIdentity::from_file(writer) {
+                                drop(CreatedFileGuard::new(target.clone(), identity));
+                            }
+                            return Err(error.into());
+                        }
+                    };
+                    let file = File::from_std(writer);
+                    let created = CreatedFileGuard::new(target.clone(), identity);
+                    self.created_files.insert(target.clone(), created.disarm());
                     self.files.insert(
                         entry.file_id,
                         IncomingFile {
@@ -470,7 +585,9 @@ impl IncomingTransfer {
         data: &[u8],
     ) -> Result<Progress, TransferError> {
         self.ensure_active()?;
-        if data.is_empty() || data.len() > MAX_CLIPBOARD_FILE_CHUNK_SIZE {
+        if data.is_empty()
+            || data.len() > MAX_CLIPBOARD_FILE_CHUNK_SIZE.max(MAX_MANUAL_FILE_CHUNK_SIZE)
+        {
             return Err(TransferError::UnexpectedOffset {
                 file_id,
                 expected: offset,
@@ -599,8 +716,10 @@ impl IncomingTransfer {
         self.cancelled = true;
         self.files.clear();
         let files: Vec<_> = self.created_files.drain().collect();
-        for path in files {
-            let _ = fs::remove_file(path).await;
+        for (path, identity) in files {
+            if owns_created_file(&path, &identity) {
+                let _ = fs::remove_file(path).await;
+            }
         }
         let mut dirs: Vec<_> = self.created_dirs.drain().collect();
         dirs.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
@@ -608,7 +727,6 @@ impl IncomingTransfer {
             let _ = fs::remove_dir(path).await;
         }
     }
-
     fn ensure_active(&self) -> Result<(), TransferError> {
         if self.cancelled {
             Err(TransferError::Cancelled)
@@ -643,14 +761,16 @@ impl IncomingTransfer {
         Ok(())
     }
 }
-
 impl Drop for IncomingTransfer {
     fn drop(&mut self) {
         if self.finished {
             return;
         }
-        for path in self.created_files.drain() {
-            let _ = std::fs::remove_file(path);
+        self.files.clear();
+        for (path, identity) in self.created_files.drain() {
+            if owns_created_file(&path, &identity) {
+                let _ = std::fs::remove_file(path);
+            }
         }
         let mut dirs: Vec<_> = self.created_dirs.drain().collect();
         dirs.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
@@ -658,6 +778,11 @@ impl Drop for IncomingTransfer {
             let _ = std::fs::remove_dir(path);
         }
     }
+}
+
+fn owns_created_file(path: &Path, identity: &FileIdentity) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_file())
+        && FileIdentity::from_path(path).is_ok_and(|current| &current == identity)
 }
 
 fn collect_entry(
@@ -814,5 +939,90 @@ fn hex(value: u8) -> Option<u8> {
         b'a'..=b'f' => Some(value - b'a' + 10),
         b'A'..=b'F' => Some(value - b'A' + 10),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs as std_fs;
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "lan-mouse-file-transfer-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std_fs::create_dir(&path).unwrap();
+        path
+    }
+
+    fn file_entry(name: &str, size: u64) -> ClipboardManifestEntry {
+        ClipboardManifestEntry {
+            file_id: 1,
+            path: name.into(),
+            kind: ClipboardEntryKind::File,
+            size,
+        }
+    }
+
+    async fn partial_transfer(directory: &Path, name: &str) -> IncomingTransfer {
+        let mut transfer =
+            IncomingTransfer::new(1, vec![file_entry(name, 7)], directory.to_path_buf())
+                .await
+                .unwrap();
+        transfer.prepare().await.unwrap();
+        transfer.write_chunk(1, 0, b"partial").await.unwrap();
+        transfer
+    }
+
+    #[tokio::test]
+    async fn cancel_preserves_file_that_replaced_created_partial() {
+        let directory = temp_dir("cancel-replacement");
+        let target = directory.join("received.bin");
+        let displaced = directory.join("displaced-partial.bin");
+        let mut transfer = partial_transfer(&directory, "received.bin").await;
+
+        transfer.files.clear();
+        std_fs::rename(&target, &displaced).unwrap();
+        std_fs::write(&target, b"unrelated replacement").unwrap();
+        transfer.cancel().await;
+
+        assert_eq!(std_fs::read(&target).unwrap(), b"unrelated replacement");
+        std_fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn drop_preserves_file_that_replaced_created_partial() {
+        let directory = temp_dir("drop-replacement");
+        let target = directory.join("received.bin");
+        let displaced = directory.join("displaced-partial.bin");
+        let mut transfer = partial_transfer(&directory, "received.bin").await;
+
+        transfer.files.clear();
+        std_fs::rename(&target, &displaced).unwrap();
+        std_fs::write(&target, b"unrelated replacement").unwrap();
+        drop(transfer);
+
+        assert_eq!(std_fs::read(&target).unwrap(), b"unrelated replacement");
+        std_fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancel_removes_owned_partial_without_touching_neighbor() {
+        let directory = temp_dir("cancel-owned");
+        let target = directory.join("received.bin");
+        let neighbor = directory.join("neighbor.bin");
+        std_fs::write(&neighbor, b"keep me").unwrap();
+        let mut transfer = partial_transfer(&directory, "received.bin").await;
+
+        transfer.cancel().await;
+
+        assert!(!target.exists());
+        assert_eq!(std_fs::read(&neighbor).unwrap(), b"keep me");
+        std_fs::remove_dir_all(directory).unwrap();
     }
 }

@@ -20,7 +20,7 @@ mod connect;
 mod connect_async;
 mod listen;
 
-pub use connect::{FrontendEventReader, FrontendRequestWriter, connect};
+pub use connect::{FrontendEventReader, FrontendRequestWriter, connect, connect_with_timeout};
 pub use connect_async::{AsyncFrontendEventReader, AsyncFrontendRequestWriter, connect_async};
 pub use listen::AsyncFrontendListener;
 
@@ -225,6 +225,173 @@ pub struct ClipboardTransferStatus {
     pub state: ClipboardTransferState,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileReceiveSettings {
+    pub auto_accept: bool,
+    pub download_directory: PathBuf,
+}
+impl Default for FileReceiveSettings {
+    fn default() -> Self {
+        Self {
+            auto_accept: false,
+            download_directory: PathBuf::new(),
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ManualTransferState {
+    Offering,
+    AwaitingAcceptance,
+    Transferring,
+    Completed,
+    Declined,
+    Cancelled,
+    Failed,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManualTransferStatus {
+    pub peer_fingerprint: String,
+    pub transfer_id: u64,
+    pub file_name: String,
+    pub size: u64,
+    pub transferred: u64,
+    pub direction: ClipboardTransferDirection,
+    pub state: ManualTransferState,
+    pub destination: Option<PathBuf>,
+    pub error: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IncomingFileOffer {
+    pub peer_fingerprint: String,
+    pub transfer_id: u64,
+    pub file_name: String,
+    pub size: u64,
+    pub suggested_directory: PathBuf,
+}
+
+pub const MAX_HISTORY_PAGE_SIZE: u16 = 50;
+
+#[derive(Debug, Eq, PartialEq, Clone, Hash, Serialize, Deserialize)]
+pub struct HistoryEventId {
+    pub origin_device_id: String,
+    pub origin_sequence: u64,
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoryKind {
+    Text,
+    Image,
+    Files,
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum HistoryPreview {
+    Text {
+        preview: String,
+        truncated: bool,
+    },
+    Image {
+        media_type: Option<String>,
+        width: Option<u32>,
+        height: Option<u32>,
+        size_bytes: u64,
+    },
+    Files {
+        count: u32,
+        total_size_bytes: u64,
+        names: Vec<String>,
+        names_truncated: bool,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
+pub struct HistoryRecordSummary {
+    pub event_id: HistoryEventId,
+    pub created_at_ms: i64,
+    pub origin_label: Option<String>,
+    pub pinned: bool,
+    pub kind: HistoryKind,
+    pub preview: HistoryPreview,
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
+pub struct HistoryPage {
+    pub query: String,
+    pub offset: u64,
+    pub next_offset: Option<u64>,
+    pub records: Vec<HistoryRecordSummary>,
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
+pub struct HistoryImage {
+    pub event_id: HistoryEventId,
+    pub bytes: Vec<u8>,
+    pub media_type: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+}
+
+/// An unauthenticated service advertised by a peer through local mDNS.
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
+pub struct DiscoveredPeer {
+    /// Stable DNS-SD service record name.
+    pub id: String,
+    /// Human-readable device name supplied by the peer.
+    pub display_name: String,
+    /// Current addresses resolved for this service record.
+    pub addresses: Vec<IpAddr>,
+    /// UDP port advertised by the peer.
+    pub port: u16,
+}
+
+pub const MAX_DEVICE_PROFILE_NAME_BYTES: usize = 128;
+pub const MAX_PEER_AVATAR_DIMENSION: u32 = 128;
+
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
+pub struct PeerAvatar {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
+pub struct DeviceProfile {
+    pub display_name: String,
+    pub avatar: Option<PeerAvatar>,
+}
+
+impl DeviceProfile {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.display_name.as_bytes().len() > MAX_DEVICE_PROFILE_NAME_BYTES {
+            return Err("device profile display name exceeds 128 UTF-8 bytes");
+        }
+        if let Some(avatar) = &self.avatar {
+            if avatar.width == 0
+                || avatar.height == 0
+                || avatar.width > MAX_PEER_AVATAR_DIMENSION
+                || avatar.height > MAX_PEER_AVATAR_DIMENSION
+            {
+                return Err("device profile avatar exceeds 128x128 pixels");
+            }
+            let expected = usize::try_from(avatar.width)
+                .ok()
+                .and_then(|width| {
+                    usize::try_from(avatar.height)
+                        .ok()
+                        .and_then(|height| width.checked_mul(height))
+                })
+                .and_then(|pixels| pixels.checked_mul(4))
+                .ok_or("device profile avatar dimensions overflow")?;
+            if avatar.rgba.len() != expected {
+                return Err("device profile avatar RGBA length does not match dimensions");
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FrontendEvent {
     /// a client was created
@@ -239,6 +406,8 @@ pub enum FrontendEvent {
     PortChanged(u16, Option<String>),
     /// list of all clients, used for initial state synchronization
     Enumerate(Vec<(ClientHandle, ClientConfig, ClientState)>),
+    /// Current unauthenticated peers advertised through local mDNS.
+    DiscoveredPeers(Vec<DiscoveredPeer>),
     /// an error occured
     Error(String),
     /// capture status
@@ -249,6 +418,16 @@ pub enum FrontendEvent {
     AuthorizedUpdated(HashMap<String, String>),
     /// public key fingerprint of this device
     PublicKeyFingerprint(String),
+    /// Profile associated with an authenticated certificate identity.
+    PeerDeviceProfile {
+        fingerprint: String,
+        profile: DeviceProfile,
+    },
+    /// Certificate identity associated with an outgoing client route.
+    ClientFingerprint {
+        handle: ClientHandle,
+        fingerprint: String,
+    },
     /// new device connected
     DeviceConnected {
         addr: SocketAddr,
@@ -263,11 +442,48 @@ pub enum FrontendEvent {
     /// incoming disconnected
     IncomingDisconnected(SocketAddr),
     /// failed connection attempt (approval for fingerprint required)
-    ConnectionAttempt { fingerprint: String },
+    ConnectionAttempt {
+        fingerprint: String,
+    },
     /// authoritative clipboard capability settings
     ClipboardSettings(ClipboardSettings),
     /// authoritative status for one file in a clipboard transfer
     ClipboardTransferStatus(ClipboardTransferStatus),
+    /// Bounded clipboard history query result.
+    /// Invalidation emitted after a visible history mutation.
+    HistoryChanged,
+    HistoryPage(HistoryPage),
+    /// Result of changing the local pin state.
+    HistoryPinResult {
+        event_id: HistoryEventId,
+        pinned: bool,
+        updated: bool,
+    },
+    /// Full image payload fetched explicitly for one visible history record.
+    HistoryImageResult {
+        event_id: HistoryEventId,
+        image: Option<HistoryImage>,
+        error: Option<String>,
+    },
+    /// History operation failure. Global clear is reported here until peer coordination exists.
+    HistoryError(String),
+    /// Terminal result of an explicitly coordinated global clear.
+    HistoryClearResult {
+        operation_id: String,
+        affected: u64,
+        peers_acknowledged: u32,
+        error: Option<String>,
+    },
+    FileReceiveSettingsChanged(FileReceiveSettings, Option<String>),
+    IncomingFileOffer(IncomingFileOffer),
+    ManualTransferStatus(ManualTransferStatus),
+    ManualTransferError(String),
+    /// authoritative global input sharing state
+    InputSharing(bool),
+    /// A replacement certificate was saved; active sessions change only on restart.
+    IdentityRegenerated {
+        fingerprint: String,
+    },
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
@@ -284,6 +500,10 @@ pub enum FrontendRequest {
     Enumerate(),
     /// resolve dns
     ResolveDns(ClientHandle),
+    /// refresh local mDNS service discovery
+    DiscoverPeers,
+    /// gracefully stop the local daemon
+    StopService,
     /// update hostname
     UpdateHostname(ClientHandle, Option<String>),
     /// update port
@@ -298,6 +518,8 @@ pub enum FrontendRequest {
     EnableEmulation,
     /// synchronize all state
     Sync,
+    /// Replace the authenticated device profile published to peers.
+    SetLocalDeviceProfile(DeviceProfile),
     /// authorize fingerprint (description, fingerprint)
     AuthorizeKey(String, String),
     /// remove fingerprint (fingerprint)
@@ -314,6 +536,43 @@ pub enum FrontendRequest {
     SetClipboardFiles(bool),
     /// cancel an in-progress clipboard transfer
     CancelClipboardTransfer(ClipboardTransferId),
+    /// Query one bounded history page. The daemon clamps `limit` to 50.
+    QueryHistory {
+        query: String,
+        offset: u64,
+        limit: u16,
+    },
+    /// Change local pin state for one stable history event.
+    SetHistoryPinned {
+        event_id: HistoryEventId,
+        pinned: bool,
+    },
+    /// Fetch one image payload separately from bounded page snapshots.
+    GetHistoryImage(HistoryEventId),
+    /// Request a coordinated global clear. Fails without deleting until peer coordination exists.
+    ClearGlobalHistory,
+    /// globally enable or disable outgoing and incoming input sharing
+    SetInputSharing(bool),
+    /// Explicitly confirmed replacement of the certificate used on the next restart.
+    RegenerateIdentity,
+    SendFiles {
+        peer_fingerprint: String,
+        paths: Vec<PathBuf>,
+    },
+    AcceptFileTransfer {
+        peer_fingerprint: String,
+        transfer_id: u64,
+        destination_directory: PathBuf,
+    },
+    DeclineFileTransfer {
+        peer_fingerprint: String,
+        transfer_id: u64,
+    },
+    CancelManualTransfer {
+        peer_fingerprint: String,
+        transfer_id: u64,
+    },
+    SetFileReceiveSettings(FileReceiveSettings),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
@@ -332,7 +591,7 @@ impl From<Status> for bool {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "android")))]
 const LAN_MOUSE_SOCKET_NAME: &str = "lan-mouse-socket.sock";
 
 #[derive(Debug, Error)]
@@ -341,20 +600,170 @@ pub enum SocketPathError {
     XdgRuntimeDirNotFound(VarError),
     #[error("could not determine $HOME: `{0}`")]
     HomeDirNotFound(VarError),
+    #[error("unix socket transport is unavailable on Android")]
+    AndroidUnavailable,
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(all(unix, not(target_os = "android"), not(target_os = "macos")))]
 pub fn default_socket_path() -> Result<PathBuf, SocketPathError> {
     let xdg_runtime_dir =
         env::var("XDG_RUNTIME_DIR").map_err(SocketPathError::XdgRuntimeDirNotFound)?;
     Ok(Path::new(xdg_runtime_dir.as_str()).join(LAN_MOUSE_SOCKET_NAME))
 }
 
-#[cfg(all(unix, target_os = "macos"))]
+#[cfg(all(unix, not(target_os = "android"), target_os = "macos"))]
 pub fn default_socket_path() -> Result<PathBuf, SocketPathError> {
     let home = env::var("HOME").map_err(SocketPathError::HomeDirNotFound)?;
     Ok(Path::new(home.as_str())
         .join("Library")
         .join("Caches")
         .join(LAN_MOUSE_SOCKET_NAME))
+}
+
+#[cfg(target_os = "android")]
+pub fn default_socket_path() -> Result<PathBuf, SocketPathError> {
+    Err(SocketPathError::AndroidUnavailable)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frontend_events_preserve_order_and_nested_payloads_through_json() {
+        let expected = frontend_event_fixtures();
+        let encoded = serde_json::to_vec(&expected).expect("frontend events should serialize");
+        let decoded: Vec<FrontendEvent> =
+            serde_json::from_slice(&encoded).expect("frontend events should deserialize");
+        assert_eq!(
+            serde_json::to_value(decoded).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+    }
+
+    #[test]
+    fn frontend_requests_round_trip_through_json() {
+        for expected in frontend_request_fixtures() {
+            let encoded = serde_json::to_vec(&expected).unwrap();
+            let decoded: FrontendRequest = serde_json::from_slice(&encoded).unwrap();
+            assert_eq!(decoded, expected);
+        }
+    }
+
+    fn config() -> ClientConfig {
+        ClientConfig {
+            hostname: Some("nested.example".into()),
+            fix_ips: vec!["192.0.2.10".parse().unwrap(), "::1".parse().unwrap()],
+            port: 5353,
+            pos: Position::Right,
+            cmd: Some("echo entered".into()),
+        }
+    }
+
+    fn state() -> ClientState {
+        ClientState {
+            active: true,
+            active_addr: Some("192.0.2.10:5353".parse().unwrap()),
+            alive: true,
+            remote_ready: true,
+            dns_ips: vec!["198.51.100.7".parse().unwrap()],
+            ips: ["192.0.2.10".parse().unwrap()].into_iter().collect(),
+            has_pressed_keys: true,
+            resolving: true,
+            peer_commit: Some(*b"12345678"),
+        }
+    }
+
+    fn frontend_event_fixtures() -> Vec<FrontendEvent> {
+        let client = (42, config(), state());
+        vec![
+            FrontendEvent::Created(client.0, client.1.clone(), client.2.clone()),
+            FrontendEvent::NoSuchClient(43),
+            FrontendEvent::State(client.0, client.1.clone(), client.2.clone()),
+            FrontendEvent::Deleted(44),
+            FrontendEvent::PortChanged(4243, Some("port occupied".into())),
+            FrontendEvent::Enumerate(vec![
+                client.clone(),
+                (45, ClientConfig::default(), ClientState::default()),
+            ]),
+            FrontendEvent::Error("descriptive error".into()),
+            FrontendEvent::CaptureStatus(Status::Enabled),
+            FrontendEvent::EmulationStatus(Status::Disabled),
+            FrontendEvent::AuthorizedUpdated(
+                [
+                    ("alice".into(), "SHA256:abc".into()),
+                    ("bob".into(), "SHA256:def".into()),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+            FrontendEvent::PublicKeyFingerprint("SHA256:fingerprint".into()),
+            FrontendEvent::DeviceConnected {
+                addr: "203.0.113.8:4242".parse().unwrap(),
+                fingerprint: "SHA256:device".into(),
+            },
+            FrontendEvent::DeviceEntered {
+                fingerprint: "SHA256:entering".into(),
+                addr: "[2001:db8::8]:4242".parse().unwrap(),
+                pos: Position::Bottom,
+            },
+            FrontendEvent::IncomingDisconnected("203.0.113.9:4242".parse().unwrap()),
+            FrontendEvent::ConnectionAttempt {
+                fingerprint: "SHA256:attempt".into(),
+            },
+            FrontendEvent::InputSharing(false),
+            FrontendEvent::ClipboardSettings(ClipboardSettings {
+                text: true,
+                image: false,
+                files: true,
+            }),
+            FrontendEvent::ClipboardTransferStatus(ClipboardTransferStatus {
+                transfer_id: 9,
+                file_id: 10,
+                name: "photo.png".into(),
+                direction: ClipboardTransferDirection::Receiving,
+                transferred_bytes: 128,
+                total_bytes: 1024,
+                bytes_per_second: 64,
+                state: ClipboardTransferState::Failed("checksum mismatch".into()),
+            }),
+            FrontendEvent::DiscoveredPeers(vec![DiscoveredPeer {
+                id: "peer._syntra._udp.local.".into(),
+                display_name: "peer".into(),
+                addresses: vec!["192.0.2.20".parse().unwrap()],
+                port: 4242,
+            }]),
+        ]
+    }
+
+    fn frontend_request_fixtures() -> Vec<FrontendRequest> {
+        vec![
+            FrontendRequest::Activate(42, true),
+            FrontendRequest::Create,
+            FrontendRequest::ChangePort(5353),
+            FrontendRequest::Delete(43),
+            FrontendRequest::Enumerate(),
+            FrontendRequest::ResolveDns(42),
+            FrontendRequest::UpdateHostname(42, Some("host".into())),
+            FrontendRequest::UpdatePort(42, 5353),
+            FrontendRequest::DiscoverPeers,
+            FrontendRequest::StopService,
+            FrontendRequest::UpdateFixIps(
+                42,
+                vec!["192.0.2.1".parse().unwrap(), "::1".parse().unwrap()],
+            ),
+            FrontendRequest::EnableCapture,
+            FrontendRequest::EnableEmulation,
+            FrontendRequest::SetInputSharing(false),
+            FrontendRequest::Sync,
+            FrontendRequest::AuthorizeKey("alice".into(), "SHA256:key".into()),
+            FrontendRequest::RemoveAuthorizedKey("SHA256:key".into()),
+            FrontendRequest::UpdateEnterHook(42, Some("notify-send".into())),
+            FrontendRequest::SaveConfiguration,
+            FrontendRequest::SetClipboardText(true),
+            FrontendRequest::SetClipboardImage(false),
+            FrontendRequest::SetClipboardFiles(true),
+            FrontendRequest::CancelClipboardTransfer(9),
+        ]
+    }
 }

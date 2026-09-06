@@ -113,9 +113,7 @@ fn file_uri(path: &Path) -> String {
     uri
 }
 
-async fn export_flatpak_file_uris(
-    mut contents: Vec<(String, Vec<u8>)>,
-) -> Vec<(String, Vec<u8>)> {
+async fn export_flatpak_file_uris(mut contents: Vec<(String, Vec<u8>)>) -> Vec<(String, Vec<u8>)> {
     let Some((_, gnome_data)) = contents
         .iter()
         .find(|(mime, _)| mime == "x-special/gnome-copied-files")
@@ -173,10 +171,7 @@ async fn export_flatpak_file_uris(
             return contents;
         };
         exported.push(file_uri(
-            &mount_point
-                .as_ref()
-                .join(document_id.as_ref())
-                .join(name),
+            &mount_point.as_ref().join(document_id.as_ref()).join(name),
         ));
     }
 
@@ -284,7 +279,10 @@ async fn get_ei_fd() -> Result<
     let clipboard = (clipboard_requested && start_response.is_clipboard_enabled())
         .then_some(clipboard)
         .flatten();
-    log::info!("native RemoteDesktop clipboard enabled={}", clipboard.is_some());
+    log::info!(
+        "native RemoteDesktop clipboard enabled={}",
+        clipboard.is_some()
+    );
     Ok((remote_desktop, session, fd, clipboard))
 }
 
@@ -293,8 +291,7 @@ impl LibeiEmulation {
         let (_remote_desktop, session, eifd, clipboard) = get_ei_fd().await?;
         let session = Arc::new(session);
         let (clipboard_tx, clipboard_rx) = mpsc::channel(8);
-        let (clipboard_command_tx, mut clipboard_command_rx) =
-            mpsc::channel::<ClipboardCommand>(8);
+        let (clipboard_command_tx, mut clipboard_command_rx) = mpsc::channel::<ClipboardCommand>(8);
         let clipboard_task = match clipboard {
             Some(clipboard) => {
                 let clipboard_session = Arc::clone(&session);
@@ -357,7 +354,7 @@ impl LibeiEmulation {
                                         log::warn!(
                                             "clipboard-trace event=publication-result direction=outbound \
                                              request_id={command_seq} outcome=failed \
-                                             offers=[{offered_summary}] error_class=portal"
+                                             offers=[{offered_summary}] error_class=portal error={message}"
                                         );
                                     }
                                 }
@@ -485,6 +482,9 @@ impl LibeiEmulation {
                                 let Some(mime_type) = [
                                     "x-special/gnome-copied-files",
                                     "text/uri-list",
+                                    "image/png",
+                                    "image/jpeg",
+                                    "image/jpg",
                                     "text/plain;charset=utf-8",
                                     "text/plain",
                                     "UTF8_STRING",
@@ -514,9 +514,17 @@ impl LibeiEmulation {
                                     );
                                     continue;
                                 };
+                                let max_bytes = if matches!(
+                                    *mime_type,
+                                    "image/png" | "image/jpeg" | "image/jpg"
+                                ) {
+                                    64 * 1024 * 1024
+                                } else {
+                                    1024 * 1024
+                                };
                                 let fd: std::os::fd::OwnedFd = fd.into();
                                 let mut file = tokio::fs::File::from_std(std::fs::File::from(fd))
-                                    .take(1024 * 1024 + 1);
+                                    .take(max_bytes as u64 + 1);
                                 let mut data = Vec::new();
                                 let mut read_attempt = 0_u8;
                                 loop {
@@ -547,12 +555,12 @@ impl LibeiEmulation {
                                         }
                                     }
                                 }
-                                if data.len() > 1024 * 1024 {
+                                if data.len() > max_bytes {
                                     log::warn!(
                                         "clipboard-trace event=mime-read-result direction=local \
                                          request_id={owner_seq} mime={mime_type} bytes={} \
-                                         outcome=rejected reason=too-large retry_class=terminal \
-                                         elapsed_ms={}",
+                                         outcome=rejected reason=too-large limit={max_bytes} \
+                                         retry_class=terminal elapsed_ms={}",
                                         data.len(),
                                         read_started.elapsed().as_millis()
                                     );
@@ -660,11 +668,9 @@ impl Emulation for LibeiEmulation {
             .as_ref()
             .map_or(true, JoinHandle::is_finished)
         {
-            return Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "portal clipboard task stopped",
-            )
-            .into());
+            return Err(
+                io::Error::new(io::ErrorKind::BrokenPipe, "portal clipboard task stopped").into(),
+            );
         }
         let (published, result) = oneshot::channel();
         self.clipboard_command_tx
@@ -677,10 +683,12 @@ impl Emulation for LibeiEmulation {
                 published,
             })
             .await
-            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "portal clipboard task stopped"))?;
-        result
-            .await
-            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "portal clipboard task stopped"))??;
+            .map_err(|_| {
+                io::Error::new(io::ErrorKind::BrokenPipe, "portal clipboard task stopped")
+            })?;
+        result.await.map_err(|_| {
+            io::Error::new(io::ErrorKind::BrokenPipe, "portal clipboard task stopped")
+        })??;
         Ok(())
     }
 

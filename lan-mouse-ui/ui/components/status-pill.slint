@@ -1,0 +1,14 @@
+import { Theme } from "../theme.slint";
+export component StatusPill inherits Rectangle {
+    in property <string> label;
+    in property <color> tone: Theme.success;
+    height: label-text.preferred-height + Theme.small-spacing;
+    width: label-text.preferred-width + 2 * Theme.small-spacing;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    border-radius: Theme.small-radius;
+    background: tone.with-alpha(0.18);
+    border-color: tone;
+    border-width: 1px;
+    label-text := Text { text: label; color: tone; font-size: Theme.body-size; horizontal-alignment: center; vertical-alignment: center; }
+}

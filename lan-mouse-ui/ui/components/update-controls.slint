@@ -1,0 +1,33 @@
+import { Theme } from "../theme.slint";
+import { Translations } from "../localization.slint";
+import { AppButton, AppSwitch } from "controls.slint";
+import { LineEdit } from "std-widgets.slint";
+
+export component UpdateControls inherits Rectangle {
+    in property <string> repository;
+    in property <bool> automatic-check;
+    in property <bool> busy;
+    in property <string> status;
+    callback configure(string);
+    callback automatic-check-changed(bool);
+    callback check();
+    height: content.preferred-height;
+    vertical-stretch: 0;
+    background: Theme.surface;
+    border-radius: Theme.corner-radius;
+    content := VerticalLayout {
+        padding: Theme.spacing;
+        spacing: Theme.spacing;
+        Text { text: Translations.tr("updates-title"); color: Theme.text; font-size: Theme.body-size; font-weight: 600; }
+        Text { text: Translations.tr("updates-description"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
+        repository-field := LineEdit { text: root.repository; placeholder-text: "owner/repository"; enabled: !root.busy; accepted => { root.configure(self.text); } }
+        AppButton { text: Translations.tr("settings-save"); enabled: !root.busy; clicked => { root.configure(repository-field.text); } }
+        HorizontalLayout {
+            spacing: Theme.small-spacing;
+            Text { text: Translations.tr("updates-automatic"); color: Theme.text; font-size: Theme.body-size; horizontal-stretch: 1; wrap: word-wrap; }
+            AppSwitch { checked: root.automatic-check; enabled: !root.busy && root.repository != ""; a11y-label: Translations.tr("updates-automatic"); toggled(value) => { root.automatic-check-changed(value); } }
+        }
+        AppButton { text: Translations.tr("updates-check"); enabled: !root.busy && root.repository != ""; clicked => { root.check(); } }
+        Text { text: root.repository == "" ? Translations.tr("updates-unconfigured") : root.status; color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
+    }
+}

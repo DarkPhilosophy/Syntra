@@ -1,0 +1,75 @@
+-- Merging decision tree log ---
+manifest
+ADDED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:1:1-23:12
+INJECTED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:1:1-23:12
+INJECTED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:1:1-23:12
+INJECTED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:1:1-23:12
+	package
+		INJECTED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml
+	android:versionName
+		INJECTED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml
+	android:versionCode
+		INJECTED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml
+	xmlns:android
+		ADDED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:1:11-69
+uses-permission#android.permission.FOREGROUND_SERVICE
+ADDED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:2:5-77
+	android:name
+		ADDED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:2:22-74
+uses-permission#android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE
+ADDED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:3:5-94
+	android:name
+		ADDED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:3:22-91
+uses-permission#android.permission.POST_NOTIFICATIONS
+ADDED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:4:5-77
+	android:name
+		ADDED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:4:22-74
+application
+ADDED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:5:5-22:19
+INJECTED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:5:5-22:19
+	android:extractNativeLibs
+		INJECTED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml
+	android:label
+		ADDED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:5:50-75
+	android:theme
+		ADDED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:5:18-49
+activity#de.feschber.lanmouse.LanMouseActivity
+ADDED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:6:9-17:20
+	android:screenOrientation
+		ADDED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:9:13-52
+	android:exported
+		ADDED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:8:13-36
+	android:name
+		ADDED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:7:13-45
+meta-data#android.app.lib_name
+ADDED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:10:13-12:48
+	android:value
+		ADDED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:12:17-45
+	android:name
+		ADDED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:11:17-52
+intent-filter#action:name:android.intent.action.MAIN+category:name:android.intent.category.LAUNCHER
+ADDED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:13:13-16:29
+action#android.intent.action.MAIN
+ADDED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:14:17-69
+	android:name
+		ADDED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:14:25-66
+category#android.intent.category.LAUNCHER
+ADDED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:15:17-77
+	android:name
+		ADDED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:15:27-74
+service#de.feschber.lanmouse.LanMouseForegroundService
+ADDED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:18:9-21:63
+	android:exported
+		ADDED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:20:13-37
+	android:foregroundServiceType
+		ADDED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:21:13-60
+	android:name
+		ADDED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml:19:13-54
+uses-sdk
+INJECTED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml reason: use-sdk injection requested
+INJECTED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml
+INJECTED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml
+	android:targetSdkVersion
+		INJECTED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml
+	android:minSdkVersion
+		INJECTED from /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/AndroidManifest.xml

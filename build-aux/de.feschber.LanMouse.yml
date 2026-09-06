@@ -28,8 +28,6 @@ finish-args:
   - "--filesystem=xdg-config"
   - "--env=RUST_BACKTRACE=1"
   - "--env=RUST_LOG=lan-mouse=debug"
-  - "--env=GTK_PATH=/app/lib/gtk-4.0"
-
 modules:
   - name: lan-mouse
     buildsystem: simple
@@ -41,9 +39,13 @@ modules:
         CARGO_HOME: /run/build/lan-mouse/cargo
     build-commands:
       - cargo fetch --manifest-path Cargo.toml --verbose
-      - cargo build
+      - cargo build -p lan-mouse
+      - cargo build -p lan-mouse-adapter-gtk-clipboard
+      - cargo build -p lan-mouse-adapter-fuse
       - install -Dm0755 target/debug/lan-mouse /app/bin/lan-mouse
-      - install -Dm0644 lan-mouse-gtk/resources/de.feschber.LanMouse.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/${FLATPAK_ID}.svg
+      - install -Dm0755 target/debug/lan-mouse-adapter-gtk-clipboard /app/bin/lan-mouse-adapter-gtk-clipboard
+      - install -Dm0755 target/debug/lan-mouse-adapter-fuse /app/bin/lan-mouse-adapter-fuse
+      - install -Dm0644 lan-mouse-ui/ui/assets/shell/syntra.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/syntra.svg
       - install -Dm0644 de.feschber.LanMouse.desktop ${FLATPAK_DEST}/share/applications/${FLATPAK_ID}.desktop
     sources:
       - type: dir

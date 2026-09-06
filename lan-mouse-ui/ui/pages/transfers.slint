@@ -1,0 +1,88 @@
+import { Translations } from "../localization.slint";
+import { Theme } from "../theme.slint";
+import { TransferItem, TransferRow } from "transfer-row.slint";
+import { AppButton } from "../components/controls.slint";
+import { EmptyState } from "../components/empty-state.slint";
+import { FileDropTarget, TransferPeerItem } from "../components/file-drop-target.slint";
+import { ScrollView } from "std-widgets.slint";
+
+export component TransfersPage inherits Rectangle {
+    in property <[TransferItem]> active-transfers;
+    in property <[TransferItem]> completed-transfers;
+    in property <[TransferItem]> cancelled-transfers;
+    in property <[TransferItem]> failed-transfers;
+    in property <[TransferPeerItem]> peers;
+    in property <string> hovered-peer;
+    in property <bool> native-drop-supported;
+    in property <int> bounds-generation;
+    in property <bool> picker-busy;
+    in property <bool> connected;
+    in property <bool> loading;
+    in property <string> error-message;
+    in property <string> empty-title: Translations.tr("transfer-empty-title");
+    in property <string> empty-description: Translations.tr("manual-transfer-empty-description");
+    in property <string> active-title: Translations.tr("transfer-active");
+    in property <string> completed-title: Translations.tr("transfer-completed");
+    in property <string> failed-title: Translations.tr("transfer-failed");
+    in property <string> cancel-label: Translations.tr("action-cancel");
+    in property <string> loading-label: Translations.tr("manual-transfer-loading");
+    in property <string> retry-label: Translations.tr("authorization-retry");
+    callback cancel-transfer(string, string);
+    callback cancel-manual(string, string);
+    callback choose-files(string);
+    callback report-drop-bounds(string, float, float, float, float);
+    callback report-drop-viewport(float, float, float, float);
+    callback retry();
+    private property <length> window-x: self.absolute-position.x;
+    private property <length> window-y: self.absolute-position.y;
+    function update-viewport() { root.report-drop-viewport(root.window-x / 1px, root.window-y / 1px, root.width / 1px, root.height / 1px); }
+    init => { root.update-viewport(); }
+    changed bounds-generation => { root.update-viewport(); }
+    changed window-x => { root.update-viewport(); }
+    changed window-y => { root.update-viewport(); }
+    changed width => { root.update-viewport(); }
+    changed height => { root.update-viewport(); }
+    background: Theme.background;
+
+    ScrollView {
+        VerticalLayout {
+            padding: Theme.content-gap;
+            spacing: Theme.spacing;
+            alignment: start;
+            Text { text: Translations.tr("navigation-transfers"); color: Theme.text; font-size: Theme.title-size; vertical-stretch: 0; }
+            Text { text: Translations.tr("manual-transfer-description"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; vertical-stretch: 0; }
+            if !root.connected: Text { text: Translations.tr("manual-transfer-service-offline"); color: Theme.warning; font-size: Theme.caption-size; wrap: word-wrap; vertical-stretch: 0; }
+            if root.error-message != "": Text { text: root.error-message; color: Theme.danger; font-size: Theme.caption-size; wrap: word-wrap; vertical-stretch: 0; }
+            if root.loading: Text { text: root.loading-label; color: Theme.muted-text; font-size: Theme.body-size; vertical-stretch: 0; }
+            if root.peers.length == 0: Text { text: Translations.tr("manual-transfer-no-peers"); color: Theme.muted-text; font-size: Theme.body-size; wrap: word-wrap; vertical-stretch: 0; }
+            targets := Rectangle {
+                private property <int> columns: max(1, floor((self.width + Theme.spacing) / (260px + Theme.spacing)));
+                private property <length> tile-width: min(320px, (self.width - (self.columns - 1) * Theme.spacing) / self.columns);
+                private property <length> tile-height: max(176px, Theme.control-height + 4 * Theme.body-size + 4 * Theme.spacing);
+                height: max(0px, ceil(root.peers.length / self.columns) * (self.tile-height + Theme.spacing) - Theme.spacing);
+                vertical-stretch: 0;
+                for device[index] in root.peers: FileDropTarget {
+                    x: mod(index, targets.columns) * (targets.tile-width + Theme.spacing);
+                    y: floor(index / targets.columns) * (targets.tile-height + Theme.spacing);
+                    width: targets.tile-width; height: targets.tile-height;
+                    peer: device;
+                    highlighted: root.hovered-peer == device.fingerprint;
+                    picker-busy: root.picker-busy;
+                    native-drop-supported: root.native-drop-supported;
+                    bounds-generation: root.bounds-generation;
+                    choose(fingerprint) => { root.choose-files(fingerprint); }
+                    report-bounds(fingerprint, x, y, width, height) => { root.report-drop-bounds(fingerprint, x, y, width, height); }
+                }
+            }
+            if root.active-transfers.length > 0: Text { text: root.active-title; color: Theme.accent; font-size: Theme.body-size; vertical-stretch: 0; }
+            for item in root.active-transfers: TransferRow { transfer: item; cancel-label: root.cancel-label; cancel(t, f) => { root.cancel-transfer(t, f); } cancel-manual(peer, id) => { root.cancel-manual(peer, id); } }
+            if root.completed-transfers.length > 0: Text { text: root.completed-title; color: Theme.success; font-size: Theme.body-size; vertical-stretch: 0; }
+            for item in root.completed-transfers: TransferRow { transfer: item; }
+            if root.cancelled-transfers.length > 0: Text { text: Translations.tr("manual-transfer-cancelled-section"); color: Theme.muted-text; font-size: Theme.body-size; vertical-stretch: 0; }
+            for item in root.cancelled-transfers: TransferRow { transfer: item; }
+            if root.failed-transfers.length > 0: Text { text: root.failed-title; color: Theme.danger; font-size: Theme.body-size; vertical-stretch: 0; }
+            for item in root.failed-transfers: TransferRow { transfer: item; }
+            if !root.loading && root.active-transfers.length == 0 && root.completed-transfers.length == 0 && root.cancelled-transfers.length == 0 && root.failed-transfers.length == 0: EmptyState { title: root.empty-title; description: root.empty-description; }
+        }
+    }
+}

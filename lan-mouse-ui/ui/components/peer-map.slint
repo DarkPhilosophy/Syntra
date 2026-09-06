@@ -1,0 +1,113 @@
+import { Theme } from "../theme.slint";
+import { Translations } from "../localization.slint";
+import { ClientItem } from "client-row.slint";
+import { Avatar } from "avatar.slint";
+
+export component PeerMap inherits Rectangle {
+    in property <[ClientItem]> clients;
+    in property <int> zone-depth: 1;
+    in property <string> local-name;
+    in property <image> local-image;
+    in property <bool> has-local-image;
+    callback move-peer(string, int);
+    private property <length> avatar-size: 40px;
+    private property <length> header-height: 28px;
+    private property <length> row-height: root.avatar-size + Theme.body-size * 1.5 + 3 * Theme.small-spacing;
+    private property <length> avatar-top: root.header-height + Theme.small-spacing;
+    private property <length> local-avatar-top: root.avatar-top + (max(1, root.zone-depth) - 1) * root.row-height / 2;
+    private property <length> lane: max(128px, max(1, root.zone-depth) * root.row-height + root.header-height + Theme.small-spacing);
+    height: 3 * root.lane + 2 * Theme.small-spacing;
+    vertical-stretch: 0;
+    for zone in [0, 1, 2, 3]: Rectangle {
+        x: zone == 0 ? 0px : zone == 1 ? 2 * parent.width / 3 : parent.width / 3;
+        y: zone == 2 ? 0px : zone == 3 ? 2 * root.lane : root.lane;
+        width: parent.width / 3 - Theme.small-spacing;
+        height: root.lane - Theme.small-spacing;
+        background: Theme.surface;
+        border-width: 1px;
+        border-color: Theme.border;
+        border-radius: Theme.small-radius;
+        Text { x: 8px; y: 8px; width: max(0px, parent.width - 16px); text: Translations.tr(zone == 0 ? "position-left" : zone == 1 ? "position-right" : zone == 2 ? "position-top" : "position-bottom"); color: Theme.muted-text; font-size: Theme.caption-size; horizontal-alignment: right; overflow: elide; }
+    }
+    Rectangle {
+        x: parent.width / 3;
+        y: root.lane;
+        width: parent.width / 3 - Theme.small-spacing;
+        height: root.lane - Theme.small-spacing;
+        background: Theme.elevated-surface;
+        border-radius: Theme.small-radius;
+        Avatar {
+            source: root.local-image; has-image: root.has-local-image;
+            size: root.avatar-size; height: root.avatar-size;
+            x: (parent.width - self.width) / 2; y: root.local-avatar-top;
+        }
+        Text {
+            x: 8px; y: root.local-avatar-top + root.avatar-size + Theme.small-spacing;
+            width: max(0px, parent.width - 16px); height: Theme.body-size * 1.5;
+            text: root.local-name; color: Theme.text;
+            horizontal-alignment: center; vertical-alignment: center; overflow: elide;
+        }
+    }
+    for peer in root.clients: Rectangle {
+        private property <length> home-x: peer.position == 0 ? 0px : peer.position == 1 ? 2 * root.width / 3 : root.width / 3;
+        private property <length> home-y: (peer.position == 2 ? 0px : peer.position == 3 ? 2 * root.lane : root.lane) + root.header-height + peer.zone-index * root.row-height;
+        private property <length> press-x;
+        private property <length> press-y;
+        x: home-x;
+        y: home-y;
+        width: root.width / 3 - Theme.small-spacing;
+        height: root.row-height;
+        background: drag.pressed ? Theme.selection : transparent;
+        border-radius: Theme.small-radius;
+        border-width: drag.pressed ? 1px : 0px;
+        border-color: Theme.accent;
+        HorizontalLayout {
+            y: Theme.small-spacing;
+            height: root.avatar-size;
+            padding: 0px;
+            padding-left: Theme.small-spacing;
+            padding-right: Theme.small-spacing;
+            spacing: Theme.small-spacing;
+            Avatar {
+                source: peer.custom-image; has-image: peer.has-custom-image;
+                size: root.avatar-size;
+            }
+            Text {
+                text: peer.display-name; color: Theme.text;
+                horizontal-stretch: 1;
+                vertical-alignment: center; overflow: elide;
+            }
+        }
+        drag := TouchArea {
+            pointer-event(event) => {
+                if event.kind == PointerEventKind.down {
+                    parent.press-x = self.mouse-x;
+                    parent.press-y = self.mouse-y;
+                }
+                if event.kind == PointerEventKind.up {
+                    // Coordinates stay relative to the stable card, not the drag preview.
+                    let px = parent.home-x + self.mouse-x;
+                    let py = parent.home-y + self.mouse-y;
+                    if abs(self.mouse-x - parent.press-x) + abs(self.mouse-y - parent.press-y) > 6px {
+                        if px >= 0px && px < root.width && py >= 0px && py < root.height {
+                            if py < root.lane && px >= root.width / 3 && px < 2 * root.width / 3 { root.move-peer(peer.handle, 2); }
+                            else if py >= 2 * root.lane && px >= root.width / 3 && px < 2 * root.width / 3 { root.move-peer(peer.handle, 3); }
+                            else if py >= root.lane && py < 2 * root.lane && px < root.width / 3 { root.move-peer(peer.handle, 0); }
+                            else if py >= root.lane && py < 2 * root.lane && px >= 2 * root.width / 3 { root.move-peer(peer.handle, 1); }
+                        }
+                    }
+                }
+            }
+        }
+        if drag.pressed: Rectangle {
+            x: drag.mouse-x - parent.press-x;
+            y: drag.mouse-y - parent.press-y;
+            width: parent.width;
+            height: parent.height;
+            background: Theme.accent.with-alpha(0.25);
+            border-width: 2px;
+            border-color: Theme.accent;
+            border-radius: Theme.small-radius;
+        }
+    }
+}

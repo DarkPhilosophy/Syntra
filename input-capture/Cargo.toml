@@ -30,7 +30,7 @@ async-trait = "0.1.81"
 tokio-util = "0.7.11"
 
 
-[target.'cfg(all(unix, not(target_os="macos")))'.dependencies]
+[target.'cfg(all(unix, not(target_os="macos"), not(target_os="android")))'.dependencies]
 wayland-client = { version = "0.31.1", optional = true }
 wayland-protocols = { version = "0.32.1", features = [
     "client",
@@ -44,7 +44,7 @@ x11 = { version = "2.21.0", features = ["xlib", "xtest"], optional = true }
 ashpd = { version = "0.13.9", default-features = false, features = [
     "input_capture",
     "clipboard",
-    "tokio",
+    "async-io",
 ], optional = true }
 reis = { version = "0.7.0", features = ["tokio"], optional = true }
 

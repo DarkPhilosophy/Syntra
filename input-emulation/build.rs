@@ -1,15 +1,15 @@
-fn main() {
-    let unix = cfg!(unix);
-    let libei = cfg!(feature = "libei");
-    let x11 = cfg!(feature = "x11");
-    let macos = cfg!(target_os = "macos");
-    let wlroots = cfg!(feature = "wlroots");
-    let rdp = cfg!(feature = "remote_desktop_portal");
+fn desktop_unix_target(family: &str, os: &str) -> bool {
+    family == "unix" && os != "macos" && os != "android"
+}
 
-    let libei = unix && !macos && libei;
-    let wlroots = unix && !macos && wlroots;
-    let x11 = unix && !macos && x11;
-    let rdp = unix && !macos && rdp;
+fn main() {
+    let family = std::env::var("CARGO_CFG_TARGET_FAMILY").unwrap_or_default();
+    let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let desktop_unix = desktop_unix_target(&family, &os);
+    let libei = desktop_unix && cfg!(feature = "libei");
+    let x11 = desktop_unix && cfg!(feature = "x11");
+    let wlroots = desktop_unix && cfg!(feature = "wlroots");
+    let rdp = desktop_unix && cfg!(feature = "remote_desktop_portal");
 
     println!("cargo::rustc-check-cfg=cfg(wlroots)");
     println!("cargo::rustc-check-cfg=cfg(libei)");
@@ -27,5 +27,20 @@ fn main() {
     }
     if rdp {
         println!("cargo::rustc-cfg=rdp");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::desktop_unix_target;
+
+    #[test]
+    fn android_is_not_a_desktop_unix_target() {
+        assert!(!desktop_unix_target("unix", "android"));
+    }
+
+    #[test]
+    fn linux_remains_a_desktop_unix_target() {
+        assert!(desktop_unix_target("unix", "linux"));
     }
 }

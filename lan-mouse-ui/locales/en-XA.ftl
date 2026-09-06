@@ -1,0 +1,8 @@
+app-title = [Łåñ Möûšë!!!]
+navigation-settings = [Šëţţïñĝš!!!]
+device-status-connected = [Çøññëçţëð ţø { $name }!!!]
+window-hide-to-tray = [Ħîðë ţø ţŕåÿ!!!]
+window-minimize = [Mîñîmîžë!!!]
+window-maximize = [Måxîmîžë!!!]
+window-restore = [Řëšţøŕë!!!]
+window-close = [Çľøšë!!!]

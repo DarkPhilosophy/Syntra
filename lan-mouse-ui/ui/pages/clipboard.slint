@@ -1,0 +1,71 @@
+import { FlatpakApplication } from "../app-state.slint";
+import { AppButton } from "../components/controls.slint";
+import { SettingRow } from "../components/setting-row.slint";
+import { Theme } from "../theme.slint";
+import { Translations } from "../localization.slint";
+import { ScrollView, LineEdit } from "std-widgets.slint";
+
+export component ClipboardPage inherits Rectangle {
+    in property <bool> text-enabled;
+    in property <bool> image-enabled;
+    in property <bool> files-enabled;
+    in property <bool> files-supported: true;
+    in property <[FlatpakApplication]> flatpak-applications;
+    in property <bool> flatpak-applications-loading;
+    in property <string> flatpak-applications-error;
+    in property <string> search;
+    in property <string> status-message;
+    callback text-toggled(bool);
+    callback image-toggled(bool);
+    callback files-toggled(bool);
+    callback refresh-flatpak-apps();
+    callback grant-flatpak-access(string);
+    callback search-changed(string);
+    background: Theme.background;
+
+    ScrollView {
+        VerticalLayout {
+            padding: Theme.content-gap;
+            spacing: Theme.spacing;
+            alignment: start;
+            Text { text: Translations.tr("navigation-clipboard"); color: Theme.text; font-size: Theme.title-size; vertical-stretch: 0; }
+            Text { text: Translations.tr("clipboard-description"); color: Theme.muted-text; font-size: Theme.body-size; wrap: word-wrap; vertical-stretch: 0; }
+            SettingRow { title: Translations.tr("clipboard-text"); description: Translations.tr("clipboard-text-description"); enabled: root.text-enabled; toggled(value) => { root.text-toggled(value); } }
+            SettingRow { title: Translations.tr("clipboard-images"); description: Translations.tr("clipboard-images-description"); enabled: root.image-enabled; toggled(value) => { root.image-toggled(value); } }
+            SettingRow { title: Translations.tr("clipboard-files"); description: root.files-supported ? Translations.tr("clipboard-files-description") : Translations.tr("clipboard-unavailable"); enabled: root.files-enabled; interactive: root.files-supported; toggled(value) => { root.files-toggled(value); } }
+
+            Text { text: Translations.tr("clipboard-file-access-required"); color: Theme.text; font-size: Theme.body-size; font-weight: 600; vertical-stretch: 0; }
+            Text { text: Translations.tr("flatpak-scope"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; vertical-stretch: 0; }
+            HorizontalLayout {
+                spacing: Theme.small-spacing;
+                vertical-stretch: 0;
+                LineEdit { text: root.search; placeholder-text: Translations.tr("flatpak-search"); edited(value) => { root.search-changed(value); } horizontal-stretch: 1; }
+                AppButton { text: Translations.tr("flatpak-refresh"); enabled: !root.flatpak-applications-loading; clicked => { root.refresh-flatpak-apps(); } }
+            }
+            if root.flatpak-applications-loading: Text { text: Translations.tr("flatpak-loading"); color: Theme.muted-text; font-size: Theme.body-size; vertical-stretch: 0; }
+            if root.flatpak-applications-error != "": Text { text: root.flatpak-applications-error; color: Theme.danger; font-size: Theme.body-size; wrap: word-wrap; vertical-stretch: 0; }
+            if !root.flatpak-applications-loading && root.flatpak-applications-error == "" && root.flatpak-applications.length == 0: Text {
+                text: root.search == "" ? Translations.tr("flatpak-no-apps") : Translations.tr("flatpak-no-matches");
+                color: Theme.muted-text; font-size: Theme.body-size; vertical-stretch: 0;
+            }
+            for application in root.flatpak-applications: Rectangle {
+                height: application-row.preferred-height;
+                vertical-stretch: 0;
+                background: Theme.surface;
+                border-radius: Theme.small-radius;
+                application-row := HorizontalLayout {
+                    padding: Theme.spacing;
+                    spacing: Theme.spacing;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: Theme.small-spacing / 2;
+                        Text { text: application.name; color: Theme.text; font-size: Theme.body-size; overflow: elide; vertical-stretch: 0; }
+                        Text { text: application.application-id; color: Theme.muted-text; font-size: Theme.caption-size; overflow: elide; vertical-stretch: 0; }
+                    }
+                    AppButton { text: Translations.tr("flatpak-grant-read"); clicked => { root.grant-flatpak-access(application.application-id); } }
+                }
+            }
+            if root.status-message != "": Text { text: Translations.tr("flatpak-granted") + "\n" + root.status-message; color: Theme.success; font-size: Theme.body-size; wrap: word-wrap; vertical-stretch: 0; }
+        }
+    }
+}

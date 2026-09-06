@@ -230,21 +230,15 @@ fn main() {
                         }
                     }
                 }
-                Message::Released(released) => release_transfer(
-                    &released.transfer_id,
-                    &active_for_main,
-                    &clipboard_for_main,
-                ),
-                Message::Unmounted(event) => release_transfer(
-                    &event.transfer_id,
-                    &active_for_main,
-                    &clipboard_for_main,
-                ),
-                Message::Cancel { transfer_id } => release_transfer(
-                    &transfer_id,
-                    &active_for_main,
-                    &clipboard_for_main,
-                ),
+                Message::Released(released) => {
+                    release_transfer(&released.transfer_id, &active_for_main, &clipboard_for_main)
+                }
+                Message::Unmounted(event) => {
+                    release_transfer(&event.transfer_id, &active_for_main, &clipboard_for_main)
+                }
+                Message::Cancel { transfer_id } => {
+                    release_transfer(&transfer_id, &active_for_main, &clipboard_for_main)
+                }
                 _ => {}
             }
         }

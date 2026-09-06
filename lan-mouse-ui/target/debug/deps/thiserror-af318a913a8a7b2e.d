@@ -1,0 +1,15 @@
+/var/home/alexa/Projects/lan-mouse/lan-mouse-ui/target/debug/deps/thiserror-af318a913a8a7b2e.d: /home/alexa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/lib.rs /home/alexa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/aserror.rs /home/alexa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/display.rs /home/alexa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/provide.rs /home/alexa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/var.rs /home/alexa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/private.rs /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/target/debug/build/thiserror-bc74025bb7754f49/out/private.rs
+
+/var/home/alexa/Projects/lan-mouse/lan-mouse-ui/target/debug/deps/libthiserror-af318a913a8a7b2e.rlib: /home/alexa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/lib.rs /home/alexa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/aserror.rs /home/alexa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/display.rs /home/alexa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/provide.rs /home/alexa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/var.rs /home/alexa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/private.rs /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/target/debug/build/thiserror-bc74025bb7754f49/out/private.rs
+
+/var/home/alexa/Projects/lan-mouse/lan-mouse-ui/target/debug/deps/libthiserror-af318a913a8a7b2e.rmeta: /home/alexa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/lib.rs /home/alexa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/aserror.rs /home/alexa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/display.rs /home/alexa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/provide.rs /home/alexa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/var.rs /home/alexa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/private.rs /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/target/debug/build/thiserror-bc74025bb7754f49/out/private.rs
+
+/home/alexa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/lib.rs:
+/home/alexa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/aserror.rs:
+/home/alexa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/display.rs:
+/home/alexa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/provide.rs:
+/home/alexa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/var.rs:
+/home/alexa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/private.rs:
+/var/home/alexa/Projects/lan-mouse/lan-mouse-ui/target/debug/build/thiserror-bc74025bb7754f49/out/private.rs:
+
+# env-dep:OUT_DIR=/var/home/alexa/Projects/lan-mouse/lan-mouse-ui/target/debug/build/thiserror-bc74025bb7754f49/out

@@ -1,0 +1,41 @@
+<!-- filename: layout-directions.html -->
+<div class="mockup">
+  <div class="mockup-header">Lan Mouse redesign — choose the structural direction</div>
+  <div class="mockup-body">
+    <div class="options">
+      <div class="option" data-choice="a" onclick="toggleSelect(this)">
+        <div class="letter">A</div>
+        <div class="content">
+          <h3>Control Center</h3>
+          <p>Recommended. Persistent left rail with device health, then Dashboard, Devices, Clipboard, Transfers, Security, Diagnostics and Settings. Right side uses compact Adwaita-style groups and clear state cards. Best balance between daily use and deep debugging.</p>
+          <div class="mock-shell" style="display:grid;grid-template-columns:170px 1fr;height:250px;border:1px solid #52606d;border-radius:16px;overflow:hidden;background:#12171e;color:#e7edf3">
+            <aside style="padding:16px;background:#19212b;display:flex;flex-direction:column;gap:8px"><b style="font-size:16px">LAN MOUSE</b><small style="color:#86efac">● A ↔ B connected</small><span style="margin-top:14px;background:#2b3948;padding:9px;border-radius:9px">Overview</span><span style="padding:9px">Devices</span><span style="padding:9px">Clipboard</span><span style="padding:9px">Transfers</span><span style="padding:9px">Diagnostics</span></aside>
+            <main style="padding:20px"><small style="color:#93a4b5">OVERVIEW</small><h2 style="margin:5px 0 16px">Everything is ready</h2><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div style="background:#1c2631;padding:14px;border-radius:12px">Input routing<br><b style="color:#86efac">Active</b></div><div style="background:#1c2631;padding:14px;border-radius:12px">Clipboard<br><b style="color:#86efac">Synced</b></div></div><div style="margin-top:10px;background:#1c2631;padding:14px;border-radius:12px">Recent devices and transfers</div></main>
+          </div>
+        </div>
+      </div>
+      <div class="option" data-choice="b" onclick="toggleSelect(this)">
+        <div class="letter">B</div>
+        <div class="content">
+          <h3>Device Canvas</h3>
+          <p>Visual-first. Left navigation stays, but the main page is an interactive spatial map of A and B with control direction, clipboard path and live transfer flows. Memorable and ideal for multi-layered control, but more complex to translate faithfully into GTK.</p>
+          <div class="mock-shell" style="display:grid;grid-template-columns:150px 1fr;height:250px;border:1px solid #52606d;border-radius:16px;overflow:hidden;background:#111820;color:#edf2f7">
+            <aside style="padding:16px;background:#17212b"><b>LAN MOUSE</b><div style="margin-top:20px;background:#273746;padding:9px;border-radius:9px">Canvas</div><div style="padding:9px">Clipboard</div><div style="padding:9px">Debug</div></aside>
+            <main style="position:relative;padding:20px"><small>CONTROL CANVAS</small><div style="position:absolute;left:12%;top:38%;background:#1f3040;padding:18px 25px;border-radius:14px;border:1px solid #4ade80">A · Main</div><div style="position:absolute;right:12%;top:38%;background:#1f3040;padding:18px 25px;border-radius:14px;border:1px solid #60a5fa">B · HP</div><div style="position:absolute;left:43%;top:48%;color:#facc15">⇄</div><div style="position:absolute;bottom:18px;left:20px;right:20px;background:#1c2631;padding:10px;border-radius:10px">Clipboard: text · images · files</div></main>
+          </div>
+        </div>
+      </div>
+      <div class="option" data-choice="c" onclick="toggleSelect(this)">
+        <div class="letter">C</div>
+        <div class="content">
+          <h3>Dense Workbench</h3>
+          <p>Power-user layout. Narrow icon rail, resizable panels and always-visible event console. Fastest for development and diagnostics, but less approachable and visually busier for normal daily operation.</p>
+          <div class="mock-shell" style="display:grid;grid-template-columns:64px 1fr;height:250px;border:1px solid #52606d;border-radius:12px;overflow:hidden;background:#101419;color:#e5e7eb">
+            <aside style="padding:12px;background:#1b222b;text-align:center;display:grid;gap:12px;align-content:start"><b>LM</b><span>⌂</span><span>⌨</span><span>⎘</span><span>⇅</span><span>&gt;_</span></aside>
+            <main style="display:grid;grid-template-rows:1fr 105px"><section style="padding:16px;display:grid;grid-template-columns:1fr 1fr;gap:8px"><div style="background:#1c242d;padding:12px;border-radius:8px">Devices<br><small>A active · B ready</small></div><div style="background:#1c242d;padding:12px;border-radius:8px">Clipboard<br><small>3 capabilities enabled</small></div><div style="grid-column:1/3;background:#1c242d;padding:12px;border-radius:8px">Transfer queue</div></section><section style="border-top:1px solid #334155;background:#090d11;padding:9px;font-family:monospace;font-size:10px;color:#86efac">16:24:04 COPY detected<br>16:24:04 MANIFEST sent A → B<br>16:24:04 PUBLISH accepted</section></main>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

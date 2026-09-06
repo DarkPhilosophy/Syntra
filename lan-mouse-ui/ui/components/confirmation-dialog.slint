@@ -1,0 +1,19 @@
+import { Theme } from "../theme.slint";
+import { Translations } from "../localization.slint";
+import { AppButton } from "controls.slint";
+export component ConfirmationDialog inherits Rectangle {
+    in property <string> title;
+    in property <string> message;
+    callback confirmed();
+    callback dismissed();
+    width: 420px;
+    height: 220px;
+    background: Theme.elevated-surface;
+    border-radius: Theme.corner-radius;
+    border-color: Theme.accent;
+    border-width: 1px;
+    Text { x: Theme.spacing; y: Theme.spacing; text: title; color: Theme.text; font-size: Theme.title-size; }
+    Text { x: Theme.spacing; y: 64px; width: parent.width - 32px; text: message; color: Theme.muted-text; font-size: Theme.body-size; }
+    AppButton { x: parent.width - 190px; y: parent.height - 60px; width: 80px; height: Theme.hit-area; text: Translations.tr("action-cancel"); clicked => { root.dismissed(); } }
+    AppButton { x: parent.width - 100px; y: parent.height - 60px; width: 80px; height: Theme.hit-area; text: Translations.tr("action-confirm"); clicked => { root.confirmed(); } }
+}
