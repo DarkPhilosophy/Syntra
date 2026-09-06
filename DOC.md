@@ -7,11 +7,11 @@ Navigation collapses into a compact layout for narrow windows. Fluent locale bun
 runtime localization observer are present, but visible-string binding is still in progress;
 the documentation does not claim every screen is translated live yet.
 GTK is retained only for the separately packaged Linux
-`lan-mouse-adapter-gtk-clipboard` clipboard helper. The FUSE helper remains separately
+`syntra-plugin-gtk-clipboard` clipboard helper. The FUSE helper remains separately
 packaged when file transfer is enabled. This helper distinction does not change clipboard or
 protocol behavior.
 Android has an in-tree Gradle/Slint host and lifecycle/transport foundations, but is not yet a
-verified supported Lan Mouse target. Its current capability model reports capture, emulation,
+verified supported Syntra target. Its current capability model reports capture, emulation,
 and file clipboard transfer as unavailable; an APK build alone is not evidence of end-to-end
 Android support.
 
@@ -64,7 +64,7 @@ interactive user action; stopping input sharing does not stop clipboard or peer 
 
 ## Events
 
-Each instance of lan-mouse can emit and receive events, where
+Each instance of syntra can emit and receive events, where
 an event is either a mouse or keyboard event for now.
 
 The general Architecture is shown in the following flow chart:
@@ -134,6 +134,6 @@ Either events are sent or received.
 
 This ensures that
 - a) Events can never result in a feedback loop.
-- b) As soon as a virtual input enters another client, lan-mouse will stop receiving events,
+- b) As soon as a virtual input enters another client, syntra will stop receiving events,
 which ensures clients can only be controlled directly and not indirectly through other clients.
 

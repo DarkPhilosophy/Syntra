@@ -58,29 +58,29 @@ rustPlatform.buildRustPackage {
   cargoLock.lockFile = ../Cargo.lock;
   cargoBuildFlags = [
     "-p"
-    "lan-mouse"
+    "syntra"
   ] ++ lib.optionals stdenv.isLinux [
     "-p"
-    "lan-mouse-adapter-gtk-clipboard"
+    "syntra-plugin-gtk-clipboard"
     "-p"
-    "lan-mouse-adapter-fuse"
+    "syntra-plugin-fuse"
   ];
 
   # Set Environment Variables
   RUST_BACKTRACE = "full";
   postInstall = ''
     ${lib.optionalString stdenv.isLinux ''
-      test -x $out/bin/lan-mouse-adapter-gtk-clipboard
-      test -x $out/bin/lan-mouse-adapter-fuse
+      test -x $out/bin/syntra-plugin-gtk-clipboard
+      test -x $out/bin/syntra-plugin-fuse
     ''}
     install -Dm444 *.desktop -t $out/share/applications
-    install -Dm444 lan-mouse-ui/ui/assets/shell/syntra.svg $out/share/icons/hicolor/scalable/apps/syntra.svg
+    install -Dm444 syntra-ui/ui/assets/shell/syntra.svg $out/share/icons/hicolor/scalable/apps/syntra.svg
   '';
 
   meta = with lib; {
-    description = "Lan Mouse is a mouse and keyboard sharing software";
+    description = "Syntra is a mouse and keyboard sharing software";
     longDescription = ''
-      Lan Mouse is a mouse and keyboard sharing software similar to universal-control on Apple devices. It allows for using multiple pcs with a single set of mouse and keyboard. This is also known as a Software KVM switch.
+      Syntra is a mouse and keyboard sharing software similar to universal-control on Apple devices. It allows for using multiple pcs with a single set of mouse and keyboard. This is also known as a Software KVM switch.
       The primary target is Wayland on Linux but Windows and MacOS and Linux on Xorg have partial support as well (see below for more details).
     '';
     mainProgram = pname;

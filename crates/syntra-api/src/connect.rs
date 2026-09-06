@@ -68,7 +68,7 @@ fn connect_inner(
     Ok((reader, writer))
 }
 
-/// wait for the lan-mouse socket to come online
+/// wait for the syntra socket to come online
 #[cfg(unix)]
 fn wait_for_service(timeout: Option<Duration>) -> Result<UnixStream, ConnectionError> {
     let socket_path = crate::default_socket_path()?;

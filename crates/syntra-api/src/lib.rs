@@ -40,7 +40,7 @@ pub enum IpcListenerCreationError {
     SocketPath(#[from] SocketPathError),
     #[error("service already running!")]
     AlreadyRunning,
-    #[error("failed to bind lan-mouse socket: `{0}`")]
+    #[error("failed to bind syntra socket: `{0}`")]
     Bind(io::Error),
 }
 
@@ -484,6 +484,12 @@ pub enum FrontendEvent {
     IdentityRegenerated {
         fingerprint: String,
     },
+    /// Authoritative logging configuration, in the `syntra-log` spec syntax
+    /// (for example `info,clipboard=trace`).
+    ///
+    /// Emitted after any change so every attached client agrees on the level
+    /// currently in force.
+    LogSpec(String),
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
@@ -573,6 +579,14 @@ pub enum FrontendRequest {
         transfer_id: u64,
     },
     SetFileReceiveSettings(FileReceiveSettings),
+    /// Replace the daemon's logging configuration at runtime.
+    ///
+    /// Takes a `syntra-log` spec such as `warn,transfer=debug`. Diagnosing a
+    /// live problem must not require restarting the service, because a
+    /// restart discards the state that reproduces it.
+    SetLogSpec(String),
+    /// Ask for the logging configuration currently in force.
+    QueryLogSpec,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]

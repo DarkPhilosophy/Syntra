@@ -362,6 +362,11 @@ impl AndroidHostController {
                     ClipboardSettings::default(),
                 ));
             }
+            // Android hosts the service in-process and logs through logcat,
+            // so there is no separate daemon whose levels could be retuned.
+            FrontendRequest::SetLogSpec(_) | FrontendRequest::QueryLogSpec => {
+                events.push(FrontendEvent::LogSpec(String::new()));
+            }
         }
         events
     }
@@ -419,7 +424,7 @@ mod tests {
 
     fn test_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
-            "lan-mouse-android-{name}-{}-{}.json",
+            "syntra-android-{name}-{}-{}.json",
             std::process::id(),
             std::thread::current().name().unwrap_or("test")
         ))

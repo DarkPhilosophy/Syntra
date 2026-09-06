@@ -76,7 +76,7 @@ impl PlatformActions for WindowsPlatform {
 
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let thread = std::thread::Builder::new()
-            .name("lan-mouse-notification-area".into())
+            .name("syntra-notification-area".into())
             .spawn(move || tray_message_loop(ready_tx))
             .map_err(|error| {
                 clear_callbacks();
@@ -211,7 +211,7 @@ fn tray_message_loop(ready: mpsc::SyncSender<Result<isize, String>>) {
 unsafe fn create_tray_window() -> windows::core::Result<HWND> {
     let module = GetModuleHandleW(None)?;
     let instance = HINSTANCE(module.0);
-    let class_name = w!("LanMouseNotificationAreaWindow");
+    let class_name = w!("SyntraNotificationAreaWindow");
     let class = WNDCLASSW {
         hInstance: instance,
         lpszClassName: class_name,

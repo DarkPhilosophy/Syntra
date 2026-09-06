@@ -1,6 +1,6 @@
 [package]
 name = "syntra-input-emulation"
-description = "cross-platform input emulation library used by lan-mouse"
+description = "cross-platform input emulation library used by syntra"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

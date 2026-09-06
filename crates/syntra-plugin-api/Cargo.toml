@@ -1,6 +1,6 @@
 [package]
 name = "syntra-plugin-api"
-description = "Versioned external-process adapter protocol for Lan Mouse file clipboard integration"
+description = "Versioned external-process adapter protocol for Syntra file clipboard integration"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

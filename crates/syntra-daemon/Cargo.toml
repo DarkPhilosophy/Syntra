@@ -17,13 +17,16 @@ path = "src/main.rs"
 syntra-api.workspace = true
 syntra-cli.workspace = true
 syntra-core.workspace = true
+syntra-log.workspace = true
 syntra-input-capture.workspace = true
 syntra-input-emulation.workspace = true
 
-env_logger.workspace = true
 log.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "signal"] }
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [features]
 default = []

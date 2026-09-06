@@ -17,9 +17,9 @@ path = "src/main.rs"
 # must stay installable without the daemon's capture and emulation stack.
 [dependencies]
 syntra-api.workspace = true
+syntra-log.workspace = true
 syntra-ui.workspace = true
 
-env_logger.workspace = true
 log.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 

@@ -1,7 +1,0 @@
-de.feschber.lanmouse.app-pngs-0 /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/build/generated/res/pngs/debug
-de.feschber.lanmouse.app-resValues-1 /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/build/generated/res/resValues/debug
-de.feschber.lanmouse.app-packageDebugResources-2 /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/build/intermediates/incremental/debug/packageDebugResources/merged.dir
-de.feschber.lanmouse.app-packageDebugResources-3 /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/build/intermediates/incremental/debug/packageDebugResources/stripped.dir
-de.feschber.lanmouse.app-debug-4 /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/build/intermediates/merged_res/debug/mergeDebugResources
-de.feschber.lanmouse.app-debug-5 /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/debug/res
-de.feschber.lanmouse.app-main-6 /var/home/alexa/Projects/lan-mouse/lan-mouse-ui/android/app/src/main/res

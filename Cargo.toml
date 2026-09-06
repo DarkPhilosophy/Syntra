@@ -9,6 +9,7 @@ members = [
     "crates/syntra-ui",
     "crates/syntra-cli",
     # contracts
+    "crates/syntra-log",
     "crates/syntra-api",
     "crates/syntra-proto",
     "crates/syntra-plugin-api",
@@ -47,6 +48,7 @@ syntra-input-emulation = { path = "crates/syntra-input-emulation", default-featu
 syntra-input-event = { path = "crates/syntra-input-event" }
 syntra-plugin-api = { path = "crates/syntra-plugin-api" }
 syntra-proto = { path = "crates/syntra-proto" }
+syntra-log = { path = "crates/syntra-log" }
 syntra-store = { path = "crates/syntra-store" }
 syntra-ui = { path = "crates/syntra-ui" }
 

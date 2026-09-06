@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 pub const MAX_DIAGNOSTIC_ENTRIES: usize = 2_000;
-const SOCKET_NAME: &str = "lan-mouse-clipboard-console.sock";
+const SOCKET_NAME: &str = "syntra-diagnostics.sock";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LiveDiagnostic {

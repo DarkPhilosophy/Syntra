@@ -18,6 +18,7 @@ syntra-cli.workspace = true
 syntra-input-capture.workspace = true
 syntra-input-emulation.workspace = true
 syntra-input-event.workspace = true
+syntra-log.workspace = true
 syntra-plugin-api.workspace = true
 syntra-proto.workspace = true
 syntra-store.workspace = true

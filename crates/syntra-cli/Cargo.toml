@@ -1,6 +1,6 @@
 [package]
 name = "syntra-cli"
-description = "CLI Frontend for lan-mouse"
+description = "CLI Frontend for syntra"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

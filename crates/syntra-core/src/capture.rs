@@ -17,7 +17,7 @@ use local_channel::mpsc::{Receiver, Sender, channel};
 use tokio::task::{JoinHandle, spawn_local};
 use tokio_util::sync::CancellationToken;
 
-use crate::connect::LanMouseConnection;
+use crate::connect::SyntraConnection;
 
 /// How often a lost peer transport is retried while idle.
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(2);
@@ -104,7 +104,7 @@ enum CaptureRequest {
 impl Capture {
     pub(crate) fn new(
         backend: Option<syntra_input_capture::Backend>,
-        conn: LanMouseConnection,
+        conn: SyntraConnection,
         release_bind: Vec<scancode::Linux>,
     ) -> Self {
         let (request_tx, request_rx) = channel();
@@ -232,7 +232,7 @@ struct CaptureTask {
     cancellation_token: CancellationToken,
     enabled_captures: HashSet<CaptureHandle>,
     captures: Vec<(CaptureHandle, Position, CaptureType)>,
-    conn: LanMouseConnection,
+    conn: SyntraConnection,
     event_tx: Sender<ICaptureEvent>,
     release_bind: Rc<RefCell<Vec<scancode::Linux>>>,
     request_rx: Receiver<CaptureRequest>,
@@ -280,7 +280,7 @@ impl CaptureTask {
     }
 
     /// Re-establish transports for peers whose connection died.
-    /// [`LanMouseConnection::connect`] is a no-op while a peer is connected.
+    /// [`SyntraConnection::connect`] is a no-op while a peer is connected.
     async fn reconnect_lost_peers(&self) {
         for &(handle, _, kind) in &self.captures {
             if kind == CaptureType::Default && !self.conn.peer_connected(handle) {
@@ -868,7 +868,7 @@ mod tests {
             cancellation_token: cancellation_token.clone(),
             enabled_captures: HashSet::new(),
             captures: vec![(7, Position::Left, CaptureType::Default)],
-            conn: LanMouseConnection::new(
+            conn: SyntraConnection::new(
                 Certificate::generate_self_signed(["ignored".to_owned()]).unwrap(),
                 ClientManager::default(),
             ),

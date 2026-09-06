@@ -7,7 +7,7 @@
 //! the control socket described by [`syntra_api::paths`].
 
 use std::future::Future;
-use std::io::{self, Write};
+use std::io;
 use std::process;
 
 use syntra_api::{IpcError, IpcListenerCreationError, paths};
@@ -39,68 +39,32 @@ enum DaemonError {
 }
 
 fn main() {
-    init_logging();
-    if let Err(error) = run() {
+    let log_config = init_logging();
+    if let Err(error) = run(log_config) {
         log::error!("{error}");
         process::exit(1);
     }
 }
 
-/// Installs a logger that never blocks the service event loop.
+/// Installs the shared logger and returns its live configuration.
 ///
-/// Records are handed to a dedicated writer thread and, on Unix, mirrored to
-/// the diagnostics datagram socket so a dashboard can render a live log
-/// without the daemon depending on it. A launcher or SSH pipe that stops
-/// draining stderr must not stall input, network or IPC processing.
-fn init_logging() {
-    use env_logger::{Env, Target};
-
-    let env = Env::default().filter_or(paths::ENV_LOG, "info");
-
+/// Records are mirrored to the diagnostics socket so a dashboard can render a
+/// live log; the daemon neither knows nor cares whether anyone is listening.
+/// The returned handle is what lets a client retune levels at runtime.
+fn init_logging() -> syntra_log::LogConfig {
     #[cfg(unix)]
-    let diagnostics = std::os::unix::net::UnixDatagram::unbound()
-        .and_then(|socket| {
-            socket.set_nonblocking(true)?;
-            Ok(socket)
-        })
-        .ok()
-        .zip(paths::diagnostics_socket().ok());
+    let mirror = paths::diagnostics_socket()
+        .map(syntra_log::Mirror::Datagram)
+        .unwrap_or(syntra_log::Mirror::None);
+    #[cfg(not(unix))]
+    let mirror = syntra_log::Mirror::None;
 
-    let (tx, rx) = std::sync::mpsc::sync_channel::<String>(256);
-    let _ = std::thread::Builder::new()
-        .name("syntra-log-output".into())
-        .spawn(move || {
-            let stderr = io::stderr();
-            let mut output = stderr.lock();
-            while let Ok(line) = rx.recv() {
-                if output.write_all(line.as_bytes()).is_err() {
-                    break;
-                }
-            }
-        });
-
-    let mut logger = env_logger::Builder::from_env(env);
-    // The writer thread owns stderr; env_logger must not lock it as well.
-    logger.target(Target::Pipe(Box::new(io::sink())));
-    logger.format(move |buf, record| {
-        let line = format!(
-            "[{}][{}][{}] {}\n",
-            buf.timestamp_millis(),
-            record.level(),
-            record.target(),
-            record.args()
-        );
-        #[cfg(unix)]
-        if let Some((socket, path)) = &diagnostics {
-            let _ = socket.send_to(line.as_bytes(), path);
-        }
-        let _ = tx.try_send(line);
-        Ok(())
-    });
-    logger.init();
+    let config = syntra_log::LogConfig::from_env(paths::ENV_LOG, "info");
+    syntra_log::install(config.clone(), mirror).expect("no logger is installed yet");
+    config
 }
 
-fn run() -> Result<(), DaemonError> {
+fn run(log_config: syntra_log::LogConfig) -> Result<(), DaemonError> {
     let config = Config::new()?;
     match config.command() {
         Some(Command::TestEmulation(args)) => block_on(emulation_test::run(config, args)),
@@ -108,7 +72,7 @@ fn run() -> Result<(), DaemonError> {
         Some(Command::Cli(args)) => block_on(syntra_cli::run(args)),
         // Running the service is the default: an installed unit invokes the
         // binary with no arguments.
-        Some(Command::Daemon) | None => match block_on(serve(config)) {
+        Some(Command::Daemon) | None => match block_on(serve(config, log_config)) {
             Err(DaemonError::Service(ServiceError::IpcListen(
                 IpcListenerCreationError::AlreadyRunning,
             ))) => {
@@ -136,10 +100,10 @@ where
     Ok(runtime.block_on(LocalSet::new().run_until(future))?)
 }
 
-async fn serve(config: Config) -> Result<(), ServiceError> {
+async fn serve(config: Config, log_config: syntra_log::LogConfig) -> Result<(), ServiceError> {
     let release_bind = config.release_bind();
     let config_path = config.config_path().to_owned();
-    let mut service = Service::new(config).await?;
+    let mut service = Service::new(config, log_config).await?;
     log::info!("using config: {config_path:?}");
     log::info!("press {release_bind:?} to release the pointer");
     service.run().await?;

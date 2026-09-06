@@ -1,6 +1,6 @@
 [package]
 name = "syntra-ui"
-description = "frontend-neutral presentation state and transport boundary for lan-mouse"
+description = "frontend-neutral presentation state and transport boundary for syntra"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,9 +10,9 @@ repository.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [package.metadata.android]
-package = "de.feschber.lanmouse"
+package = "io.syntra.syntra"
 build_targets = ["aarch64-linux-android"]
-apk_name = "lan-mouse"
+apk_name = "syntra"
 resources = "android/app/src/main/res"
 
 [package.metadata.android.sdk]
@@ -21,7 +21,7 @@ min_sdk_version = 26
 target_sdk_version = 35
 
 [package.metadata.android.application]
-label = "Lan Mouse"
+label = "Syntra"
 theme = "@style/AppTheme"
 
 [package.metadata.android.application.activity]

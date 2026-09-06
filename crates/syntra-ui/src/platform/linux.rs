@@ -9,19 +9,19 @@ impl LinuxPlatform {
         Self
     }
 }
-struct TrayHandle(ksni::blocking::Handle<LanMouseTray>);
+struct TrayHandle(ksni::blocking::Handle<SyntraTray>);
 impl PlatformTray for TrayHandle {}
 impl Drop for TrayHandle {
     fn drop(&mut self) {
         self.0.shutdown();
     }
 }
-struct LanMouseTray {
+struct SyntraTray {
     callbacks: PlatformCallbacks,
 }
-impl Tray for LanMouseTray {
+impl Tray for SyntraTray {
     fn id(&self) -> String {
-        "de.feschber.LanMouse".into()
+        "io.syntra.Syntra".into()
     }
     fn title(&self) -> String {
         "Syntra".into()
@@ -67,7 +67,7 @@ impl PlatformActions for LinuxPlatform {
                     .args([
                         "override",
                         "--user",
-                        "--filesystem=xdg-run/lan-mouse:ro",
+                        "--filesystem=xdg-run/syntra:ro",
                         &application_id,
                     ])
                     .status()
@@ -144,7 +144,7 @@ impl PlatformActions for LinuxPlatform {
         &self,
         callbacks: PlatformCallbacks,
     ) -> Result<Box<dyn PlatformTray>, PlatformError> {
-        let handle = LanMouseTray { callbacks }
+        let handle = SyntraTray { callbacks }
             .assume_sni_available(true)
             .spawn()
             .map_err(|e| PlatformError::Tray(e.to_string()))?;

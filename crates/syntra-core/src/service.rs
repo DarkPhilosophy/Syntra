@@ -7,14 +7,14 @@ use crate::{
     client::ClientManager,
     clipboard::{Clipboard, ClipboardContent},
     config::{Config, ConfigClient, EmulationBackend},
-    connect::LanMouseConnection,
+    connect::SyntraConnection,
     crypto,
     discovery::{Discovery, DiscoveryEvent},
     dns::{DnsEvent, DnsResolver},
     emulation::{Emulation, EmulationEvent},
     file_transfer::{FileOffer, OutgoingFile, TransferError},
     history, history_sync,
-    listen::{LanMouseListener, ListenerCreationError},
+    listen::{SyntraListener, ListenerCreationError},
     manual_transfer::{ManualAction, ManualTransfers},
     peer_profile,
     transfer_manager::{TransferAction, TransferFrontendEvent, TransferOwner, TransferState},
@@ -139,6 +139,9 @@ pub struct Service {
     /// remote file offer with plain text.
     native_file_selection: bool,
     gtk_ready: bool,
+    /// Live logging configuration, shared with the installed logger so a
+    /// client can retune verbosity without restarting the daemon.
+    log_config: syntra_log::LogConfig,
 }
 
 #[derive(Debug)]
@@ -166,7 +169,14 @@ struct SourceReadResult {
 }
 
 impl Service {
-    pub async fn new(config: Config) -> Result<Self, ServiceError> {
+    /// Builds the service and every subsystem it owns.
+    ///
+    /// `log_config` must be the handle returned by [`syntra_log::install`] so
+    /// that level changes requested over the API reach the live logger.
+    pub async fn new(
+        config: Config,
+        log_config: syntra_log::LogConfig,
+    ) -> Result<Self, ServiceError> {
         let client_manager = ClientManager::default();
         for client in config.clients() {
             client_manager.add_with_config(client);
@@ -187,8 +197,8 @@ impl Service {
         let authorized_keys = Arc::new(RwLock::new(config.authorized_fingerprints()));
         // listener + connection
         let listener =
-            LanMouseListener::new(config.port(), cert.clone(), authorized_keys.clone()).await?;
-        let conn = LanMouseConnection::new(cert.clone(), client_manager.clone());
+            SyntraListener::new(config.port(), cert.clone(), authorized_keys.clone()).await?;
+        let conn = SyntraConnection::new(cert.clone(), client_manager.clone());
 
         // input capture + emulation
         let capture_backend = config.capture_backend().map(|b| b.into());
@@ -213,8 +223,8 @@ impl Service {
                 )
             })?;
         let adapter_paths = AdapterPaths::new(
-            executable_dir.join("lan-mouse-adapter-gtk-clipboard"),
-            executable_dir.join("lan-mouse-adapter-fuse"),
+            executable_dir.join("syntra-plugin-gtk-clipboard"),
+            executable_dir.join("syntra-plugin-fuse"),
         )?;
         let (adapter_manager, adapter_events) = AdapterProcessManager::start(adapter_paths);
         let (source_result_tx, source_results) = mpsc::channel(SOURCE_RESULT_CAPACITY);
@@ -298,6 +308,7 @@ impl Service {
             manual_transfers: ManualTransfers::new(),
             file_receive_settings,
             transfer_progress: HashMap::new(),
+            log_config,
         };
         match peer_profile::load_cached(
             service.config.config_path(),
@@ -729,6 +740,23 @@ impl Service {
                 }
             }
             FrontendRequest::SaveConfiguration => self.save_config(),
+            FrontendRequest::SetLogSpec(spec) => {
+                let updated = syntra_log::LogConfig::parse(&spec);
+                self.log_config.set_level(updated.level());
+                // Clear first: an override the client dropped must stop
+                // applying, otherwise levels could only ever be added.
+                for subsystem in syntra_log::Subsystem::ALL {
+                    self.log_config.set_subsystem_level(subsystem, None);
+                }
+                for (subsystem, level) in updated.overrides() {
+                    self.log_config.set_subsystem_level(subsystem, Some(level));
+                }
+                log::info!("log configuration set to `{}`", self.log_config.to_spec());
+                self.notify_frontend(FrontendEvent::LogSpec(self.log_config.to_spec()));
+            }
+            FrontendRequest::QueryLogSpec => {
+                self.notify_frontend(FrontendEvent::LogSpec(self.log_config.to_spec()));
+            }
         }
         false
     }
@@ -980,7 +1008,7 @@ impl Service {
             .lines()
             .filter(|line| line.starts_with("file://"))
             .all(|line| {
-                line.contains("lan-mouse/clipboard/") || line.contains("lan%2Dmouse/clipboard/")
+                line.contains("syntra/clipboard/") || line.contains("lan%2Dmouse/clipboard/")
             })
             && value.lines().any(|line| line.starts_with("file://"))
     }

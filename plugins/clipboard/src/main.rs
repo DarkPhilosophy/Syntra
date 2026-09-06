@@ -123,7 +123,7 @@ fn main() {
         return;
     };
     let clipboard = display.clipboard();
-    if let Some(path) = std::env::var_os("LAN_MOUSE_DEBUG_COPY_PATH").map(std::path::PathBuf::from)
+    if let Some(path) = std::env::var_os("SYNTRA_DEBUG_COPY_PATH").map(std::path::PathBuf::from)
     {
         let clipboard = clipboard.clone();
         glib::timeout_add_local_once(std::time::Duration::from_secs(15), move || {

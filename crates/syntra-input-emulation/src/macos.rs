@@ -107,9 +107,8 @@ impl MacOSEmulation {
                 }
             }
             // Always release the key with the correct CGKeyCode, regardless of
-            // whether the repeat loop ran. This matches @feschber's review
-            // request: "still release the key repeat task but with the correct
-            // code."
+            // whether the repeat loop ran: skipping the release here would
+            // leave the key latched on the remote machine.
             //
             // Do NOT call update_modifiers here: `key` is a Mac CGKeyCode but
             // update_modifiers expects a Linux evdev scancode, and the two
@@ -150,7 +149,7 @@ fn request_macos_emulation_permissions() -> Result<(), MacOSEmulationCreationErr
 
 fn request_accessibility_permission() -> bool {
     // Silent check. The GUI owns the one-time user-visible prompt at
-    // startup (see lan_mouse_gtk::macos_privacy).
+    // startup (see syntra_gtk::macos_privacy).
     unsafe { AXIsProcessTrusted() }
 }
 

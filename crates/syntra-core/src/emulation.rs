@@ -1,6 +1,6 @@
 use crate::clipboard::ClipboardContent;
 use crate::config::local_commit;
-use crate::listen::{LanMouseListener, ListenEvent, ListenerCreationError};
+use crate::listen::{SyntraListener, ListenEvent, ListenerCreationError};
 use futures::StreamExt;
 use image::GenericImageView;
 use syntra_input_emulation::{EmulationHandle, InputEmulation, InputEmulationError};
@@ -105,7 +105,7 @@ enum EmulationRequest {
 impl Emulation {
     pub(crate) fn new(
         backend: Option<syntra_input_emulation::Backend>,
-        listener: LanMouseListener,
+        listener: SyntraListener,
     ) -> Self {
         let emulation_proxy = EmulationProxy::new(backend);
         let (request_tx, request_rx) = channel();
@@ -198,7 +198,7 @@ impl Emulation {
 }
 
 struct ListenTask {
-    listener: LanMouseListener,
+    listener: SyntraListener,
     emulation_proxy: EmulationProxy,
     request_rx: Receiver<EmulationRequest>,
     event_tx: Sender<EmulationEvent>,

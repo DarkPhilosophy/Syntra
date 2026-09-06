@@ -4,19 +4,19 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application android:theme="@style/AppTheme" android:label="@string/notification_title">
         <activity
-            android:name=".LanMouseActivity"
+            android:name=".SyntraActivity"
             android:exported="true"
             android:screenOrientation="unspecified">
             <meta-data
                 android:name="android.app.lib_name"
-                android:value="lan_mouse_ui" />
+                android:value="syntra_ui" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
         <service
-            android:name=".LanMouseForegroundService"
+            android:name=".SyntraForegroundService"
             android:exported="false"
             android:stopWithTask="true"
             android:foregroundServiceType="connectedDevice" />

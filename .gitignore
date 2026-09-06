@@ -12,3 +12,11 @@ extfile.conf
 # flatpak files
 .flatpak-builder
 repo
+
+# Android Gradle build output
+crates/syntra-ui/android/app/build/
+crates/syntra-ui/android/.gradle/
+
+# agent scratch directories
+.superpowers/
+docs/superpowers/

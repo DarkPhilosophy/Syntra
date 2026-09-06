@@ -185,7 +185,7 @@ impl Window {
             &surface,
             Some(output),
             Layer::Overlay,
-            "LAN Mouse Sharing".into(),
+            "Syntra Input Sharing".into(),
             qh,
             (),
         );

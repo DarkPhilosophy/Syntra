@@ -2,7 +2,7 @@
 set -eu
 
 homebrew_path=""
-exec_path="target/debug/bundle/osx/Lan Mouse.app/Contents/MacOS/lan-mouse"
+exec_path="target/debug/bundle/osx/Syntra.app/Contents/MacOS/syntra"
 
 usage() {
     cat <<EOF
@@ -13,7 +13,7 @@ OPTIONS:
   -h, --help    Show this help message and exit
   -b            Path to Homebrew installation (default: $homebrew_path)
   exec_path     Path to the main executable in the app bundle
-                (default: target/debug/bundle/osx/Lan Mouse.app/Contents/MacOS/lan-mouse)
+                (default: target/debug/bundle/osx/Syntra.app/Contents/MacOS/syntra)
 
 When macOS apps are linked to dynamic libraries (.dylib files),
 the fully qualified path to the library is embedded in the binary.

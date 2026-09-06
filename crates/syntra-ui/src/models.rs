@@ -15,12 +15,23 @@ pub struct InputHealth {
     pub emulation: bool,
 }
 
+/// Service health surfaced in the diagnostics page.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Diagnostics {
+    /// Most recent error reported by the daemon or the transport.
     pub last_error: Option<String>,
+    /// Port the daemon currently listens on.
     pub port: u16,
+    /// Client the daemon reported as unknown, if any.
     pub missing_client: Option<ClientHandle>,
+    /// Logging configuration in force on the daemon, in `syntra-log` syntax.
+    ///
+    /// Empty until the daemon answers, so the page can distinguish
+    /// "not yet known" from "no overrides".
+    pub log_spec: String,
 }
+
+/// Whether the dashboard currently has a usable daemon connection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TransportLifecycle {
     Unavailable,
@@ -403,6 +414,7 @@ impl AppViewState {
             FrontendEvent::ClipboardTransferStatus(s) => {
                 self.transfers.insert((s.transfer_id, s.file_id), s);
             }
+            FrontendEvent::LogSpec(spec) => self.diagnostics.log_spec = spec,
         }
     }
 }

@@ -249,9 +249,9 @@ pub fn presentation_settings_path() -> Option<PathBuf> {
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
 
     #[cfg(any(target_os = "windows", target_os = "macos"))]
-    return Some(base.join("LanMouse").join("presentation.json"));
+    return Some(base.join("Syntra").join("presentation.json"));
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    Some(base.join("lan-mouse").join("presentation.json"))
+    Some(base.join("syntra").join("presentation.json"))
 }
 
 pub fn identity_images_path() -> Option<PathBuf> {

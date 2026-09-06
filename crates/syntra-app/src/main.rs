@@ -18,8 +18,10 @@ use syntra_api::paths;
 const PROBE_TIMEOUT: Duration = Duration::from_millis(150);
 
 fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().filter_or(paths::ENV_LOG, "info"))
-        .init();
+    // The dashboard writes to stderr only; the daemon owns the diagnostics
+    // mirror that the in-app log viewer reads.
+    let log_config = syntra_log::LogConfig::from_env(paths::ENV_LOG, "info");
+    let _ = syntra_log::install(log_config, syntra_log::Mirror::None);
 
     // D-Bus and tray integrations expect a reactor while Slint owns the main
     // thread, so the runtime must outlive the window.

@@ -910,7 +910,7 @@ mod tests {
                 .unwrap()
                 .as_nanos();
             Self(std::env::temp_dir().join(format!(
-                "lan-mouse-history-{name}-{}-{unique}.sqlite3",
+                "syntra-history-{name}-{}-{unique}.sqlite3",
                 std::process::id()
             )))
         }

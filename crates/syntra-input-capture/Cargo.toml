@@ -1,6 +1,6 @@
 [package]
 name = "syntra-input-capture"
-description = "cross-platform syntra-input-capture library used by lan-mouse"
+description = "cross-platform syntra-input-capture library used by syntra"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

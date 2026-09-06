@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- for packaging: /usr/lib/firewalld/services/syntra.xml -->
+<!-- configure manually: /etc/firewalld/services/syntra.xml -->
+<service>
+  <short>Syntra</short>
+  <description>Syntra mouse, keyboard and clipboard sharing over the local network</description>
+  <port port="4242" protocol="udp"/>
+</service>

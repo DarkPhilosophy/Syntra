@@ -86,7 +86,7 @@ impl PlatformActions for MacPlatform {
         let running = Arc::new(AtomicBool::new(true));
         let worker_running = Arc::clone(&running);
         let worker = std::thread::Builder::new()
-            .name("lan-mouse-accessibility".into())
+            .name("syntra-accessibility".into())
             .spawn(move || {
                 let mut last = accessibility_granted();
                 while worker_running.load(Ordering::Acquire) {
@@ -229,9 +229,9 @@ unsafe fn setup_status_item() -> Result<(), PlatformError> {
     msg_send_bool_usize(ns_app, sel(c"setActivationPolicy:"), 1);
     let delegate = new_delegate()?;
     let menu = msg_send_id(msg_send_id(class(c"NSMenu"), sel(c"alloc")), sel(c"init"));
-    let open = menu_item(c"Open Syntra", c"showLanMouse:");
+    let open = menu_item(c"Open Syntra", c"showSyntra:");
     let separator = msg_send_id(class(c"NSMenuItem"), sel(c"separatorItem"));
-    let quit = menu_item(c"Quit Syntra", c"quitLanMouse:");
+    let quit = menu_item(c"Quit Syntra", c"quitSyntra:");
     for item in [open, separator, quit] {
         msg_send_void_id(menu, sel(c"addItem:"), item);
         msg_send_void_id(item, sel(c"setTarget:"), delegate);
@@ -254,21 +254,21 @@ unsafe fn setup_status_item() -> Result<(), PlatformError> {
 unsafe fn new_delegate() -> Result<Id, PlatformError> {
     static CLASS: OnceLock<usize> = OnceLock::new();
     let class = *CLASS.get_or_init(|| {
-        let name = CString::new("LanMouseSlintStatusItemDelegate").unwrap();
+        let name = CString::new("SyntraSlintStatusItemDelegate").unwrap();
         let cls = objc_allocateClassPair(class(c"NSObject"), name.as_ptr(), 0);
         if cls.is_null() {
             return 0;
         }
         class_addMethod(
             cls,
-            sel(c"showLanMouse:"),
-            show_lan_mouse as *const c_void,
+            sel(c"showSyntra:"),
+            show_syntra as *const c_void,
             c"v@:@".as_ptr(),
         );
         class_addMethod(
             cls,
-            sel(c"quitLanMouse:"),
-            quit_lan_mouse as *const c_void,
+            sel(c"quitSyntra:"),
+            quit_syntra as *const c_void,
             c"v@:@".as_ptr(),
         );
         class_addMethod(
@@ -301,14 +301,14 @@ unsafe fn menu_item(title: &CStr, action: &CStr) -> Id {
     )
 }
 
-extern "C" fn show_lan_mouse(_: Id, _: Sel, _: Id) {
+extern "C" fn show_syntra(_: Id, _: Sel, _: Id) {
     if let Ok(guard) = callbacks().lock() {
         if let Some(cb) = guard.as_ref() {
             cb.show();
         }
     }
 }
-extern "C" fn quit_lan_mouse(_: Id, _: Sel, _: Id) {
+extern "C" fn quit_syntra(_: Id, _: Sel, _: Id) {
     if let Ok(guard) = callbacks().lock() {
         if let Some(cb) = guard.as_ref() {
             cb.quit();
@@ -316,7 +316,7 @@ extern "C" fn quit_lan_mouse(_: Id, _: Sel, _: Id) {
     }
 }
 extern "C" fn handle_reopen(_: Id, _: Sel, _: Id, _: Id) {
-    show_lan_mouse(
+    show_syntra(
         std::ptr::null_mut(),
         std::ptr::null_mut(),
         std::ptr::null_mut(),

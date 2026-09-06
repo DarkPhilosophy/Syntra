@@ -614,7 +614,7 @@ mod linux {
             .map(PathBuf::from)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "XDG_RUNTIME_DIR is unset"))?;
         let path = runtime
-            .join("lan-mouse")
+            .join("syntra")
             .join("clipboard")
             .join(transfer_id);
         fs::create_dir_all(&path)?;
@@ -726,7 +726,7 @@ mod linux {
             &mount,
             &[
                 MountOption::RO,
-                MountOption::FSName("lan-mouse-clipboard".into()),
+                MountOption::FSName("syntra-clipboard".into()),
                 MountOption::NoAtime,
                 MountOption::DefaultPermissions,
             ],
@@ -751,7 +751,7 @@ mod linux {
         let reader_cancelled = Arc::clone(&cancelled);
         let (done_tx, done_rx) = mpsc::channel();
         thread::Builder::new()
-            .name("lan-mouse-fuse-router".into())
+            .name("syntra-fuse-router".into())
             .spawn(move || {
                 for message in read_messages(reader) {
                     match message {

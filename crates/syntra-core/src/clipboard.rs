@@ -141,7 +141,7 @@ fn spawn_read_worker(
     state: Arc<Mutex<ClipboardState>>,
 ) {
     std::thread::Builder::new()
-        .name("lan-mouse-clipboard-read".into())
+        .name("syntra-clipboard-read".into())
         .spawn(move || {
             while requests.recv().is_ok() {
                 let result = read_clipboard().and_then(|content| {
@@ -165,7 +165,7 @@ fn spawn_read_worker(
 
 fn spawn_write_worker(requests: Receiver<QueuedRemote>, state: Arc<Mutex<ClipboardState>>) {
     std::thread::Builder::new()
-        .name("lan-mouse-clipboard-write".into())
+        .name("syntra-clipboard-write".into())
         .spawn(move || {
             while let Ok(QueuedRemote { baseline, content }) = requests.recv() {
                 let queued = QueuedRemote { baseline, content };

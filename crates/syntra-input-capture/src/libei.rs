@@ -48,7 +48,7 @@ use syntra_input_event::Event;
 use crate::CaptureEvent;
 
 use super::{
-    Capture as LanMouseInputCapture, Position,
+    Capture as SyntraInputCapture, Position,
     error::{CaptureError, LibeiCaptureCreationError},
 };
 
@@ -191,7 +191,7 @@ fn restore_token_path() -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
         .expect("HOME or XDG_CACHE_HOME must be set");
-    cache_dir.join("lan-mouse/input-capture.token")
+    cache_dir.join("syntra/input-capture.token")
 }
 
 fn read_restore_token() -> Option<String> {
@@ -274,7 +274,7 @@ async fn connect_to_eis(
     // create ei context
     let context = ei::Context::new(stream)?;
     let (conn, event_stream) = context
-        .handshake_tokio("de.feschber.LanMouse", ContextType::Receiver)
+        .handshake_tokio("io.syntra.Syntra", ContextType::Receiver)
         .await?;
 
     Ok((context, conn, event_stream))
@@ -773,7 +773,7 @@ async fn handle_ei_event(
 }
 
 #[async_trait(?Send)]
-impl LanMouseInputCapture for LibeiInputCapture {
+impl SyntraInputCapture for LibeiInputCapture {
     async fn create(&mut self, pos: Position) -> Result<(), CaptureError> {
         let _ = self
             .notify_capture

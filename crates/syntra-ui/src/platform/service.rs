@@ -1,7 +1,7 @@
 use std::fmt;
 use std::path::Path;
 
-const UNIT_NAME: &str = "lan-mouse.service";
+const UNIT_NAME: &str = "syntra.service";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ServiceStatus {
@@ -427,8 +427,8 @@ mod imp {
         #[test]
         fn escapes_systemd_exec_start_metacharacters() {
             let escaped =
-                escape_exec_start_path(Path::new("/opt/Lan Mouse/100%/say\"hi\\now")).unwrap();
-            assert_eq!(escaped, "\"/opt/Lan Mouse/100%%/say\\\"hi\\\\now\"");
+                escape_exec_start_path(Path::new("/opt/Syntra/100%/say\"hi\\now")).unwrap();
+            assert_eq!(escaped, "\"/opt/Syntra/100%%/say\\\"hi\\\\now\"");
         }
 
         #[test]

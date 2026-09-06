@@ -79,7 +79,7 @@ fn get_token_file_path() -> PathBuf {
             PathBuf::from(home).join(".cache")
         });
 
-    cache_dir.join("lan-mouse").join("remote-desktop.token")
+    cache_dir.join("syntra").join("remote-desktop.token")
 }
 
 fn decode_file_uri(uri: &str) -> Option<PathBuf> {
@@ -576,7 +576,7 @@ impl LibeiEmulation {
                                 // Some portal implementations omit
                                 // session_is_owner for our own SetSelection
                                 // notification. Never feed our retained offer
-                                // back into Lan Mouse as a new local copy:
+                                // back into Syntra as a new local copy:
                                 // that echo cancels and replaces the remote
                                 // offer before Files can enable Paste.
                                 if offered.iter().any(|(offered_mime, offered_data)| {
@@ -613,7 +613,7 @@ impl LibeiEmulation {
         stream.set_nonblocking(true)?;
         let context = ei::Context::new(stream)?;
         let (conn, events) = context
-            .handshake_tokio("de.feschber.LanMouse", ContextType::Sender)
+            .handshake_tokio("io.syntra.Syntra", ContextType::Sender)
             .await?;
         let devices = Devices::default();
         let libei_error = Arc::new(AtomicBool::default());

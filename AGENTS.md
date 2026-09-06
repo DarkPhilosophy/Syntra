@@ -1,8 +1,8 @@
-# Lan Mouse Agent Instructions
+# Syntra Agent Instructions
 
 ## Overview
 
-Lan Mouse is an open-source Software KVM sharing mouse/keyboard input across local networks. The desktop presentation uses Slint by default. GTK remains only in the separately packaged Linux clipboard helper.
+Syntra is an open-source Software KVM sharing mouse/keyboard input across local networks. The desktop presentation uses Slint by default. GTK remains only in the separately packaged Linux clipboard helper.
 
 ## Core principles
 
@@ -19,19 +19,19 @@ Lan Mouse is an open-source Software KVM sharing mouse/keyboard input across loc
 
 ## Architecture
 
-**Frontend pipeline:** service state → `lan-mouse-ipc` → frontend-neutral view models → Slint presentation.
+**Frontend pipeline:** service state → `syntra-ipc` → frontend-neutral view models → Slint presentation.
 
 The Slint UI is responsible for rendering snapshots and sending typed intents; it does not own
 networking, capture, emulation, clipboard, transfer, or authorization state machines.
 
-**Input pipeline:** `input-capture` → `lan-mouse-ipc` → `input-emulation`
+**Input pipeline:** `input-capture` → `syntra-ipc` → `input-emulation`
 
 - **input-capture:** Reads OS events into a `Stream<CaptureEvent>`. Backends tried in priority order (libei → layer-shell → X11 → fallback). Tracks `pressed_keys` to avoid stuck modifiers. `position_map` queues events when multiple clients share a screen edge.
 - **input-emulation:** Replays events via the `Emulation` trait (`consume`, `create`, `destroy`, `terminate`). Maintains `pressed_keys` and releases them on disconnect.
-- **lan-mouse-ipc / lan-mouse-proto:** Protocol glue and serialization. Events are UDP; connection requests are TCP on the same port. Version bumps required when serialization changes.
+- **syntra-ipc / syntra-proto:** Protocol glue and serialization. Events are UDP; connection requests are TCP on the same port. Version bumps required when serialization changes.
 - **input-event:** Shared scancode enums and abstract event types—extend here, don't duplicate translations.
 
-The Linux `lan-mouse-adapter-gtk-clipboard` executable is a runtime helper, not a GUI. Keep it
+The Linux `syntra-plugin-gtk-clipboard` executable is a runtime helper, not a GUI. Keep it
 packaged on Linux until a verified replacement exists; the FUSE helper remains separate as well.
 
 ## Feature & cfg discipline
@@ -49,11 +49,11 @@ packaged on Linux until a verified replacement exists; the FUSE helper remains s
 ## Commands
 
 ```sh
-cargo build -p lan-mouse --no-default-features --features slint-ui,layer_shell_capture,x11_capture,libei_capture,wlroots_emulation,libei_emulation,rdp_emulation,x11_emulation  # Slint Linux build during cutover
+cargo build -p syntra --no-default-features --features slint-ui,layer_shell_capture,x11_capture,libei_capture,wlroots_emulation,libei_emulation,rdp_emulation,x11_emulation  # Slint Linux build during cutover
 cargo build -p <crate>                                     # single crate
-cargo test -p lan-mouse-ui                                      # Slint UI tests
-cargo fmt && cargo clippy -p lan-mouse --all-targets --no-default-features --features slint-ui,layer_shell_capture,x11_capture,libei_capture,wlroots_emulation,libei_emulation,rdp_emulation,x11_emulation  # lint
-RUST_LOG=lan_mouse=debug cargo run -p lan-mouse --no-default-features --features slint-ui,layer_shell_capture,x11_capture,libei_capture,wlroots_emulation,libei_emulation,rdp_emulation,x11_emulation  # Slint runtime
+cargo test -p syntra-ui                                      # Slint UI tests
+cargo fmt && cargo clippy -p syntra --all-targets --no-default-features --features slint-ui,layer_shell_capture,x11_capture,libei_capture,wlroots_emulation,libei_emulation,rdp_emulation,x11_emulation  # lint
+RUST_LOG=syntra=debug cargo run -p syntra --no-default-features --features slint-ui,layer_shell_capture,x11_capture,libei_capture,wlroots_emulation,libei_emulation,rdp_emulation,x11_emulation  # Slint runtime
 ```
 
 Run from repo root—no `cd` in scripts.

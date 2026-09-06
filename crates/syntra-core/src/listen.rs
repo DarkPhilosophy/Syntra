@@ -48,7 +48,7 @@ pub(crate) enum ListenEvent {
     },
 }
 
-pub(crate) struct LanMouseListener {
+pub(crate) struct SyntraListener {
     listen_rx: Receiver<ListenEvent>,
     listen_tx: Sender<ListenEvent>,
     listen_task: JoinHandle<()>,
@@ -63,7 +63,7 @@ type VerifyPeerCertificateFn = Arc<
         + Sync,
 >;
 
-impl LanMouseListener {
+impl SyntraListener {
     pub(crate) async fn new(
         port: u16,
         cert: Certificate,
@@ -238,7 +238,7 @@ impl LanMouseListener {
     }
 }
 
-impl Stream for LanMouseListener {
+impl Stream for SyntraListener {
     type Item = ListenEvent;
 
     fn poll_next(
@@ -268,7 +268,7 @@ async fn read_loop(
                 // datagram, so a parse error here can't desync a
                 // stream; the next call gets a fresh, framed
                 // message. This makes the protocol forward-
-                // compatible: a peer running a newer Lan Mouse
+                // compatible: a peer running a newer Syntra
                 // version can introduce additional event types
                 // and old peers will simply ignore them rather
                 // than dropping the connection.
