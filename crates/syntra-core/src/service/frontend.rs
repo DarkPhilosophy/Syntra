@@ -5,6 +5,28 @@
 //! an outcome: it applies the change, then reports what happened.
 
 use super::*;
+/// Infers how this process was started.
+///
+/// systemd exports `INVOCATION_ID` to the units it starts, and its
+/// `NOTIFY_SOCKET` is present for notify-type units. Absent those, a parent
+/// named after the dashboard means the dashboard spawned it. Everything else
+/// is a hand-started process.
+fn daemon_origin() -> syntra_api::DaemonOrigin {
+    use syntra_api::DaemonOrigin;
+    if std::env::var_os("INVOCATION_ID").is_some() || std::env::var_os("NOTIFY_SOCKET").is_some() {
+        return DaemonOrigin::Service;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let parent = std::os::unix::process::parent_id();
+        if let Ok(command) = std::fs::read_to_string(format!("/proc/{parent}/comm")) {
+            if command.trim() == "syntra" {
+                return DaemonOrigin::Dashboard;
+            }
+        }
+    }
+    DaemonOrigin::Manual
+}
 
 impl Service {
     pub(super) async fn handle_frontend_request(
@@ -295,6 +317,7 @@ impl Service {
             FrontendRequest::QueryLogSpec => {
                 self.notify_frontend(FrontendEvent::LogSpec(self.log_config.to_spec()));
             }
+            FrontendRequest::QueryDaemonInfo => self.publish_daemon_info(),
             FrontendRequest::QueryPlugins => self.publish_plugins(),
             FrontendRequest::SetPluginEnabled { id, enabled } => {
                 if self.plugins.set_enabled(&id, enabled) {
@@ -326,6 +349,33 @@ impl Service {
     pub(super) fn publish_plugins(&mut self) {
         let snapshot = self.plugins.snapshot();
         self.notify_frontend(FrontendEvent::Plugins(snapshot));
+    }
+
+    /// Reports which daemon is answering and how it was started.
+    ///
+    /// A user seeing only "running" cannot tell whether the daemon they
+    /// installed is the one responding, or whether a dashboard quietly
+    /// started its own.
+    pub(super) fn publish_daemon_info(&mut self) {
+        let info = syntra_api::DaemonInfo {
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            executable: std::env::current_exe()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|error| format!("unknown ({error})")),
+            pid: std::process::id(),
+            socket: syntra_api::paths::daemon_socket()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|error| error.to_string()),
+            config_dir: syntra_api::paths::config_dir()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|error| error.to_string()),
+            uptime_seconds: self.started_at.elapsed().as_secs(),
+            origin: daemon_origin(),
+            capture_backend: self.capture_backend.clone(),
+            emulation_backend: self.emulation_backend.clone(),
+            port: self.port,
+        };
+        self.notify_frontend(FrontendEvent::DaemonInfo(info));
     }
 
     pub(super) fn save_config(&mut self) {

@@ -59,8 +59,10 @@ impl Service {
                 self.emulation_status = Status::Disabled;
                 self.notify_frontend(FrontendEvent::EmulationStatus(self.emulation_status));
             }
-            EmulationEvent::EmulationEnabled => {
+            EmulationEvent::EmulationEnabled(backend) => {
                 self.emulation_status = Status::Enabled;
+                self.emulation_backend = Some(backend);
+                self.publish_daemon_info();
                 self.notify_frontend(FrontendEvent::EmulationStatus(self.emulation_status));
             }
             EmulationEvent::ReleaseNotify => self.capture.release(),
@@ -284,8 +286,10 @@ impl Service {
                 self.notify_frontend(FrontendEvent::CaptureStatus(self.capture_status));
                 self.emulation.set_capture_ready(false);
             }
-            ICaptureEvent::CaptureEnabled => {
+            ICaptureEvent::CaptureEnabled(backend) => {
                 self.capture_status = Status::Enabled;
+                self.capture_backend = Some(backend);
+                self.publish_daemon_info();
                 self.notify_frontend(FrontendEvent::CaptureStatus(self.capture_status));
                 self.emulation.set_capture_ready(true);
             }

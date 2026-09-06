@@ -82,6 +82,8 @@ impl Display for Backend {
 
 pub struct InputEmulation {
     emulation: Box<dyn Emulation>,
+    /// Which backend `emulation` is, so callers can report it.
+    selected: Backend,
     handles: HashSet<EmulationHandle>,
     pressed_keys: HashMap<EmulationHandle, HashSet<u32>>,
     clipboard_rx: Option<mpsc::Receiver<(String, Vec<u8>)>>,
@@ -107,6 +109,7 @@ impl InputEmulation {
         let clipboard_rx = emulation.take_clipboard_receiver();
         Ok(Self {
             emulation,
+            selected: backend,
             handles: HashSet::new(),
             pressed_keys: HashMap::new(),
             clipboard_rx,
@@ -148,6 +151,14 @@ impl InputEmulation {
         }
 
         Err(EmulationCreationError::NoAvailableBackend)
+    }
+
+    /// Backend that was actually selected.
+    ///
+    /// Which backend won the priority order decides what the user must grant
+    /// permission for, so an interface has to be able to show it.
+    pub fn backend(&self) -> Backend {
+        self.selected
     }
 
     /// Whether the backend transport is still able to consume input.

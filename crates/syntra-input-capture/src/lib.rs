@@ -135,6 +135,8 @@ impl Display for Backend {
 pub struct InputCapture {
     /// capture backend
     capture: Box<dyn Capture>,
+    /// Which backend `capture` is, so callers can report it.
+    selected: Backend,
     /// buttons pressed by active capture
     pressed_buttons: HashSet<u32>,
     /// keys pressed by active capture
@@ -209,9 +211,10 @@ impl InputCapture {
     }
     /// creates a new [`InputCapture`]
     pub async fn new(backend: Option<Backend>) -> Result<Self, CaptureCreationError> {
-        let capture = create(backend).await?;
+        let (capture, selected) = create(backend).await?;
         Ok(Self {
             capture,
+            selected,
             id_map: Default::default(),
             pending: Default::default(),
             position_map: Default::default(),
@@ -219,6 +222,14 @@ impl InputCapture {
             pressed_buttons: HashSet::new(),
         })
     }
+    /// Backend that was actually selected.
+    ///
+    /// Which backend won the priority order determines what the user must
+    /// grant permission for, so an interface has to be able to show it.
+    pub fn backend(&self) -> Backend {
+        self.selected
+    }
+
     /// check whether the given keys are pressed
     pub fn keys_pressed(&self, keys: &[scancode::Linux]) -> bool {
         keys.iter().all(|k| self.pressed_keys.contains(k))
@@ -339,18 +350,23 @@ async fn create_backend(
     }
 }
 
+/// Creates a backend, returning which one was selected.
+///
+/// The caller needs the identity, not just the object: which backend won the
+/// priority order decides what the user must grant permission for.
 async fn create(
     backend: Option<Backend>,
 ) -> Result<
-    Box<dyn Capture<Item = Result<(Position, CaptureEvent), CaptureError>>>,
+    (
+        Box<dyn Capture<Item = Result<(Position, CaptureEvent), CaptureError>>>,
+        Backend,
+    ),
     CaptureCreationError,
 > {
     if let Some(backend) = backend {
-        let b = create_backend(backend).await;
-        if b.is_ok() {
-            log::info!("using capture backend: {backend}");
-        }
-        return b;
+        let created = create_backend(backend).await?;
+        log::info!("using capture backend: {backend}");
+        return Ok((created, backend));
     }
 
     for backend in [
@@ -366,9 +382,9 @@ async fn create(
         Backend::MacOs,
     ] {
         match create_backend(backend).await {
-            Ok(b) => {
+            Ok(created) => {
                 log::info!("using capture backend: {backend}");
-                return Ok(b);
+                return Ok((created, backend));
             }
             Err(e) if e.cancelled_by_user() => return Err(e),
             Err(e) => log::warn!("{backend} input capture backend unavailable: {e}"),

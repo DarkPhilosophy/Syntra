@@ -146,6 +146,12 @@ pub struct Service {
     /// The daemon is the master here: clients render this and request
     /// changes, they never manage a plugin process themselves.
     plugins: crate::plugins::PluginRegistry,
+    /// When the daemon started, reported to clients as uptime.
+    started_at: std::time::Instant,
+    /// Capture backend actually selected, so a client can show which one.
+    capture_backend: Option<String>,
+    /// Emulation backend actually selected.
+    emulation_backend: Option<String>,
 }
 
 #[derive(Debug)]
@@ -347,6 +353,9 @@ impl Service {
             file_receive_settings,
             transfer_progress: HashMap::new(),
             log_config,
+            started_at: std::time::Instant::now(),
+            capture_backend: None,
+            emulation_backend: None,
             plugins: crate::plugins::PluginRegistry::discover(
                 &std::env::current_exe().unwrap_or_default(),
                 syntra_api::paths::config_dir()

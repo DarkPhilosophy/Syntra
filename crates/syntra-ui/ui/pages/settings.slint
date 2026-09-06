@@ -24,7 +24,8 @@ export component SettingsPage inherits Rectangle {
     in property <bool> service-autostart;
     in property <bool> backend-connected;
     in property <string> service-error;
-    in property <string> service-binary-path;
+    in property <string> service-source-path;
+    in property <string> service-install-destination;
     in property <string> port;
     in property <string> status-message;
     in property <string> update-repository;
@@ -129,7 +130,8 @@ export component SettingsPage inherits Rectangle {
             ServiceControls {
                 supported: root.service-supported; busy: root.service-busy; known: root.service-known;
                 installed: root.service-installed; running: root.service-running; autostart: root.service-autostart;
-                connected: root.backend-connected; error: root.service-error; binary-path: root.service-binary-path;
+                connected: root.backend-connected; error: root.service-error;
+                source-path: root.service-source-path; destination-path: root.service-install-destination;
                 desktop-entry-supported: root.desktop-entry-supported;
                 desktop-entry-installed: root.desktop-entry-installed;
                 action(value) => { root.service-action(value); }

@@ -496,6 +496,48 @@ pub const MAX_DEVICE_PROFILE_NAME_BYTES: usize = 128;
 /// pushing an arbitrarily large image through the handshake.
 pub const MAX_PEER_AVATAR_DIMENSION: u32 = 128;
 
+/// Identity of the daemon a client is attached to.
+///
+/// "Running" on its own tells a user nothing: they cannot see which daemon it
+/// is, where it came from, or whether the one they installed is the one
+/// answering. Everything needed to answer those questions is reported here.
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
+pub struct DaemonInfo {
+    /// Version of the daemon, which may differ from the client's.
+    pub version: String,
+    /// Absolute path of the running daemon executable.
+    pub executable: String,
+    /// Process identifier, so a user can find it in a task manager.
+    pub pid: u32,
+    /// Control socket this daemon is listening on.
+    pub socket: String,
+    /// Configuration directory in use.
+    pub config_dir: String,
+    /// Seconds since the daemon started.
+    pub uptime_seconds: u64,
+    /// How the daemon was started, as far as it can tell.
+    pub origin: DaemonOrigin,
+    /// Capture backend actually selected, or `None` when capture is
+    /// unavailable.
+    pub capture_backend: Option<String>,
+    /// Emulation backend actually selected, or `None` when unavailable.
+    pub emulation_backend: Option<String>,
+    /// Port the daemon listens on for peers.
+    pub port: u16,
+}
+
+/// How the daemon process came to exist.
+#[derive(Debug, Eq, PartialEq, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DaemonOrigin {
+    /// Started by an init system as an installed service.
+    Service,
+    /// Started as a child of a dashboard, and stops when that dashboard does.
+    Dashboard,
+    /// Started by hand, typically from a terminal.
+    Manual,
+}
+
 /// Health of a supervised plugin process.
 #[derive(Debug, Eq, PartialEq, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -761,6 +803,8 @@ pub enum FrontendEvent {
     LogSpec(String),
     /// Authoritative list of plugins and their current state.
     Plugins(Vec<PluginStatus>),
+    /// Identity of the daemon the client is attached to.
+    DaemonInfo(DaemonInfo),
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
@@ -878,6 +922,8 @@ pub enum FrontendRequest {
     SetLogSpec(String),
     /// Ask for the logging configuration currently in force.
     QueryLogSpec,
+    /// Ask which daemon is answering, and how it was started.
+    QueryDaemonInfo,
     /// Ask for every plugin the daemon knows about.
     QueryPlugins,
     /// Switch a plugin on or off by [`PluginStatus::id`].

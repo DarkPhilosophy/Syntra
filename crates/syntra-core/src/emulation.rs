@@ -53,8 +53,11 @@ pub(crate) enum EmulationEvent {
     PortChanged(Result<u16, ListenerCreationError>),
     /// emulation was disabled
     EmulationDisabled,
-    /// emulation was enabled
-    EmulationEnabled,
+    /// Emulation became available, carrying the backend that was selected.
+    ///
+    /// The name reaches the interface: which backend won decides what the
+    /// user must grant permission for, and "running" alone explains nothing.
+    EmulationEnabled(String),
     /// capture should be released
     ReleaseNotify,
     /// peer sent us a Hello with its build commit hash. Used to
@@ -529,7 +532,7 @@ impl EmulationProxy {
 
     async fn event(&mut self) -> EmulationEvent {
         let event = self.event_rx.recv().await.expect("channel closed");
-        if let EmulationEvent::EmulationEnabled = event {
+        if let EmulationEvent::EmulationEnabled(_) = event {
             self.emulation_active.replace(true);
         }
         if let EmulationEvent::EmulationDisabled = event {
@@ -636,7 +639,11 @@ impl EmulationTask {
         // The portal being approved is not enough: only advertise readiness
         // after the backend has completed initialization and can consume input.
         self.emulation_ready.set(true);
-        let _emulation_guard = ReadyGuard::new(self.emulation_ready.clone(), self.event_tx.clone());
+        let _emulation_guard = ReadyGuard::new(
+            self.emulation_ready.clone(),
+            self.event_tx.clone(),
+            emulation.backend().to_string(),
+        );
 
         // create active handles
         if let Err(e) = self.create_clients(&mut emulation).await {
@@ -876,9 +883,9 @@ struct ReadyGuard {
 }
 
 impl ReadyGuard {
-    fn new(ready: Rc<Cell<bool>>, event_tx: Sender<EmulationEvent>) -> Self {
+    fn new(ready: Rc<Cell<bool>>, event_tx: Sender<EmulationEvent>, backend: String) -> Self {
         event_tx
-            .send(EmulationEvent::EmulationEnabled)
+            .send(EmulationEvent::EmulationEnabled(backend))
             .expect("channel closed");
         Self { ready, event_tx }
     }

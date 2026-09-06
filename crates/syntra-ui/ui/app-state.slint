@@ -122,6 +122,26 @@ export global AppState {
     in-out property <[PluginEntry]> plugins;
     callback set-plugin-enabled(string, bool);
     callback restart-plugin(string);
+
+    // Identity of the daemon this dashboard is attached to. "Running" alone
+    // tells a user nothing, so the interface reports which daemon answered
+    // and how it came to exist.
+    in-out property <bool> daemon-known;
+    in-out property <string> daemon-version;
+    in-out property <string> daemon-executable;
+    in-out property <string> daemon-pid;
+    in-out property <string> daemon-socket;
+    in-out property <string> daemon-config-dir;
+    in-out property <string> daemon-uptime;
+    in-out property <string> daemon-origin;
+    in-out property <string> daemon-capture-backend;
+    in-out property <string> daemon-emulation-backend;
+    in-out property <int> daemon-port;
+
+    // Where installation copies the binaries from and to, shown so the
+    // confirmation names both rather than one bare path.
+    in-out property <string> service-source-path;
+    in-out property <string> service-install-destination;
     callback refresh-plugins();
 
     // Launcher entry, distinct from the background service.

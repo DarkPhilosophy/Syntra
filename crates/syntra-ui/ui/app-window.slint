@@ -153,6 +153,17 @@ export component AppWindow inherits Window {
                 }
                 if selected-page == "overview": OverviewPage {
                     connected: AppState.connected;
+                    daemon-known: AppState.daemon-known;
+                    daemon-version: AppState.daemon-version;
+                    daemon-executable: AppState.daemon-executable;
+                    daemon-pid: AppState.daemon-pid;
+                    daemon-socket: AppState.daemon-socket;
+                    daemon-config-dir: AppState.daemon-config-dir;
+                    daemon-uptime: AppState.daemon-uptime;
+                    daemon-origin: AppState.daemon-origin;
+                    daemon-capture-backend: AppState.daemon-capture-backend;
+                    daemon-emulation-backend: AppState.daemon-emulation-backend;
+                    daemon-port: AppState.daemon-port;
                     input-sharing: AppState.input-sharing;
                     input-sharing-known: AppState.input-sharing-known;
                     capture-enabled: AppState.capture-enabled;
@@ -271,6 +282,8 @@ export component AppWindow inherits Window {
                     file-receive-dirty <=> AppState.file-receive-dirty;
                     choose-download-directory => { AppState.choose-download-directory(); }
                     save-file-receive-settings => { AppState.save-file-receive-settings(); }
+                    service-source-path: AppState.service-source-path;
+                    service-install-destination: AppState.service-install-destination;
                     service-supported: AppState.service-supported;
                     service-busy: AppState.service-busy;
                     service-known: AppState.service-known;
@@ -279,7 +292,6 @@ export component AppWindow inherits Window {
                     service-autostart: AppState.service-autostart;
                     backend-connected: AppState.connected;
                     service-error: AppState.service-error;
-                    service-binary-path: AppState.service-binary-path;
                     desktop-entry-supported: AppState.desktop-entry-supported;
                     desktop-entry-installed: AppState.desktop-entry-installed;
                     service-action(value) => { AppState.service-action(value); }

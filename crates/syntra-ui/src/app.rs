@@ -464,6 +464,12 @@ where
         &state,
         FrontendRequest::QueryPlugins,
     );
+    send_request(
+        &request_tx,
+        &app.as_weak(),
+        &state,
+        FrontendRequest::QueryDaemonInfo,
+    );
     app.invoke_local_profile_changed();
     let _launch_ready_timer = schedule_launch_ready(&app);
     // Without a tray there is no way back to a hidden window, so a
@@ -1299,7 +1305,8 @@ fn project_history(app: &AppWindow, state: &AppViewState) {
     global.set_history_records(ModelRc::new(VecModel::from(
         records
             .iter()
-            .map(|record| {
+            .enumerate()
+            .map(|(index, record)| {
                 let key = (
                     record.event_id.origin_device_id.clone(),
                     record.event_id.origin_sequence,
@@ -1325,6 +1332,15 @@ fn project_history(app: &AppWindow, state: &AppViewState) {
                     sources.entry(key.0.clone()).or_insert_with(|| {
                         device_presentation(app, state, &key.0, record.origin_label.as_deref())
                     });
+                let group_header = if index == 0 {
+                    if record.pinned { "Pinned" } else { "Recent" }
+                } else if record.pinned && !records[index - 1].pinned {
+                    "Pinned"
+                } else if !record.pinned && records[index - 1].pinned {
+                    "Recent"
+                } else {
+                    ""
+                };
                 HistoryItem {
                     origin: key.0.into(),
                     sequence: key.1.to_string().into(),
@@ -1342,10 +1358,48 @@ fn project_history(app: &AppWindow, state: &AppViewState) {
                     has_thumbnail: thumbnail.is_some(),
                     thumbnail: thumbnail.unwrap_or_default(),
                     pinned: record.pinned,
+                    group_header: if group_header == "Pinned" {
+                        app.global::<Translations>().invoke_translate(
+                            "history-pinned-section".into(),
+                            app.global::<Translations>().get_revision(),
+                        )
+                    } else if group_header == "Recent" {
+                        app.global::<Translations>().invoke_translate(
+                            "history-recent-section".into(),
+                            app.global::<Translations>().get_revision(),
+                        )
+                    } else {
+                        "".into()
+                    },
                 }
             })
             .collect::<Vec<_>>(),
     )));
+}
+fn format_uptime(seconds: u64, known: bool) -> String {
+    if !known {
+        return String::new();
+    }
+    let minutes = seconds / 60;
+    if minutes < 60 {
+        return format!("{minutes} min");
+    }
+    let hours = minutes / 60;
+    let remaining_minutes = minutes % 60;
+    if hours < 24 {
+        return if remaining_minutes == 0 {
+            format!("{hours} h")
+        } else {
+            format!("{hours} h {remaining_minutes} min")
+        };
+    }
+    let days = hours / 24;
+    let remaining_hours = hours % 24;
+    if remaining_hours == 0 {
+        format!("{days} d")
+    } else {
+        format!("{days} d {remaining_hours} h")
+    }
 }
 
 fn project_app_state(app: &AppWindow, state: &AppViewState, settings: &PresentationSettings) {
@@ -1356,6 +1410,52 @@ fn project_app_state(app: &AppWindow, state: &AppViewState, settings: &Presentat
     global.set_capture_enabled(state.input_health.capture);
     global.set_input_sharing(state.input_sharing.unwrap_or(false));
     global.set_input_sharing_known(state.status.connected && state.input_sharing.is_some());
+    let daemon = state.daemon.as_ref();
+    global.set_daemon_known(daemon.is_some());
+    global.set_daemon_version(daemon.map(|d| d.version.clone()).unwrap_or_default().into());
+    global.set_daemon_origin(
+        match daemon.map(|d| d.origin) {
+            Some(syntra_api::DaemonOrigin::Service) => "service",
+            Some(syntra_api::DaemonOrigin::Dashboard) => "dashboard",
+            Some(syntra_api::DaemonOrigin::Manual) => "manual",
+            None => "",
+        }
+        .into(),
+    );
+    global.set_daemon_pid(daemon.map(|d| d.pid.to_string()).unwrap_or_default().into());
+    global.set_daemon_uptime(
+        format_uptime(
+            daemon.map(|d| d.uptime_seconds).unwrap_or(0),
+            daemon.is_some(),
+        )
+        .into(),
+    );
+    global.set_daemon_executable(
+        daemon
+            .map(|d| d.executable.clone())
+            .unwrap_or_default()
+            .into(),
+    );
+    global.set_daemon_socket(daemon.map(|d| d.socket.clone()).unwrap_or_default().into());
+    global.set_daemon_config_dir(
+        daemon
+            .map(|d| d.config_dir.clone())
+            .unwrap_or_default()
+            .into(),
+    );
+    global.set_daemon_port(i32::from(daemon.map(|d| d.port).unwrap_or(0)));
+    global.set_daemon_capture_backend(
+        daemon
+            .and_then(|d| d.capture_backend.clone())
+            .unwrap_or_default()
+            .into(),
+    );
+    global.set_daemon_emulation_backend(
+        daemon
+            .and_then(|d| d.emulation_backend.clone())
+            .unwrap_or_default()
+            .into(),
+    );
     global.set_emulation_enabled(state.input_health.emulation);
     global.set_capture_supported(state.capabilities.capture);
     global.set_emulation_supported(state.capabilities.emulation);
@@ -1970,6 +2070,16 @@ fn bind_app_state_callbacks(
             .unwrap_or_else(|error| error.to_string())
             .into(),
     );
+    let install_destination = crate::platform::install::status()
+        .ok()
+        .and_then(|paths| paths.daemon.parent().map(|path| path.display().to_string()))
+        .unwrap_or_else(|| "Unavailable".to_string());
+    let source_directory = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|path| path.display().to_string()))
+        .unwrap_or_else(|| "Unavailable".to_string());
+    global.set_service_source_path(source_directory.into());
+    global.set_service_install_destination(install_destination.into());
     {
         let weak = weak.clone();
         let service_requests = tx.clone();

@@ -33,6 +33,16 @@ pub const DAEMON_EXECUTABLE: &str = if cfg!(windows) {
     "syntra-daemon"
 };
 
+/// Bundled plugin executables, installed alongside the main binaries.
+///
+/// A plugin left behind is a capability that silently disappears after
+/// installation, which is harder to diagnose than one that was never there.
+pub const PLUGIN_EXECUTABLES: [&str; 2] = if cfg!(windows) {
+    ["syntra-plugin-clipboard.exe", "syntra-plugin-fuse.exe"]
+} else {
+    ["syntra-plugin-clipboard", "syntra-plugin-fuse"]
+};
+
 /// Why installing the binaries failed.
 #[derive(Debug, Error)]
 pub enum InstallError {
@@ -106,10 +116,15 @@ pub fn running_from_install_directory() -> bool {
     }
 }
 
-/// Copies both binaries into [`install_directory`] and returns their paths.
+/// Copies the binaries into [`install_directory`] and returns the main pair.
+///
+/// Plugins and their manifests are copied too, because a plugin left behind
+/// is a capability that silently disappears after installation and is far
+/// harder to diagnose than one that was never present. A missing plugin is
+/// not fatal, though: the daemon degrades to running without it.
 ///
 /// Existing copies are replaced, so this doubles as an upgrade. Nothing is
-/// removed if a later step fails; a partially installed pair is still
+/// rolled back if a later step fails; a partial installation is still
 /// runnable, and reinstalling repairs it.
 pub fn install_binaries() -> Result<InstalledBinaries, InstallError> {
     let source = running_directory()?;
@@ -130,23 +145,53 @@ pub fn install_binaries() -> Result<InstalledBinaries, InstallError> {
         if !from.is_file() {
             return Err(InstallError::MissingBinary(name.to_owned()));
         }
-        let to = target.join(name);
-        // Remove first: overwriting a file that is currently executing fails
-        // with ETXTBSY on some systems, whereas unlinking always works and
-        // leaves running processes with the old inode.
-        let _ = fs::remove_file(&to);
-        fs::copy(&from, &to).map_err(|error| InstallError::Copy {
-            path: to.display().to_string(),
-            source: error,
-        })?;
-        set_executable(&to)?;
-        installed.push(to);
+        installed.push(copy_into(&from, &target)?);
+    }
+
+    for name in PLUGIN_EXECUTABLES {
+        let from = source.join(name);
+        if !from.is_file() {
+            log::info!("{name} was not built; installing without that plugin");
+            continue;
+        }
+        copy_into(&from, &target)?;
+        // The daemon discovers plugins by manifest, so the executable alone
+        // would install a plugin that never appears.
+        let manifest = source.join(format!("{name}.json"));
+        if manifest.is_file() {
+            copy_into(&manifest, &target)?;
+        } else {
+            log::warn!(
+                "{} has no manifest beside it; it will not be discovered",
+                name
+            );
+        }
     }
 
     Ok(InstalledBinaries {
         application: installed[0].clone(),
         daemon: installed[1].clone(),
     })
+}
+
+/// Copies one file into `target`, replacing any existing copy.
+fn copy_into(from: &Path, target: &Path) -> Result<PathBuf, InstallError> {
+    let name = from
+        .file_name()
+        .ok_or_else(|| InstallError::MissingBinary(from.display().to_string()))?;
+    let to = target.join(name);
+    // Remove first: overwriting a file that is currently executing fails with
+    // ETXTBSY on some systems, whereas unlinking always works and leaves
+    // running processes holding the old inode.
+    let _ = fs::remove_file(&to);
+    fs::copy(from, &to).map_err(|error| InstallError::Copy {
+        path: to.display().to_string(),
+        source: error,
+    })?;
+    if from.extension().is_none_or(|extension| extension != "json") {
+        set_executable(&to)?;
+    }
+    Ok(to)
 }
 
 /// Removes the installed copies, leaving the running binaries alone.

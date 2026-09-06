@@ -13,9 +13,11 @@ export component ServiceControls inherits Rectangle {
     in property <bool> autostart;
     in property <bool> connected;
     in property <string> error;
-    in property <string> binary-path;
+    in property <string> source-path;
+    in property <string> destination-path;
     callback action(string);
     private property <string> pending: "";
+    private property <bool> copies-binaries: root.pending == "install" || root.pending == "install-desktop-entry";
     background: Theme.surface;
     border-radius: Theme.corner-radius;
     height: contents.preferred-height;
@@ -58,7 +60,7 @@ export component ServiceControls inherits Rectangle {
                 AppButton {
                     text: Translations.tr(root.desktop-entry-installed ? "desktop-entry-remove" : "desktop-entry-install");
                     enabled: !root.busy;
-                    clicked => { root.action(root.desktop-entry-installed ? "remove-desktop-entry" : "install-desktop-entry"); }
+                    clicked => { root.pending = root.desktop-entry-installed ? "remove-desktop-entry" : "install-desktop-entry"; }
                 }
             }
         }
@@ -66,8 +68,10 @@ export component ServiceControls inherits Rectangle {
         if root.error != "" : Text { text: root.error; color: Theme.danger; wrap: word-wrap; }
         if root.pending != "" : VerticalLayout {
             spacing: Theme.small-spacing;
-            Text { text: Translations.tr("service-confirm") + " " + Translations.tr("service-" + root.pending); color: Theme.warning; font-size: Theme.body-size; wrap: word-wrap; }
-            Text { text: root.pending == "install" ? root.binary-path : (root.pending == "start" && root.connected && !root.running ? Translations.tr("service-promote") : Translations.tr("service-impact")); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
+            Text { text: Translations.tr("service-confirm") + " " + Translations.tr(root.pending == "install-desktop-entry" ? "desktop-entry-install" : root.pending == "remove-desktop-entry" ? "desktop-entry-remove" : "service-" + root.pending); color: Theme.warning; font-size: Theme.body-size; wrap: word-wrap; }
+            if root.copies-binaries : Text { text: Translations.tr("service-confirm-source") + ": " + root.source-path; color: Theme.text; font-size: Theme.caption-size; wrap: word-wrap; }
+            if root.copies-binaries : Text { text: Translations.tr("service-confirm-destination") + ": " + root.destination-path; color: Theme.text; font-size: Theme.caption-size; wrap: word-wrap; }
+            Text { text: Translations.tr((root.pending == "install-desktop-entry" || root.pending == "remove-desktop-entry") ? "desktop-entry-confirm-" + root.pending : "service-confirm-" + root.pending); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
             HorizontalLayout {
                 spacing: Theme.small-spacing;
                 AppButton { text: Translations.tr("action-cancel"); clicked => { root.pending = ""; } }

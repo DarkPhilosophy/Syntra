@@ -113,6 +113,8 @@ pub struct AppViewState {
     /// Held verbatim: the daemon is authoritative, so the interface renders
     /// this rather than deriving plugin state of its own.
     pub plugins: Vec<syntra_api::PluginStatus>,
+    /// Identity and runtime details reported by the daemon itself.
+    pub daemon: Option<syntra_api::DaemonInfo>,
     pub clients: BTreeMap<ClientHandle, ClientView>,
     pub client_fingerprints: BTreeMap<ClientHandle, String>,
     pub peer_profiles: BTreeMap<String, Arc<syntra_api::DeviceProfile>>,
@@ -181,6 +183,9 @@ impl AppViewState {
         self.status.connected = matches!(self.status.transport, TransportLifecycle::Ready);
         self.status.reconnecting =
             matches!(self.status.transport, TransportLifecycle::Reconnecting);
+        if matches!(e, TransportLifecycleEvent::DaemonUnavailable) {
+            self.daemon = None;
+        }
         if !self.status.connected {
             self.history_query_pending = false;
             self.history_clear_pending = false;
@@ -217,6 +222,7 @@ impl AppViewState {
                     .map(|(h, c, s)| (h, ClientView::from_wire(h, c, s)))
                     .collect();
             }
+            FrontendEvent::DaemonInfo(info) => self.daemon = Some(info),
             FrontendEvent::DiscoveredPeers(peers) => self.discovered_peers = peers,
             FrontendEvent::ClientFingerprint {
                 handle,

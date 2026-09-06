@@ -16,6 +16,7 @@ export struct HistoryItem {
     thumbnail: image,
     has-thumbnail: bool,
     pinned: bool,
+    group-header: string,
 }
 
 export component HistoryPage inherits Rectangle {
@@ -27,6 +28,26 @@ export component HistoryPage inherits Rectangle {
     in property <string> error-message;
     in property <string> operation-status;
     private property <bool> confirm-clear: false;
+    private property <bool> loading-more: false;
+    private property <bool> load-more-failed: false;
+    function maybe-load-more() {
+        if root.connected && root.has-more && !root.busy && !root.loading-more && !root.load-more-failed
+            && history-list.viewport-height > history-list.visible-height
+            && history-list.viewport-height - history-list.visible-height + history-list.viewport-y
+                < history-list.visible-height * 2 {
+            root.loading-more = true;
+            root.load-more();
+        }
+    }
+    changed busy => {
+        if root.loading-more && !root.busy {
+            root.loading-more = false;
+            root.load-more-failed = root.error-message != "";
+            root.maybe-load-more();
+        }
+    }
+    changed has-more => { root.maybe-load-more(); }
+    changed records => { root.maybe-load-more(); }
     callback search(string);
     callback refresh();
     callback load-more();
@@ -46,17 +67,31 @@ export component HistoryPage inherits Rectangle {
         if root.error-message != "": Text { text: root.error-message; color: Theme.danger; font-size: Theme.caption-size; wrap: word-wrap; vertical-stretch: 0; }
         if root.operation-status != "": Text { text: root.operation-status; color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; vertical-stretch: 0; }
         if !root.connected: Text { text: Translations.tr("history-disconnected"); color: Theme.warning; font-size: Theme.caption-size; wrap: word-wrap; vertical-stretch: 0; }
-        if root.busy: Text { text: Translations.tr("history-loading"); color: Theme.muted-text; font-size: Theme.caption-size; vertical-stretch: 0; }
+        if root.busy && !root.loading-more: Text { text: Translations.tr("history-loading"); color: Theme.muted-text; font-size: Theme.caption-size; vertical-stretch: 0; }
         if root.records.length == 0 && !root.busy: Text { text: Translations.tr("history-empty"); color: Theme.muted-text; font-size: Theme.body-size; wrap: word-wrap; vertical-stretch: 0; }
-        ListView {
+        history-list := ListView {
             // Virtualised: only the rows on screen are built. A plain layout
             // instantiated every record, including its decoded thumbnail,
             // which is what made opening History stutter.
             vertical-stretch: 1;
-            for record in root.records: Rectangle {
-                height: record-content.preferred-height + Theme.small-spacing;
-                background: Theme.surface;
-                border-radius: Theme.small-radius;
+            changed viewport-y => { root.maybe-load-more(); }
+            changed viewport-height => { root.maybe-load-more(); }
+            changed visible-height => { root.maybe-load-more(); }
+            for record in root.records: VerticalLayout {
+                spacing: Theme.small-spacing;
+                if record.group-header != "": Text {
+                    text: record.group-header;
+                    color: record.pinned ? Theme.accent : Theme.muted-text;
+                    font-size: Theme.body-size;
+                    font-weight: 600;
+                    vertical-stretch: 0;
+                }
+                Rectangle {
+                    height: record-content.preferred-height + Theme.small-spacing;
+                    background: Theme.surface;
+                    border-radius: Theme.small-radius;
+                    border-width: record.pinned ? 1px : 0px;
+                    border-color: Theme.accent;
                     record-content := VerticalLayout {
                         padding: Theme.spacing;
                         spacing: Theme.small-spacing;
@@ -64,6 +99,13 @@ export component HistoryPage inherits Rectangle {
                             spacing: Theme.small-spacing;
                             Avatar { source: record.source-image; has-image: record.has-source-image; size: Theme.history-avatar-size; }
                             Text { text: record.source-label; color: Theme.text; font-size: Theme.body-size; font-weight: 600; horizontal-stretch: 1; vertical-alignment: center; overflow: elide; }
+                            if record.pinned: Text {
+                                text: Translations.tr("history-pinned-marker");
+                                color: Theme.accent;
+                                font-size: Theme.caption-size;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
                             AppButton { text: Translations.tr(record.pinned ? "history-unpin" : "history-pin"); enabled: root.connected && !root.busy; clicked => { root.pin(record.origin, record.sequence, !record.pinned); } }
                         }
                         Text { text: record.kind-label + " · " + record.timestamp; color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
@@ -71,8 +113,18 @@ export component HistoryPage inherits Rectangle {
                         if record.preview-text != "": Text { text: record.preview-text; color: Theme.text; font-size: Theme.body-size; wrap: word-wrap; overflow: elide; max-height: Theme.body-size * 5; }
                     }
                 }
+            }
         }
-        if root.has-more: AppButton { text: Translations.tr("history-more"); enabled: root.connected && !root.busy; clicked => { root.load-more(); } }
+        if root.loading-more: Text { text: Translations.tr("history-loading-more"); color: Theme.muted-text; font-size: Theme.caption-size; horizontal-alignment: center; vertical-stretch: 0; }
+        if root.load-more-failed: AppButton {
+            text: Translations.tr("history-retry-more");
+            enabled: root.connected && !root.busy;
+            clicked => {
+                root.load-more-failed = false;
+                root.loading-more = true;
+                root.load-more();
+            }
+        }
         if root.confirm-clear: VerticalLayout {
             spacing: Theme.small-spacing;
             Text { text: Translations.tr("history-clear-confirm"); color: Theme.warning; font-size: Theme.caption-size; wrap: word-wrap; }

@@ -53,8 +53,8 @@ pub(crate) enum ICaptureEvent {
     CaptureBegin(CaptureHandle),
     /// capture disabled
     CaptureDisabled,
-    /// capture disabled
-    CaptureEnabled,
+    /// Capture became available, carrying the backend that was selected.
+    CaptureEnabled(String),
     /// A (new) client was entered.
     /// In contrast to [`ICaptureEvent::CaptureBegin`] this
     /// event is only triggered when the capture was
@@ -401,7 +401,7 @@ impl CaptureTask {
 
         let _capture_guard = DropGuard::new(
             self.event_tx.clone(),
-            ICaptureEvent::CaptureEnabled,
+            ICaptureEvent::CaptureEnabled(capture.backend().to_string()),
             ICaptureEvent::CaptureDisabled,
         );
 

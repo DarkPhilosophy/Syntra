@@ -375,6 +375,10 @@ impl AndroidHostController {
             | FrontendRequest::RestartPlugin { .. } => {
                 events.push(FrontendEvent::Plugins(Vec::new()));
             }
+            // Android hosts the service in-process, so there is no separate
+            // daemon to describe; reporting nothing is truthful, whereas
+            // inventing an identity would be misleading.
+            FrontendRequest::QueryDaemonInfo => {}
         }
         events
     }

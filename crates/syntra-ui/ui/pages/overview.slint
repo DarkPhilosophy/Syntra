@@ -27,11 +27,22 @@ export component OverviewPage inherits Rectangle {
     in property <bool> input-sharing-known;
     in property <bool> capture-enabled;
     in property <bool> emulation-enabled;
+    in property <bool> daemon-known;
+    in property <string> daemon-version;
+    in property <string> daemon-origin;
+    in property <string> daemon-pid;
+    in property <string> daemon-uptime;
+    in property <string> daemon-executable;
+    in property <string> daemon-socket;
+    in property <string> daemon-config-dir;
+    in property <int> daemon-port;
+    in property <string> daemon-capture-backend;
+    in property <string> daemon-emulation-backend;
+    callback toggle-image(bool);
+    callback toggle-files(bool);
     callback set-input-sharing(bool);
     callback activate(string, bool);
     callback toggle-text(bool);
-    callback toggle-image(bool);
-    callback toggle-files(bool);
     background: Theme.background;
 
     ScrollView {
@@ -46,23 +57,30 @@ export component OverviewPage inherits Rectangle {
                 vertical-stretch: 0;
                 background: Theme.surface;
                 border-radius: Theme.corner-radius;
-                service-summary := HorizontalLayout {
-                    padding: Theme.spacing; spacing: Theme.spacing;
-                    Text { text: Translations.tr("overview-engine"); color: Theme.text; font-size: Theme.body-size; font-weight: 600; horizontal-stretch: 1; vertical-alignment: center; }
-                    VerticalLayout {
-                        alignment: center;
-                        horizontal-stretch: 0;
-                    StatusPill {
-                        label: !root.connected ? Translations.tr("label-offline") : !root.input-sharing-known ? Translations.tr("status-pending") : !root.input-sharing ? Translations.tr("input-sharing-stopped") : root.capture-enabled && root.emulation-enabled ? Translations.tr("input-sharing-running") : Translations.tr("input-permissions-required");
-                        tone: root.connected && root.input-sharing && root.capture-enabled && root.emulation-enabled ? Theme.success : root.input-sharing ? Theme.warning : Theme.muted-text;
+                service-summary := VerticalLayout {
+                    padding: Theme.spacing; spacing: Theme.small-spacing;
+                    Text { text: Translations.tr("overview-service-title"); color: Theme.text; font-size: Theme.body-size; font-weight: 600; }
+                    if !root.daemon-known : Text { text: Translations.tr("overview-service-disconnected"); color: Theme.warning; font-size: Theme.caption-size; wrap: word-wrap; }
+                    if root.daemon-known : Text { text: Translations.tr("overview-service-name") + " " + root.daemon-version; color: Theme.text; font-size: Theme.body-size; }
+                    if root.daemon-known : Text { text: root.daemon-origin == "service" ? Translations.tr("overview-service-origin-service") : root.daemon-origin == "dashboard" ? Translations.tr("overview-service-origin-dashboard") : Translations.tr("overview-service-origin-manual"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
+                    if root.daemon-known : VerticalLayout {
+                        spacing: Theme.small-spacing;
+                        Text { text: Translations.tr("overview-service-process") + ": " + root.daemon-pid + "  " + Translations.tr("overview-service-uptime") + ": " + root.daemon-uptime; color: Theme.text; font-size: Theme.caption-size; }
+                        Text { text: Translations.tr("overview-service-executable") + ": " + root.daemon-executable; color: Theme.muted-text; font-size: Theme.caption-size; overflow: elide; }
+                        Text { text: Translations.tr("overview-service-socket") + ": " + root.daemon-socket; color: Theme.muted-text; font-size: Theme.caption-size; overflow: elide; }
+                        Text { text: Translations.tr("overview-service-config") + ": " + root.daemon-config-dir; color: Theme.muted-text; font-size: Theme.caption-size; overflow: elide; }
+                        Text { text: Translations.tr("overview-service-port") + ": " + root.daemon-port; color: Theme.text; font-size: Theme.caption-size; }
+                        Text { text: Translations.tr("overview-service-capture") + ": " + (root.daemon-capture-backend != "" ? root.daemon-capture-backend : Translations.tr("overview-service-unavailable")); color: Theme.text; font-size: Theme.caption-size; overflow: elide; }
+                        Text { text: Translations.tr("overview-service-emulation") + ": " + (root.daemon-emulation-backend != "" ? root.daemon-emulation-backend : Translations.tr("overview-service-unavailable")); color: Theme.text; font-size: Theme.caption-size; overflow: elide; }
                     }
-                    }
-                    AppButton {
-                        text: Translations.tr(root.input-sharing ? "action-stop" : "action-start");
-                        enabled: root.input-sharing-known;
-                        primary: !root.input-sharing;
-                        danger: root.input-sharing;
-                        clicked => { root.set-input-sharing(!root.input-sharing); }
+                    HorizontalLayout {
+                        AppButton {
+                            text: Translations.tr(root.input-sharing ? "action-stop" : "action-start");
+                            enabled: root.input-sharing-known;
+                            primary: !root.input-sharing;
+                            danger: root.input-sharing;
+                            clicked => { root.set-input-sharing(!root.input-sharing); }
+                        }
                     }
                 }
             }
@@ -119,7 +137,7 @@ export component OverviewPage inherits Rectangle {
                         }
                         Rectangle { horizontal-stretch: 1; }
                     }
-                }
+            }
             }
             }
             Text { text: Translations.tr("navigation-clipboard"); color: Theme.text; font-size: Theme.body-size; font-weight: 600; vertical-stretch: 0; }
