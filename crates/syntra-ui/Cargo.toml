@@ -62,6 +62,10 @@ x11rb = "0.13"
 dirs = "6"
 slint = { version = "1.17.1", default-features = false, features = ["std", "backend-default", "renderer-femtovg", "renderer-software", "accessibility", "compat-1-2", "unstable-winit-030"] }
 rfd = "0.15"
+
+[target.'cfg(unix)'.dependencies]
+# SIGINT to an owned daemon, so it releases pressed keys before exiting.
+libc.workspace = true
 interprocess = { version = "2.4.4", default-features = false }
 fs2 = "0.4.3"
 

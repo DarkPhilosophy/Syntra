@@ -319,3 +319,11 @@ overview-service-port = Listening port
 overview-service-capture = Capture backend
 overview-service-emulation = Emulation backend
 overview-service-unavailable = Unavailable
+
+# Installation location and service start
+service-install-location = Installation location
+service-install-location-hint = Both binaries and the plugins are copied here. The default is your per-user executable directory; SYNTRA_INSTALL_DIR overrides it.
+service-install-location-choose = Change location…
+service-install-location-reset = Use default
+overview-service-start = Start service
+overview-service-starting = Starting…

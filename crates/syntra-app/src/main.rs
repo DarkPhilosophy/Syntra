@@ -45,9 +45,11 @@ fn main() {
         }
     };
 
-    let daemon = ensure_daemon();
+    ensure_daemon();
     let result = syntra_ui::app::run_with_startup(startup);
-    drop(daemon);
+    // Stops only a daemon this process started; an installed service or one
+    // the user launched keeps running.
+    syntra_ui::platform::daemon::shutdown();
     if let Err(error) = result {
         log::error!("{error}");
         // The writer thread owns the output; flush before the process dies.
@@ -84,68 +86,28 @@ fn parse_startup() -> Result<syntra_ui::app::StartupMode, String> {
     Ok(startup)
 }
 
-/// Makes a best effort to have a daemon available, without ever blocking startup.
+/// Makes a best effort to have a daemon available, without blocking start-up.
 ///
-/// Returns a guard that stops the daemon on exit only when this process
-/// started it. An installed service, or a daemon started by the user, keeps
-/// running after the dashboard closes.
-fn ensure_daemon() -> Option<OwnedDaemon> {
+/// A daemon this process starts is owned by
+/// [`syntra_ui::platform::daemon`], which stops it when the dashboard exits
+/// and can start another later. That matters because the service may be
+/// uninstalled while the window is open, and the user must still be able to
+/// start one from the interface.
+fn ensure_daemon() {
     if syntra_api::connect_with_timeout(PROBE_TIMEOUT).is_ok() {
         log::info!("attached to a running Syntra daemon");
-        return None;
+        return;
     }
-    match syntra_ui::platform::service::query() {
-        Ok(status) if status.installed => {
+    if let Ok(status) = syntra_ui::platform::service::query() {
+        if status.installed {
             if let Err(error) = syntra_ui::platform::service::start() {
                 log::warn!("could not start the installed Syntra service: {error}");
             }
-            None
-        }
-        _ => match spawn_daemon() {
-            Ok(child) => Some(OwnedDaemon(child)),
-            Err(error) => {
-                // A missing daemon is not fatal: the dashboard still opens and
-                // reports the disconnected state to the user.
-                log::warn!("could not start a Syntra daemon: {error}");
-                None
-            }
-        },
-    }
-}
-
-fn spawn_daemon() -> std::io::Result<std::process::Child> {
-    let executable = std::env::current_exe()?
-        .parent()
-        .map(|dir| dir.join(DAEMON_EXECUTABLE))
-        .filter(|path| path.exists())
-        .unwrap_or_else(|| DAEMON_EXECUTABLE.into());
-    log::info!("starting daemon: {}", executable.display());
-    process::Command::new(executable).spawn()
-}
-
-#[cfg(windows)]
-const DAEMON_EXECUTABLE: &str = "syntra-daemon.exe";
-#[cfg(not(windows))]
-const DAEMON_EXECUTABLE: &str = "syntra-daemon";
-
-/// Stops a daemon that this process started, leaving foreign ones untouched.
-struct OwnedDaemon(std::process::Child);
-
-impl Drop for OwnedDaemon {
-    fn drop(&mut self) {
-        if matches!(self.0.try_wait(), Ok(Some(_))) {
             return;
         }
-        #[cfg(unix)]
-        {
-            // SIGINT lets the daemon release pressed keys and grabbed devices;
-            // a hard kill would leave modifiers stuck on the remote machine.
-            // SAFETY: the pid belongs to a child this process owns and has not
-            // reaped, so it cannot have been recycled.
-            unsafe { libc::kill(self.0.id() as libc::pid_t, libc::SIGINT) };
-        }
-        #[cfg(not(unix))]
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+    }
+    // Not fatal: the dashboard opens regardless and offers to start one.
+    if let Err(error) = syntra_ui::platform::daemon::start() {
+        log::warn!("could not start a Syntra daemon: {error}");
     }
 }

@@ -9,6 +9,11 @@ pub mod install;
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
 pub mod desktop_entry;
 
+// Starting and stopping a daemon from the dashboard, at any time rather than
+// only at launch.
+#[cfg(not(target_os = "android"))]
+pub mod daemon;
+
 use std::fmt;
 use std::sync::Arc;
 

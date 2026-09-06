@@ -470,6 +470,20 @@ where
         &state,
         FrontendRequest::QueryDaemonInfo,
     );
+    // Uptime is a snapshot, so without a periodic re-query it stays frozen at
+    // whatever it was when the client attached.
+    let _daemon_info_timer = {
+        let requests = request_tx.clone();
+        let timer = Timer::default();
+        timer.start(
+            TimerMode::Repeated,
+            std::time::Duration::from_secs(20),
+            move || {
+                let _ = requests.send(FrontendRequest::QueryDaemonInfo);
+            },
+        );
+        timer
+    };
     app.invoke_local_profile_changed();
     let _launch_ready_timer = schedule_launch_ready(&app);
     // Without a tray there is no way back to a hidden window, so a
@@ -2080,6 +2094,59 @@ fn bind_app_state_callbacks(
         .unwrap_or_else(|| "Unavailable".to_string());
     global.set_service_source_path(source_directory.into());
     global.set_service_install_destination(install_destination.into());
+    global.set_service_destination_customised(
+        crate::platform::install::configured_directory().is_some(),
+    );
+    {
+        // Choosing a directory must not block the event loop, so the dialog
+        // runs on the Slint executor and the result is applied on return.
+        let weak = weak.clone();
+        global.on_choose_install_destination(move || {
+            let weak = weak.clone();
+            let _ = slint::spawn_local(async move {
+                let Some(directory) = rfd::AsyncFileDialog::new().pick_folder().await else {
+                    return;
+                };
+                let chosen = directory.path().to_path_buf();
+                let outcome = crate::platform::install::set_configured_directory(Some(&chosen));
+                if let Some(app) = weak.upgrade() {
+                    let global = app.global::<AppState>();
+                    match outcome {
+                        Ok(()) => {
+                            global.set_service_install_destination(
+                                chosen.display().to_string().into(),
+                            );
+                            global.set_service_destination_customised(true);
+                            global.set_service_error(Default::default());
+                        }
+                        Err(error) => global.set_service_error(error.to_string().into()),
+                    }
+                }
+            });
+        });
+    }
+    {
+        let weak = weak.clone();
+        global.on_reset_install_destination(move || {
+            let outcome = crate::platform::install::set_configured_directory(None);
+            if let Some(app) = weak.upgrade() {
+                let global = app.global::<AppState>();
+                match outcome {
+                    Ok(()) => {
+                        global.set_service_install_destination(
+                            crate::platform::install::default_directory()
+                                .map(|path| path.display().to_string())
+                                .unwrap_or_default()
+                                .into(),
+                        );
+                        global.set_service_destination_customised(false);
+                        global.set_service_error(Default::default());
+                    }
+                    Err(error) => global.set_service_error(error.to_string().into()),
+                }
+            }
+        });
+    }
     {
         let weak = weak.clone();
         let service_requests = tx.clone();
@@ -2638,6 +2705,30 @@ fn bind_app_state_callbacks(
         let requests = tx.clone();
         global.on_refresh_plugins(move || {
             let _ = requests.send(FrontendRequest::QueryPlugins);
+        });
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        // Starting blocks until the daemon answers, so it runs off the UI
+        // thread; the window must stay responsive while a service starts.
+        let weak = app.as_weak();
+        global.on_start_daemon(move || {
+            let weak = weak.clone();
+            if let Some(app) = weak.upgrade() {
+                let global = app.global::<AppState>();
+                global.set_daemon_starting(true);
+                global.set_daemon_start_error(Default::default());
+            }
+            std::thread::spawn(move || {
+                let outcome = crate::platform::daemon::start();
+                let _ = weak.upgrade_in_event_loop(move |app| {
+                    let global = app.global::<AppState>();
+                    global.set_daemon_starting(false);
+                    if let Err(error) = outcome {
+                        global.set_daemon_start_error(error.to_string().into());
+                    }
+                });
+            });
         });
     }
     bind_platform_action(

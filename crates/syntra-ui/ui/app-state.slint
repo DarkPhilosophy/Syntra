@@ -137,11 +137,20 @@ export global AppState {
     in-out property <string> daemon-capture-backend;
     in-out property <string> daemon-emulation-backend;
     in-out property <int> daemon-port;
+    /// True while a start attempt is in flight, so the control cannot be
+    /// pressed twice and produce two daemons.
+    in-out property <bool> daemon-starting;
+    in-out property <string> daemon-start-error;
+    callback start-daemon();
 
     // Where installation copies the binaries from and to, shown so the
     // confirmation names both rather than one bare path.
     in-out property <string> service-source-path;
     in-out property <string> service-install-destination;
+    /// True when the destination came from the user rather than the default.
+    in-out property <bool> service-destination-customised;
+    callback choose-install-destination();
+    callback reset-install-destination();
     callback refresh-plugins();
 
     // Launcher entry, distinct from the background service.

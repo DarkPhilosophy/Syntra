@@ -43,6 +43,9 @@ export component OverviewPage inherits Rectangle {
     callback set-input-sharing(bool);
     callback activate(string, bool);
     callback toggle-text(bool);
+    in property <bool> daemon-starting;
+    in property <string> daemon-start-error;
+    callback start-service();
     background: Theme.background;
 
     ScrollView {
@@ -61,6 +64,21 @@ export component OverviewPage inherits Rectangle {
                     padding: Theme.spacing; spacing: Theme.small-spacing;
                     Text { text: Translations.tr("overview-service-title"); color: Theme.text; font-size: Theme.body-size; font-weight: 600; }
                     if !root.daemon-known : Text { text: Translations.tr("overview-service-disconnected"); color: Theme.warning; font-size: Theme.caption-size; wrap: word-wrap; }
+                    // Without this the dashboard is a dead end once the
+                    // service is stopped or uninstalled: nothing in the
+                    // window could start one again.
+                    if !root.daemon-known : HorizontalLayout {
+                        spacing: Theme.small-spacing;
+                        AppButton {
+                            text: Translations.tr("overview-service-start");
+                            primary: true;
+                            enabled: !root.daemon-starting;
+                            clicked => { root.start-service(); }
+                        }
+                        if root.daemon-starting : Text { text: Translations.tr("overview-service-starting"); color: Theme.muted-text; font-size: Theme.caption-size; vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    if !root.daemon-known && root.daemon-start-error != "" : Text { text: root.daemon-start-error; color: Theme.danger; font-size: Theme.caption-size; wrap: word-wrap; }
                     if root.daemon-known : Text { text: Translations.tr("overview-service-name") + " " + root.daemon-version; color: Theme.text; font-size: Theme.body-size; }
                     if root.daemon-known : Text { text: root.daemon-origin == "service" ? Translations.tr("overview-service-origin-service") : root.daemon-origin == "dashboard" ? Translations.tr("overview-service-origin-dashboard") : Translations.tr("overview-service-origin-manual"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
                     if root.daemon-known : VerticalLayout {

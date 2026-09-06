@@ -15,6 +15,9 @@ export component ServiceControls inherits Rectangle {
     in property <string> error;
     in property <string> source-path;
     in property <string> destination-path;
+    in property <bool> destination-customised;
+    callback choose-destination();
+    callback reset-destination();
     callback action(string);
     private property <string> pending: "";
     private property <bool> copies-binaries: root.pending == "install" || root.pending == "install-desktop-entry";
@@ -27,6 +30,19 @@ export component ServiceControls inherits Rectangle {
         spacing: Theme.small-spacing;
         Text { text: Translations.tr("service-title"); color: Theme.text; font-size: Theme.body-size; font-weight: 600; }
         Text { text: Translations.tr("service-description"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
+        // The destination is a decision, not a fixed fact: show it and let it
+        // be changed, rather than installing somewhere the user never chose.
+        VerticalLayout {
+            spacing: Theme.small-spacing;
+            Text { text: Translations.tr("service-install-location") + ": " + root.destination-path; color: Theme.text; font-size: Theme.caption-size; wrap: word-wrap; }
+            Text { text: Translations.tr("service-install-location-hint"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
+            HorizontalLayout {
+                spacing: Theme.small-spacing;
+                AppButton { text: Translations.tr("service-install-location-choose"); enabled: !root.busy; clicked => { root.choose-destination(); } }
+                if root.destination-customised : AppButton { text: Translations.tr("service-install-location-reset"); enabled: !root.busy; clicked => { root.reset-destination(); } }
+                Rectangle { horizontal-stretch: 1; }
+            }
+        }
         Text { text: Translations.tr("service-interface") + ": " + (root.connected ? Translations.tr("status-connected") : Translations.tr("label-offline")); color: Theme.text; font-size: Theme.body-size; }
         if root.known : VerticalLayout {
             spacing: Theme.small-spacing;

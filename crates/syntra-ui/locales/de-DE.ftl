@@ -319,3 +319,11 @@ overview-service-port = Empfangsport
 overview-service-capture = Erfassungs-Backend
 overview-service-emulation = Emulations-Backend
 overview-service-unavailable = Nicht verfügbar
+
+# Installation location and service start
+service-install-location = Installationsort
+service-install-location-hint = Beide Programme und die Plugins werden hierher kopiert. Standard ist Ihr benutzereigenes Programmverzeichnis; SYNTRA_INSTALL_DIR hat Vorrang.
+service-install-location-choose = Ort ändern…
+service-install-location-reset = Standard verwenden
+overview-service-start = Dienst starten
+overview-service-starting = Wird gestartet…

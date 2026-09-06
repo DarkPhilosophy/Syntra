@@ -65,17 +65,84 @@ pub enum InstallError {
     },
 }
 
-/// Where binaries are installed, honouring [`ENV_INSTALL_DIR`].
+/// Where binaries are installed.
 ///
-/// Defaults to the per-user executable directory (`~/.local/bin` on Linux),
-/// which is on `PATH` for most desktop sessions and needs no privileges.
+/// Resolution order: a directory the user chose in the interface, then
+/// [`ENV_INSTALL_DIR`], then the per-user executable directory
+/// (`~/.local/bin` on Linux), which is on `PATH` for most desktop sessions
+/// and needs no privileges.
 pub fn install_directory() -> Result<PathBuf, InstallError> {
+    if let Some(chosen) = configured_directory() {
+        return Ok(chosen);
+    }
     if let Some(value) = std::env::var_os(ENV_INSTALL_DIR) {
         return Ok(PathBuf::from(value));
     }
+    default_directory()
+}
+
+/// The platform default, ignoring any override.
+///
+/// Shown in the interface so a user can see what they are departing from.
+pub fn default_directory() -> Result<PathBuf, InstallError> {
     dirs::executable_dir()
         .or_else(|| dirs::home_dir().map(|home| home.join(".local").join("bin")))
         .ok_or(InstallError::DirectoryNotFound)
+}
+
+/// File recording a directory chosen in the interface.
+///
+/// Kept beside the configuration rather than in the config file: the daemon
+/// owns that file, and where a client installs binaries is not the daemon's
+/// business.
+fn preference_path() -> Option<PathBuf> {
+    syntra_api::paths::config_dir()
+        .ok()
+        .map(|dir| dir.join("install-directory"))
+}
+
+/// Reads the directory chosen in the interface, if any.
+pub fn configured_directory() -> Option<PathBuf> {
+    let path = preference_path()?;
+    let value = fs::read_to_string(path).ok()?;
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
+}
+
+/// Records a directory chosen in the interface, or clears the choice.
+///
+/// The directory is created immediately so an unusable choice is reported
+/// now rather than at the next install.
+pub fn set_configured_directory(directory: Option<&Path>) -> Result<(), InstallError> {
+    let Some(path) = preference_path() else {
+        return Err(InstallError::DirectoryNotFound);
+    };
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| InstallError::Copy {
+            path: parent.display().to_string(),
+            source: error,
+        })?;
+    }
+    match directory {
+        Some(directory) => {
+            fs::create_dir_all(directory).map_err(|error| InstallError::Copy {
+                path: directory.display().to_string(),
+                source: error,
+            })?;
+            fs::write(&path, directory.display().to_string()).map_err(|error| InstallError::Copy {
+                path: path.display().to_string(),
+                source: error,
+            })
+        }
+        None => match fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(InstallError::Copy {
+                path: path.display().to_string(),
+                source: error,
+            }),
+        },
+    }
 }
 
 /// Directory the running executable lives in.

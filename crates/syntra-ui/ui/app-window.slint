@@ -174,6 +174,9 @@ export component AppWindow inherits Window {
                     service-installed: AppState.service-installed;
                     service-running: AppState.service-running;
                     clipboard-text-enabled: AppState.clipboard-text-enabled;
+                    daemon-starting: AppState.daemon-starting;
+                    daemon-start-error: AppState.daemon-start-error;
+                    start-service => { AppState.start-daemon(); }
                     clipboard-image-enabled: AppState.clipboard-image-enabled;
                     clipboard-files-enabled: AppState.clipboard-files-enabled;
                     clipboard-files-supported: AppState.clipboard-files-supported;
@@ -284,6 +287,9 @@ export component AppWindow inherits Window {
                     save-file-receive-settings => { AppState.save-file-receive-settings(); }
                     service-source-path: AppState.service-source-path;
                     service-install-destination: AppState.service-install-destination;
+                    service-destination-customised: AppState.service-destination-customised;
+                    choose-install-destination => { AppState.choose-install-destination(); }
+                    reset-install-destination => { AppState.reset-install-destination(); }
                     service-supported: AppState.service-supported;
                     service-busy: AppState.service-busy;
                     service-known: AppState.service-known;

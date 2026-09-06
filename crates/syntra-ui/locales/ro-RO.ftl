@@ -319,3 +319,11 @@ overview-service-port = Port de ascultare
 overview-service-capture = Backend de captură
 overview-service-emulation = Backend de emulare
 overview-service-unavailable = Indisponibil
+
+# Installation location and service start
+service-install-location = Locație de instalare
+service-install-location-hint = Ambele binare și pluginurile se copiază aici. Implicit este directorul tău de executabile; SYNTRA_INSTALL_DIR îl suprascrie.
+service-install-location-choose = Schimbă locația…
+service-install-location-reset = Revino la implicit
+overview-service-start = Pornește serviciul
+overview-service-starting = Pornește…
