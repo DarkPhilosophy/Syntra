@@ -69,8 +69,10 @@ pub(crate) enum ManagerCommand {
 
 #[derive(Debug)]
 pub(crate) enum ManagerEvent {
-    Started,
-    Ready,
+    /// The plugin process has been launched but has not handshaken yet.
+    Started(AdapterId),
+    /// The plugin completed its handshake and is answering.
+    Ready(AdapterId),
     Message {
         adapter: AdapterId,
         message: Message,
@@ -442,7 +444,7 @@ async fn handle_process_event(
                 if let Some(runtime) = state.processes.get_mut(&adapter) {
                     runtime.ready = true;
                 }
-                emit(events, ManagerEvent::Ready).await;
+                emit(events, ManagerEvent::Ready(adapter.clone())).await;
                 if let Some(pending) = state.pending_messages.remove(&adapter) {
                     send_ready(state, &adapter, pending, events).await;
                 }
@@ -645,7 +647,7 @@ async fn spawn_adapter(
     )
     .await?;
     state.processes.insert(adapter.clone(), runtime);
-    emit(events, ManagerEvent::Started).await;
+    emit(events, ManagerEvent::Started(adapter.clone())).await;
     Ok(())
 }
 

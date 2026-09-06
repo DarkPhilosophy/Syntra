@@ -1,0 +1,248 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { Translations } from "../localization.slint";
+import { AppButton } from "../components/controls.slint";
+
+// Mirrors syntra_api::PluginStatus. The daemon is authoritative: this page
+// renders what it reports and sends intents back, it never decides plugin
+// state for itself.
+export struct PluginEntry {
+    id: string,
+    name: string,
+    description: string,
+    version: string,
+    author: string,
+    homepage: string,
+    source: string,
+    update-url: string,
+    license: string,
+    mime-types: string,
+    bundled: bool,
+    manifest-path: string,
+    executable: string,
+    installed: bool,
+    enabled: bool,
+    running: bool,
+    health: string,
+    restarts: int,
+    protocol-version: int,
+    supported-protocol-version: int,
+    error: string,
+}
+
+component HealthBadge inherits Rectangle {
+    in property <string> health;
+    // Colour carries the same information as the label, so the state is
+    // readable at a glance without reading every row.
+    property <color> tone:
+        health == "healthy" ? Theme.success
+        : health == "starting" ? Theme.warning
+        : health == "unresponsive" ? Theme.warning
+        : health == "failed" ? Theme.danger
+        : Theme.muted-text;
+
+    height: 24px;
+    width: label.preferred-width + 20px;
+    border-radius: 12px;
+    background: tone.transparentize(0.85);
+    border-width: 1px;
+    border-color: tone.transparentize(0.5);
+
+    label := Text {
+        text: Translations.tr("plugin-health-" + root.health);
+        color: root.tone;
+        font-size: Theme.caption-size;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+}
+
+component PluginCard inherits Rectangle {
+    in property <PluginEntry> plugin;
+    callback toggled(bool);
+    callback restart-requested();
+
+    background: Theme.surface;
+    border-radius: Theme.corner-radius;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    VerticalLayout {
+        padding: Theme.content-gap;
+        spacing: 6px;
+
+        HorizontalLayout {
+            spacing: 10px;
+            Text {
+                text: plugin.name;
+                color: Theme.text;
+                font-size: Theme.body-size;
+                vertical-alignment: center;
+            }
+            Text {
+                text: plugin.version == "" ? "" : "v" + plugin.version;
+                color: Theme.muted-text;
+                font-size: Theme.caption-size;
+                vertical-alignment: center;
+            }
+            if plugin.bundled: Text {
+                text: Translations.tr("plugin-bundled");
+                color: Theme.muted-text;
+                font-size: Theme.caption-size;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            HealthBadge { health: plugin.health; }
+        }
+
+        Text {
+            text: plugin.description;
+            color: Theme.muted-text;
+            font-size: Theme.body-size;
+            wrap: word-wrap;
+        }
+
+        // A plugin sees clipboard contents and file paths, so provenance is
+        // shown rather than hidden behind a details view.
+        HorizontalLayout {
+            spacing: 16px;
+            Text {
+                text: Translations.tr("plugin-author") + ": " + (plugin.author == "" ? "—" : plugin.author);
+                color: Theme.muted-text;
+                font-size: Theme.caption-size;
+            }
+            if plugin.license != "": Text {
+                text: plugin.license;
+                color: Theme.muted-text;
+                font-size: Theme.caption-size;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            if plugin.restarts > 0: Text {
+                text: Translations.tr("plugin-restarts") + ": " + plugin.restarts;
+                color: Theme.warning;
+                font-size: Theme.caption-size;
+            }
+        }
+
+        if plugin.source != "" || plugin.homepage != "": HorizontalLayout {
+            spacing: 16px;
+            if plugin.homepage != "": Text {
+                text: plugin.homepage;
+                color: Theme.accent;
+                font-size: Theme.caption-size;
+            }
+            if plugin.source != "": Text {
+                text: plugin.source;
+                color: Theme.accent;
+                font-size: Theme.caption-size;
+            }
+        }
+
+        // A plugin built for another protocol may load and then misbehave, so
+        // the mismatch is stated rather than left to be discovered.
+        if plugin.protocol-version != plugin.supported-protocol-version: Text {
+            text: Translations.tr("plugin-protocol-mismatch")
+                + " (" + plugin.protocol-version + " ≠ " + plugin.supported-protocol-version + ")";
+            color: Theme.warning;
+            font-size: Theme.caption-size;
+            wrap: word-wrap;
+        }
+
+        if plugin.error != "": Text {
+            text: plugin.error;
+            color: Theme.danger;
+            font-size: Theme.caption-size;
+            wrap: word-wrap;
+        }
+
+        Text {
+            text: plugin.executable;
+            color: Theme.muted-text;
+            font-size: Theme.caption-size;
+            overflow: elide;
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            AppButton {
+                text: plugin.enabled
+                    ? Translations.tr("plugin-disable")
+                    : Translations.tr("plugin-enable");
+                enabled: plugin.installed;
+                clicked => { root.toggled(!plugin.enabled); }
+            }
+            AppButton {
+                text: Translations.tr("plugin-restart");
+                // Restarting only means anything for a plugin that is meant
+                // to be running.
+                enabled: plugin.installed && plugin.enabled;
+                clicked => { root.restart-requested(); }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+    }
+}
+
+export component PluginsPage inherits Rectangle {
+    in property <[PluginEntry]> plugins;
+    in property <bool> connected: false;
+    callback set-enabled(string, bool);
+    callback restart(string);
+    callback refresh();
+
+    background: Theme.background;
+    vertical-stretch: 1;
+
+    VerticalLayout {
+        spacing: Theme.spacing;
+        padding: Theme.content-gap;
+
+        HorizontalLayout {
+            Text {
+                text: Translations.tr("navigation-plugins");
+                color: Theme.text;
+                font-size: Theme.title-size;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            AppButton {
+                text: Translations.tr("plugin-refresh");
+                clicked => { root.refresh(); }
+            }
+        }
+
+        Text {
+            text: Translations.tr("plugin-page-description");
+            color: Theme.muted-text;
+            font-size: Theme.body-size;
+            wrap: word-wrap;
+        }
+
+        if !connected: Text {
+            text: Translations.tr("plugin-daemon-unavailable");
+            color: Theme.warning;
+            font-size: Theme.body-size;
+            wrap: word-wrap;
+        }
+
+        if connected && plugins.length == 0: Text {
+            text: Translations.tr("plugin-none-discovered");
+            color: Theme.muted-text;
+            font-size: Theme.body-size;
+            wrap: word-wrap;
+        }
+
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                spacing: Theme.spacing;
+                alignment: start;
+                for plugin in plugins: PluginCard {
+                    plugin: plugin;
+                    toggled(enabled) => { root.set-enabled(plugin.id, enabled); }
+                    restart-requested => { root.restart(plugin.id); }
+                }
+            }
+        }
+    }
+}

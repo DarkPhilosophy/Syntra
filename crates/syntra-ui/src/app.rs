@@ -458,6 +458,12 @@ where
         &state,
         FrontendRequest::Enumerate(),
     );
+    send_request(
+        &request_tx,
+        &app.as_weak(),
+        &state,
+        FrontendRequest::QueryPlugins,
+    );
     app.invoke_local_profile_changed();
     let _launch_ready_timer = schedule_launch_ready(&app);
     // Without a tray there is no way back to a hidden window, so a
@@ -1160,6 +1166,56 @@ pub(crate) fn device_presentation(
     (label, image)
 }
 
+/// Key identifying one history record.
+type HistoryKey = (String, u64);
+
+thread_local! {
+    /// Decoded thumbnails, keyed by record.
+    ///
+    /// Converting an image means copying its whole RGBA buffer. Doing that
+    /// for every record on every projection made opening History stutter,
+    /// even though the pixels never change: a record is immutable once
+    /// received. Confined to the UI thread, which is the only place that
+    /// projects.
+    static THUMBNAIL_CACHE: std::cell::RefCell<std::collections::HashMap<HistoryKey, slint::Image>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Bound on cached thumbnails, so scrolling a long history cannot grow
+/// without limit. Cleared wholesale rather than evicted one by one: the cost
+/// is one re-decode of what is still on screen.
+const THUMBNAIL_CACHE_LIMIT: usize = 128;
+
+/// Returns the thumbnail for a record, decoding it at most once.
+fn history_thumbnail(key: &HistoryKey, state: &AppViewState) -> Option<slint::Image> {
+    THUMBNAIL_CACHE.with(|cache| {
+        if let Some(image) = cache.borrow().get(key) {
+            return Some(image.clone());
+        }
+        let image = state.history_images.get(key)?;
+        let (width, height) = (image.width?, image.height?);
+        let length = (width as usize)
+            .checked_mul(height as usize)?
+            .checked_mul(4)?;
+        // Reject a payload whose declared size disagrees with its bytes: the
+        // buffer constructor would otherwise read out of bounds.
+        if length != image.bytes.len() || length > 32 * 1024 * 1024 {
+            return None;
+        }
+        let decoded = slint::Image::from_rgba8(slint::SharedPixelBuffer::clone_from_slice(
+            &image.bytes,
+            width,
+            height,
+        ));
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= THUMBNAIL_CACHE_LIMIT {
+            cache.clear();
+        }
+        cache.insert(key.clone(), decoded.clone());
+        Some(decoded)
+    })
+}
+
 fn project_history(app: &AppWindow, state: &AppViewState) {
     let global = app.global::<AppState>();
     global.set_history_error(
@@ -1206,18 +1262,7 @@ fn project_history(app: &AppWindow, state: &AppViewState) {
                     record.event_id.origin_device_id.clone(),
                     record.event_id.origin_sequence,
                 );
-                let thumbnail = state.history_images.get(&key).and_then(|image| {
-                    let (width, height) = (image.width?, image.height?);
-                    let length = (width as usize)
-                        .checked_mul(height as usize)?
-                        .checked_mul(4)?;
-                    if length != image.bytes.len() || length > 32 * 1024 * 1024 {
-                        return None;
-                    }
-                    Some(slint::Image::from_rgba8(
-                        slint::SharedPixelBuffer::clone_from_slice(&image.bytes, width, height),
-                    ))
-                });
+                let thumbnail = history_thumbnail(&key, state);
                 let (kind, preview) = match &record.preview {
                     syntra_api::HistoryPreview::Text { preview, .. } => {
                         ("clipboard-text", preview.clone())
@@ -1434,6 +1479,50 @@ fn project_app_state(app: &AppWindow, state: &AppViewState, settings: &Presentat
     global.set_failed_transfers(ModelRc::new(VecModel::from(failed)));
     global.set_cancelled_transfers(ModelRc::new(VecModel::from(cancelled)));
     crate::manual_ui::project(app, state);
+
+    /// Stable identifier used for the health badge and its translation key.
+    fn plugin_health_id(health: syntra_api::PluginHealth) -> &'static str {
+        use syntra_api::PluginHealth;
+        match health {
+            PluginHealth::Disabled => "disabled",
+            PluginHealth::NotInstalled => "not-installed",
+            PluginHealth::Stopped => "stopped",
+            PluginHealth::Starting => "starting",
+            PluginHealth::Healthy => "healthy",
+            PluginHealth::Unresponsive => "unresponsive",
+            PluginHealth::Failed => "failed",
+        }
+    }
+
+    global.set_plugins(ModelRc::new(VecModel::from(
+        state
+            .plugins
+            .iter()
+            .map(|plugin| PluginEntry {
+                id: plugin.id.clone().into(),
+                name: plugin.name.clone().into(),
+                description: plugin.description.clone().into(),
+                version: plugin.version.clone().into(),
+                author: plugin.author.clone().into(),
+                homepage: plugin.homepage.clone().unwrap_or_default().into(),
+                source: plugin.source.clone().unwrap_or_default().into(),
+                update_url: plugin.update_url.clone().unwrap_or_default().into(),
+                license: plugin.license.clone().unwrap_or_default().into(),
+                mime_types: plugin.mime_types.join(", ").into(),
+                bundled: plugin.bundled,
+                manifest_path: plugin.manifest_path.clone().into(),
+                executable: plugin.executable.clone().into(),
+                installed: plugin.installed,
+                enabled: plugin.enabled,
+                running: plugin.running,
+                health: plugin_health_id(plugin.health).into(),
+                restarts: plugin.restarts as i32,
+                protocol_version: plugin.protocol_version as i32,
+                supported_protocol_version: plugin.supported_protocol_version as i32,
+                error: plugin.error.clone().unwrap_or_default().into(),
+            })
+            .collect::<Vec<_>>(),
+    )));
 
     let mut keys = state
         .authorization
@@ -2333,6 +2422,29 @@ fn bind_app_state_callbacks(
             if let Some(app) = weak.upgrade() {
                 project_live_diagnostics(&app, &store);
             }
+        });
+    }
+    {
+        // Plugin management is entirely the daemon's decision; the interface
+        // only forwards the intent and waits for the authoritative reply.
+        let requests = tx.clone();
+        global.on_set_plugin_enabled(move |id, enabled| {
+            let _ = requests.send(FrontendRequest::SetPluginEnabled {
+                id: id.to_string(),
+                enabled,
+            });
+        });
+    }
+    {
+        let requests = tx.clone();
+        global.on_restart_plugin(move |id| {
+            let _ = requests.send(FrontendRequest::RestartPlugin { id: id.to_string() });
+        });
+    }
+    {
+        let requests = tx.clone();
+        global.on_refresh_plugins(move || {
+            let _ = requests.send(FrontendRequest::QueryPlugins);
         });
     }
     bind_platform_action(

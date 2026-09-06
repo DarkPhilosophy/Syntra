@@ -263,3 +263,24 @@ manual-transfer-invalid-id = Transferul nu mai este disponibil.
 manual-transfer-empty-folder = Alege mai întâi un dosar de destinație.
 manual-transfer-absolute-folder = Scrie calea completă a dosarului sau folosește butonul Alege.
 manual-transfer-platform-unavailable = Transferurile manuale de fișiere nu sunt disponibile pe această platformă.
+
+# Plugin manager
+navigation-plugins = Pluginuri
+plugin-page-description = Pluginurile sunt procese separate care adaugă funcții opționale. Serviciul le pornește și le supraveghează; sincronizarea de text și imagini din clipboard este integrată și nu are nevoie de plugin.
+plugin-daemon-unavailable = Serviciul nu este accesibil, deci lista de pluginuri nu poate fi afișată.
+plugin-none-discovered = Nu s-a găsit niciun manifest de plugin lângă serviciu sau în directorul de configurare.
+plugin-bundled = inclus
+plugin-author = Autor
+plugin-restarts = Reporniri
+plugin-enable = Activează
+plugin-disable = Dezactivează
+plugin-restart = Repornește
+plugin-refresh = Reîmprospătează
+plugin-protocol-mismatch = Construit pentru altă versiune de protocol; s-ar putea să nu funcționeze corect
+plugin-health-disabled = Dezactivat
+plugin-health-not-installed = Neinstalat
+plugin-health-stopped = Oprit
+plugin-health-starting = Pornește
+plugin-health-healthy = Funcțional
+plugin-health-unresponsive = Nu răspunde
+plugin-health-failed = Eșuat

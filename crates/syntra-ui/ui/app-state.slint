@@ -3,6 +3,7 @@ import { TransferItem } from "pages/transfer-row.slint";
 import { DiagnosticEntry } from "components/diagnostic-row.slint";
 import { HistoryItem } from "pages/history.slint";
 import { TransferPeerItem } from "components/file-drop-target.slint";
+import { PluginEntry } from "pages/plugins.slint";
 
 export struct FlatpakApplication {
     application-id: string,
@@ -115,6 +116,13 @@ export global AppState {
     callback diagnostics-pause(bool);
     callback diagnostics-clear();
     in-out property <string> diagnostics-error;
+
+    // Plugin manager. The daemon owns this list; the callbacks are intents,
+    // and the daemon's reply is what updates the property.
+    in-out property <[PluginEntry]> plugins;
+    callback set-plugin-enabled(string, bool);
+    callback restart-plugin(string);
+    callback refresh-plugins();
     in-out property <int> listen-port;
     in-out property <string> locale: "en-US";
     in-out property <[string]> locale-options;

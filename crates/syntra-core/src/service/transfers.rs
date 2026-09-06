@@ -5,6 +5,17 @@
 
 use super::*;
 
+/// Maps a supervised process onto the plugin identifier the manifest declares.
+///
+/// The supervisor keys FUSE adapters by transfer, but the plugin manager
+/// shows one entry per plugin, so every FUSE process reports the same id.
+fn plugin_id(adapter: &ProcessAdapterId) -> &'static str {
+    match adapter {
+        ProcessAdapterId::Gtk => crate::plugins::CLIPBOARD_PLUGIN_ID,
+        ProcessAdapterId::Fuse { .. } => crate::plugins::FUSE_PLUGIN_ID,
+    }
+}
+
 impl Service {
     pub(super) fn refresh_manual_routes(&mut self) {
         let routes = self.connected_authenticated_peers();
@@ -14,9 +25,16 @@ impl Service {
 
     pub(super) async fn handle_adapter_event(&mut self, event: ManagerEvent) {
         match event {
-            // Lifecycle notices carry no state the service acts on; a plugin
-            // becoming ready changes nothing until it sends a message.
-            ManagerEvent::Started | ManagerEvent::Ready => {}
+            // Lifecycle notices drive the health the plugin manager shows;
+            // without them every plugin would read as stopped.
+            ManagerEvent::Started(adapter) => {
+                self.plugins.set_starting(plugin_id(&adapter));
+                self.publish_plugins();
+            }
+            ManagerEvent::Ready(adapter) => {
+                self.plugins.set_running(plugin_id(&adapter), true);
+                self.publish_plugins();
+            }
             ManagerEvent::Message { adapter, message } => {
                 let adapter_id = match &adapter {
                     ProcessAdapterId::Gtk => "gtk-clipboard".to_owned(),
@@ -165,6 +183,8 @@ impl Service {
                 log::warn!("adapter {:?} rejected transfer: {}", adapter, reason)
             }
             ManagerEvent::Exited { adapter, status } => {
+                self.plugins.set_failed(plugin_id(&adapter), status.clone());
+                self.publish_plugins();
                 let id = match adapter {
                     ProcessAdapterId::Gtk => "gtk-clipboard".to_owned(),
                     ProcessAdapterId::Fuse { transfer_id } => transfer_id,

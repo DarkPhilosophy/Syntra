@@ -208,6 +208,21 @@ fn write_token(token: &str) -> io::Result<()> {
     }
     fs::write(token_path, token)
 }
+/// Removes a stored token the portal refused.
+///
+/// Leaving it in place would make every future start attempt fail the same
+/// way, so a rejected token is deleted rather than retried forever.
+fn discard_token() {
+    let Some(path) = get_token_file_path() else {
+        return;
+    };
+    match fs::remove_file(&path) {
+        Ok(()) => log::debug!("discarded unusable RemoteDesktop token"),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => log::debug!("failed to discard unusable RemoteDesktop token: {error}"),
+    }
+}
+
 async fn get_ei_fd() -> Result<
     (
         RemoteDesktop,
@@ -219,48 +234,47 @@ async fn get_ei_fd() -> Result<
 > {
     let remote_desktop = RemoteDesktop::new().await?;
 
-    let restore_token = read_token();
+    // A stored grant may have been revoked, or may belong to a portal
+    // session that no longer exists. One retry without it prompts the user
+    // instead of leaving emulation broken until the daemon restarts.
+    let mut restore_token = read_token();
+    let (session, started, clipboard, clipboard_requested) = loop {
+        let had_token = restore_token.is_some();
 
-    log::debug!("creating session ...");
-    let session = remote_desktop.create_session(Default::default()).await?;
+        log::debug!("creating session ...");
+        let session = remote_desktop.create_session(Default::default()).await?;
 
-    log::debug!("selecting devices ...");
-    let options = SelectDevicesOptions::default()
-        .set_devices(DeviceType::Keyboard | DeviceType::Pointer)
-        .set_persist_mode(PersistMode::ExplicitlyRevoked)
-        .set_restore_token(restore_token.as_deref());
-    remote_desktop.select_devices(&session, options).await?;
-    let clipboard = Clipboard::new().await.ok();
-    let clipboard_requested = match clipboard.as_ref() {
-        Some(clipboard) => clipboard
-            .request(&session, RequestClipboardOptions::default())
+        log::debug!("selecting devices ...");
+        let options = SelectDevicesOptions::default()
+            .set_devices(DeviceType::Keyboard | DeviceType::Pointer)
+            .set_persist_mode(PersistMode::ExplicitlyRevoked)
+            .set_restore_token(restore_token.as_deref());
+        remote_desktop.select_devices(&session, options).await?;
+
+        let clipboard = Clipboard::new().await.ok();
+        let clipboard_requested = match clipboard.as_ref() {
+            Some(clipboard) => clipboard
+                .request(&session, RequestClipboardOptions::default())
+                .await
+                .is_ok(),
+            None => false,
+        };
+
+        log::info!("requesting permission for input emulation");
+        match remote_desktop
+            .start(&session, None, Default::default())
             .await
-            .is_ok(),
-        None => false,
-    };
-
-    log::info!("requesting permission for input emulation");
-    let start_response = match remote_desktop
-        .start(&session, None, Default::default())
-        .await
-    {
-        Ok(response) => response,
-        Err(error) => {
-            if restore_token.is_some() {
-                if let Some(path) = get_token_file_path() {
-                    if let Err(remove_error) = fs::remove_file(path) {
-                        if remove_error.kind() != io::ErrorKind::NotFound {
-                            log::debug!(
-                                "failed to discard unusable RemoteDesktop token: {remove_error}"
-                            );
-                        }
-                    }
-                }
+        {
+            Ok(response) => break (session, response, clipboard, clipboard_requested),
+            Err(error) if had_token => {
+                log::info!("stored input permission was rejected, asking again: {error}");
+                discard_token();
+                restore_token = None;
             }
-            return Err(error);
+            Err(error) => return Err(error),
         }
     };
-    let start_response = start_response.response()?;
+    let start_response = started.response()?;
     if let Some(token_str) = start_response.restore_token() {
         if let Err(error) = write_token(token_str) {
             log::debug!("failed to save RemoteDesktop restore token: {error}");

@@ -10,6 +10,7 @@ import { ClipboardPage } from "pages/clipboard.slint";
 import { HistoryPage } from "pages/history.slint";
 import { TransfersPage } from "pages/transfers.slint";
 import { DiagnosticsPage } from "pages/diagnostics.slint";
+import { PluginsPage, PluginEntry } from "pages/plugins.slint";
 import { SettingsPage } from "pages/settings.slint";
 import { AuthorizationPage } from "pages/authorization.slint";
 import { WelcomeOverlay } from "components/welcome.slint";
@@ -100,6 +101,7 @@ export component AppWindow inherits Window {
                         { id: "history", icon: @image-url("assets/navigation/history.svg"), label: Translations.tr("history-title") },
                         { id: "transfers", icon: @image-url("assets/navigation/transfers.svg"), label: Translations.tr("navigation-transfers") },
                         { id: "diagnostics", icon: @image-url("assets/navigation/diagnostics.svg"), label: Translations.tr("navigation-diagnostics") },
+                        { id: "plugins", icon: @image-url("assets/navigation/transfers.svg"), label: Translations.tr("navigation-plugins") },
                         { id: "authorization", icon: @image-url("assets/navigation/authorization.svg"), label: Translations.tr("navigation-authorization") },
                         { id: "settings", icon: @image-url("assets/navigation/settings.svg"), label: Translations.tr("navigation-settings") }
                     ]: Rectangle {
@@ -251,6 +253,13 @@ export component AppWindow inherits Window {
                     text-filter-changed(v) => { AppState.diagnostics-text-changed(v); }
                     pause-toggled(v) => { AppState.diagnostics-pause(v); }
                     clear-requested => { AppState.diagnostics-clear(); }
+                }
+                if selected-page == "plugins": PluginsPage {
+                    plugins: AppState.plugins;
+                    connected: AppState.connected;
+                    set-enabled(id, enabled) => { AppState.set-plugin-enabled(id, enabled); }
+                    restart(id) => { AppState.restart-plugin(id); }
+                    refresh => { AppState.refresh-plugins(); }
                 }
                 if selected-page == "settings": SettingsPage {
                     file-receive-known: AppState.file-receive-known;

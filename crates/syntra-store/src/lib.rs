@@ -299,7 +299,8 @@ impl HistoryStore {
              FROM history_events e
              LEFT JOIN history_local_state s USING(origin_device_id, origin_sequence)
              WHERE COALESCE(s.dismissed, 0) = 0
-             ORDER BY e.created_at_ms DESC, e.origin_device_id, e.origin_sequence DESC",
+             ORDER BY COALESCE(s.pinned, 0) DESC,
+                      e.created_at_ms DESC, e.origin_device_id, e.origin_sequence DESC",
             None,
         )
     }
@@ -321,7 +322,8 @@ impl HistoryStore {
                     e.text_payload LIKE ?1 ESCAPE '\\' COLLATE NOCASE OR
                     e.media_type LIKE ?1 ESCAPE '\\' COLLATE NOCASE OR
                     e.files_json LIKE ?1 ESCAPE '\\' COLLATE NOCASE)
-             ORDER BY e.created_at_ms DESC, e.origin_device_id, e.origin_sequence DESC",
+             ORDER BY COALESCE(s.pinned, 0) DESC,
+                      e.created_at_ms DESC, e.origin_device_id, e.origin_sequence DESC",
             Some(&pattern),
         )
     }
@@ -962,6 +964,67 @@ mod tests {
         assert_eq!(records.len(), 1);
         assert!(records[0].pinned);
         assert_eq!(records[0].content, event.content);
+    }
+
+    /// Pinning must lift a record to the top of the list, not merely mark it.
+    /// A pin that leaves the entry buried is indistinguishable from a "save"
+    /// flag and defeats the purpose of pinning.
+    #[test]
+    fn pinned_records_sort_above_newer_unpinned_ones() {
+        let database = TestDatabase::new("pin-ordering");
+        let mut store = HistoryStore::open(&database.0).unwrap();
+
+        let older = imported(1, HistoryContent::Text("older, pinned".into()));
+        store.merge_imported(older.clone()).unwrap();
+        for sequence in 2..=4 {
+            store
+                .merge_imported(imported(
+                    sequence,
+                    HistoryContent::Text(format!("newer {sequence}")),
+                ))
+                .unwrap();
+        }
+        assert!(store.set_pinned(&older.event_id, true).unwrap());
+
+        let records = store.list().unwrap();
+
+        assert_eq!(
+            records.first().map(|record| &record.event_id),
+            Some(&older.event_id),
+            "the pinned record must lead the list despite being the oldest"
+        );
+        assert!(
+            records[1..].iter().all(|record| !record.pinned),
+            "unpinned records must follow the pinned ones"
+        );
+
+        // Unpinning must return it to chronological position, otherwise the
+        // control is one-way.
+        assert!(store.set_pinned(&older.event_id, false).unwrap());
+        let records = store.list().unwrap();
+        assert_eq!(
+            records.last().map(|record| &record.event_id),
+            Some(&older.event_id)
+        );
+    }
+
+    /// Search results obey the same rule; a pinned match must not be buried.
+    #[test]
+    fn search_also_places_pinned_matches_first() {
+        let database = TestDatabase::new("pin-search");
+        let mut store = HistoryStore::open(&database.0).unwrap();
+
+        let pinned = imported(1, HistoryContent::Text("needle one".into()));
+        store.merge_imported(pinned.clone()).unwrap();
+        store
+            .merge_imported(imported(2, HistoryContent::Text("needle two".into())))
+            .unwrap();
+        assert!(store.set_pinned(&pinned.event_id, true).unwrap());
+
+        let records = store.search("needle").unwrap();
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].event_id, pinned.event_id);
     }
 
     #[test]

@@ -263,3 +263,24 @@ manual-transfer-invalid-id = Die Übertragung ist nicht mehr verfügbar.
 manual-transfer-empty-folder = Wähle zuerst einen Zielordner.
 manual-transfer-absolute-folder = Gib einen absoluten Ordnerpfad ein oder wähle einen Ordner über Auswählen.
 manual-transfer-platform-unavailable = Manuelle Dateiübertragungen sind auf dieser Plattform nicht verfügbar.
+
+# Plugin manager
+navigation-plugins = Plugins
+plugin-page-description = Plugins sind eigenständige Prozesse, die optionale Funktionen ergänzen. Der Dienst startet und überwacht sie; die Synchronisierung von Text und Bildern in der Zwischenablage ist eingebaut und benötigt kein Plugin.
+plugin-daemon-unavailable = Der Dienst ist nicht erreichbar, daher kann die Plugin-Liste nicht angezeigt werden.
+plugin-none-discovered = Neben dem Dienst und im Konfigurationsverzeichnis wurden keine Plugin-Manifeste gefunden.
+plugin-bundled = mitgeliefert
+plugin-author = Autor
+plugin-restarts = Neustarts
+plugin-enable = Aktivieren
+plugin-disable = Deaktivieren
+plugin-restart = Neu starten
+plugin-refresh = Aktualisieren
+plugin-protocol-mismatch = Für eine andere Plugin-Protokollversion gebaut; funktioniert möglicherweise nicht korrekt
+plugin-health-disabled = Deaktiviert
+plugin-health-not-installed = Nicht installiert
+plugin-health-stopped = Gestoppt
+plugin-health-starting = Startet
+plugin-health-healthy = Fehlerfrei
+plugin-health-unresponsive = Reagiert nicht
+plugin-health-failed = Fehlgeschlagen

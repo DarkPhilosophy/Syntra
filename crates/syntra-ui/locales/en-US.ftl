@@ -263,3 +263,24 @@ manual-transfer-invalid-id = The transfer is no longer available.
 manual-transfer-empty-folder = Choose a destination folder first.
 manual-transfer-absolute-folder = Enter an absolute folder path or choose a folder with Browse.
 manual-transfer-platform-unavailable = Manual file transfers are not available on this platform.
+
+# Plugin manager
+navigation-plugins = Plugins
+plugin-page-description = Plugins are separate processes that add optional capabilities. The service starts and supervises them; text and image clipboard synchronisation is built in and needs no plugin.
+plugin-daemon-unavailable = The service is not reachable, so the plugin list cannot be shown.
+plugin-none-discovered = No plugin manifests were found beside the service or in your configuration directory.
+plugin-bundled = bundled
+plugin-author = Author
+plugin-restarts = Restarts
+plugin-enable = Enable
+plugin-disable = Disable
+plugin-restart = Restart
+plugin-refresh = Refresh
+plugin-protocol-mismatch = Built for a different plugin protocol; it may not work correctly
+plugin-health-disabled = Disabled
+plugin-health-not-installed = Not installed
+plugin-health-stopped = Stopped
+plugin-health-starting = Starting
+plugin-health-healthy = Healthy
+plugin-health-unresponsive = Unresponsive
+plugin-health-failed = Failed
