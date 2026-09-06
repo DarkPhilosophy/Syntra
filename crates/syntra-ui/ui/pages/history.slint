@@ -62,12 +62,12 @@ export component HistoryPage inherits Rectangle {
                         spacing: Theme.small-spacing;
                         HorizontalLayout {
                             spacing: Theme.small-spacing;
-                            Avatar { source: record.source-image; has-image: record.has-source-image; size: 32px; }
+                            Avatar { source: record.source-image; has-image: record.has-source-image; size: Theme.history-avatar-size; }
                             Text { text: record.source-label; color: Theme.text; font-size: Theme.body-size; font-weight: 600; horizontal-stretch: 1; vertical-alignment: center; overflow: elide; }
                             AppButton { text: Translations.tr(record.pinned ? "history-unpin" : "history-pin"); enabled: root.connected && !root.busy; clicked => { root.pin(record.origin, record.sequence, !record.pinned); } }
                         }
                         Text { text: record.kind-label + " · " + record.timestamp; color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
-                        if record.has-thumbnail: Image { source: record.thumbnail; height: 160px; image-fit: contain; }
+                        if record.has-thumbnail: Image { source: record.thumbnail; height: Theme.history-thumbnail-height; image-fit: contain; }
                         if record.preview-text != "": Text { text: record.preview-text; color: Theme.text; font-size: Theme.body-size; wrap: word-wrap; overflow: elide; max-height: Theme.body-size * 5; }
                     }
                 }

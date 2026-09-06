@@ -1,6 +1,6 @@
 use futures::{StreamExt, future};
 use std::{
-    env, fs, io,
+    fs, io,
     os::{fd::OwnedFd, unix::net::UnixStream},
     path::{Path, PathBuf},
     str::FromStr,
@@ -70,16 +70,8 @@ pub(crate) struct LibeiEmulation {
 }
 
 /// Get the path to the RemoteDesktop token file
-fn get_token_file_path() -> PathBuf {
-    let cache_dir = env::var("XDG_CACHE_HOME")
-        .ok()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            let home = env::var("HOME").expect("HOME not set");
-            PathBuf::from(home).join(".cache")
-        });
-
-    cache_dir.join("syntra").join("remote-desktop.token")
+fn get_token_file_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|dir| dir.join("syntra/remote-desktop.token"))
 }
 
 fn decode_file_uri(uri: &str) -> Option<PathBuf> {
@@ -191,26 +183,31 @@ async fn export_flatpak_file_uris(mut contents: Vec<(String, Vec<u8>)>) -> Vec<(
     contents
 }
 
-/// Read the RemoteDesktop token from file
+/// Read the RemoteDesktop token from file.
 fn read_token() -> Option<String> {
-    let token_path = get_token_file_path();
-    match fs::read_to_string(&token_path) {
-        Ok(token) => Some(token.trim().to_string()),
-        Err(_) => None,
+    let path = get_token_file_path()?;
+    match fs::read_to_string(path) {
+        Ok(token) => {
+            let token = token.trim().to_string();
+            (!token.is_empty()).then_some(token)
+        }
+        Err(error) => {
+            log::debug!("unable to read RemoteDesktop restore token: {error}");
+            None
+        }
     }
 }
 
-/// Write the RemoteDesktop token to file
+/// Write the RemoteDesktop token to file.
 fn write_token(token: &str) -> io::Result<()> {
-    let token_path = get_token_file_path();
+    let Some(token_path) = get_token_file_path() else {
+        return Err(io::Error::other("configuration directory unavailable"));
+    };
     if let Some(parent) = token_path.parent() {
         fs::create_dir_all(parent)?;
     }
-
-    fs::write(&token_path, token)?;
-    Ok(())
+    fs::write(token_path, token)
 }
-
 async fn get_ei_fd() -> Result<
     (
         RemoteDesktop,
@@ -247,29 +244,26 @@ async fn get_ei_fd() -> Result<
         .start(&session, None, Default::default())
         .await
     {
-        Ok(request) => request.response(),
-        Err(error) => Err(error),
-    };
-    let start_response = match start_response {
         Ok(response) => response,
         Err(error) => {
             if restore_token.is_some() {
-                if let Err(remove_error) = fs::remove_file(get_token_file_path()) {
-                    if remove_error.kind() != io::ErrorKind::NotFound {
-                        log::warn!(
-                            "failed to discard unusable RemoteDesktop token: {remove_error}"
-                        );
+                if let Some(path) = get_token_file_path() {
+                    if let Err(remove_error) = fs::remove_file(path) {
+                        if remove_error.kind() != io::ErrorKind::NotFound {
+                            log::debug!(
+                                "failed to discard unusable RemoteDesktop token: {remove_error}"
+                            );
+                        }
                     }
                 }
             }
             return Err(error);
         }
     };
-
-    // The restore token is only valid once, we need to re-save it each time
+    let start_response = start_response.response()?;
     if let Some(token_str) = start_response.restore_token() {
-        if let Err(e) = write_token(token_str) {
-            log::warn!("failed to save RemoteDesktop token: {}", e);
+        if let Err(error) = write_token(token_str) {
+            log::debug!("failed to save RemoteDesktop restore token: {error}");
         }
     }
 

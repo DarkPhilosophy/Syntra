@@ -22,6 +22,7 @@ export component DiagnosticRow inherits Rectangle {
     in property <DiagnosticEntry> entry;
     in property <bool> compact: false;
     in property <bool> header: false;
+    in property <length> message-width;
     height: max(compact || header ? 36px : 44px, Theme.body-size * 2 + Theme.small-spacing);
     vertical-stretch: 0;
     horizontal-stretch: 1;
@@ -37,6 +38,6 @@ export component DiagnosticRow inherits Rectangle {
         Text { width: DiagnosticColumns.stage-width; text: entry.stage; color: Theme.muted-text; font-family: "monospace"; font-size: Theme.body-size; vertical-alignment: center; overflow: elide; }
         Text { width: DiagnosticColumns.direction-width; text: entry.direction; color: Theme.muted-text; font-family: "monospace"; font-size: Theme.body-size; vertical-alignment: center; }
         Text { width: DiagnosticColumns.correlation-width; text: entry.correlation; color: Theme.muted-text; font-family: "monospace"; font-size: Theme.body-size; vertical-alignment: center; overflow: elide; }
-        Text { horizontal-stretch: 1; text: entry.message; color: header ? Theme.muted-text : Theme.text; font-family: "monospace"; font-size: Theme.body-size; vertical-alignment: center; }
+        Text { width: message-width; text: entry.message; color: header ? Theme.muted-text : Theme.text; font-family: "monospace"; font-size: Theme.body-size; vertical-alignment: center; }
     }
 }

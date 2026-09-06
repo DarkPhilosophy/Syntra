@@ -295,8 +295,37 @@ impl Service {
             FrontendRequest::QueryLogSpec => {
                 self.notify_frontend(FrontendEvent::LogSpec(self.log_config.to_spec()));
             }
+            FrontendRequest::QueryPlugins => self.publish_plugins(),
+            FrontendRequest::SetPluginEnabled { id, enabled } => {
+                if self.plugins.set_enabled(&id, enabled) {
+                    log::info!(
+                        "plugin `{id}` {}",
+                        if enabled { "enabled" } else { "disabled" }
+                    );
+                } else {
+                    log::warn!("ignoring request for unknown plugin `{id}`");
+                }
+                // Reply either way: the client must never be left showing a
+                // state the daemon did not accept.
+                self.publish_plugins();
+            }
+            FrontendRequest::RestartPlugin { id } => {
+                if self.plugins.executable(&id).is_some() {
+                    self.plugins.record_restart(&id);
+                    log::info!("restarting plugin `{id}` on request");
+                } else {
+                    log::warn!("ignoring restart for unknown plugin `{id}`");
+                }
+                self.publish_plugins();
+            }
         }
         false
+    }
+
+    /// Sends the authoritative plugin list to every attached client.
+    pub(super) fn publish_plugins(&mut self) {
+        let snapshot = self.plugins.snapshot();
+        self.notify_frontend(FrontendEvent::Plugins(snapshot));
     }
 
     pub(super) fn save_config(&mut self) {

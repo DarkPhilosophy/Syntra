@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Syntra plugin manifest",
+  "description": "Describes a plugin process the Syntra daemon can supervise. The daemon discovers plugins by reading these manifests, so anything a user should see about a plugin belongs here rather than in the daemon.",
+  "type": "object",
+  "required": [
+    "manifest_version",
+    "protocol_version",
+    "id",
+    "name",
+    "executable",
+    "capabilities"
+  ],
+  "properties": {
+    "manifest_version": { "const": 1 },
+    "protocol_version": { "const": 1 },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "Stable identifier, unique per daemon."
+    },
+    "name": { "type": "string", "minLength": 1 },
+    "description": {
+      "type": "string",
+      "description": "One or two sentences describing the capability this plugin adds, shown in the plugin manager."
+    },
+    "version": {
+      "type": "string",
+      "description": "Plugin version, ideally semantic versioning."
+    },
+    "author": {
+      "type": "string",
+      "description": "Person or organisation responsible for the plugin."
+    },
+    "homepage": {
+      "type": "string",
+      "format": "uri",
+      "description": "Project or documentation page."
+    },
+    "source": {
+      "type": "string",
+      "format": "uri",
+      "description": "Where the source code lives, so a user can audit a plugin before trusting it with clipboard contents."
+    },
+    "update_url": {
+      "type": "string",
+      "format": "uri",
+      "description": "Where newer releases are published."
+    },
+    "license": {
+      "type": "string",
+      "description": "SPDX licence identifier."
+    },
+    "bundled": {
+      "type": "boolean",
+      "default": false,
+      "description": "True for plugins shipped with Syntra. Bundled plugins are updated with the application and cannot be uninstalled from the plugin manager."
+    },
+    "executable": { "type": "string", "minLength": 1 },
+    "args": { "type": "array", "items": { "type": "string" } },
+    "capabilities": {
+      "type": "object",
+      "required": ["clipboard_read", "paste", "cancel", "mime_types"],
+      "properties": {
+        "clipboard_read": { "type": "boolean" },
+        "paste": { "type": "boolean" },
+        "cancel": { "type": "boolean" },
+        "requires_live_mount": { "type": "boolean", "default": false },
+        "mime_types": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

@@ -44,5 +44,6 @@ mod history_sync;
 mod listen;
 mod manual_transfer;
 mod peer_profile;
+mod plugins;
 pub mod service;
 mod transfer_manager;

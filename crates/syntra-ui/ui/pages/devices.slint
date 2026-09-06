@@ -80,7 +80,7 @@ export component DevicesPage inherits Rectangle {
                 Text { text: Translations.tr("device-local"); color: Theme.text; font-size: Theme.body-size; font-weight: 600; }
                 HorizontalLayout {
                     spacing: Theme.small-spacing;
-                    Avatar { source: root.local-image; has-image: root.has-local-image; size: Theme.control-height; }
+                    Avatar { source: root.local-image; has-image: root.has-local-image; size: Theme.device-avatar-size; }
                     LineEdit { horizontal-stretch: 1; text: root.draft-local-name; edited(value) => { root.draft-local-name = value; } accepted => { root.update-local-name(self.text); } }
                     AppButton { text: root.save-label; clicked => { root.update-local-name(root.draft-local-name); } }
                 }

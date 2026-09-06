@@ -108,6 +108,11 @@ pub struct ConnectionAttemptView {
 #[derive(Clone, Debug, Default)]
 pub struct AppViewState {
     pub navigation: Navigation,
+    /// Plugins reported by the daemon, in its display order.
+    ///
+    /// Held verbatim: the daemon is authoritative, so the interface renders
+    /// this rather than deriving plugin state of its own.
+    pub plugins: Vec<syntra_api::PluginStatus>,
     pub clients: BTreeMap<ClientHandle, ClientView>,
     pub client_fingerprints: BTreeMap<ClientHandle, String>,
     pub peer_profiles: BTreeMap<String, Arc<syntra_api::DeviceProfile>>,
@@ -411,6 +416,7 @@ impl AppViewState {
                 self.transfers.insert((s.transfer_id, s.file_id), s);
             }
             FrontendEvent::LogSpec(spec) => self.diagnostics.log_spec = spec,
+            FrontendEvent::Plugins(plugins) => self.plugins = plugins,
         }
     }
 }

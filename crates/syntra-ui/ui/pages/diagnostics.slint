@@ -46,24 +46,39 @@ export component DiagnosticsPage inherits Rectangle {
             Text { text: "\{visible-count} events"; color: Theme.muted-text; font-size: Theme.body-size; horizontal-stretch: 1; horizontal-alignment: right; vertical-alignment: center; }
             AppButton { text: follow-tail ? "Following tail" : "Follow tail"; clicked => { root.follow-tail = !root.follow-tail; } }
         }
-        table-scroll := ScrollView {
+        horizontal-scroll := ScrollView {
             vertical-stretch: 1;
             viewport-width: max(self.visible-width, DiagnosticColumns.fixed-width + root.message-columns * Theme.body-size * 0.75);
-            viewport-height: table.preferred-height;
-            changed viewport-height => {
-                if root.follow-tail {
-                    self.viewport-y = min(0px, self.visible-height - self.viewport-height);
-                }
-            }
-            table := VerticalLayout {
-                width: table-scroll.viewport-width;
+            viewport-height: self.visible-height;
+            contents := VerticalLayout {
+                width: horizontal-scroll.viewport-width;
                 spacing: 0px;
                 alignment: start;
                 DiagnosticRow {
                     header: true;
+                    message-width: root.message-columns * Theme.body-size * 0.75;
                     entry: { timestamp: "Time", level: "Level", stage: "Stage", direction: "Direction", correlation: "Event", message: "Message" };
                 }
-                for entry in entries: DiagnosticRow { entry: entry; compact: root.compact; }
+                rows-scroll := ScrollView {
+                    vertical-stretch: 1;
+                    viewport-width: horizontal-scroll.viewport-width;
+                    viewport-height: rows.preferred-height;
+                    changed viewport-height => {
+                        if root.follow-tail {
+                            self.viewport-y = min(0px, self.visible-height - self.viewport-height);
+                        }
+                    }
+                    rows := VerticalLayout {
+                        width: rows-scroll.viewport-width;
+                        spacing: 0px;
+                        alignment: start;
+                        for entry in entries: DiagnosticRow {
+                            entry: entry;
+                            compact: root.compact;
+                            message-width: root.message-columns * Theme.body-size * 0.75;
+                        }
+                    }
+                }
             }
         }
     }

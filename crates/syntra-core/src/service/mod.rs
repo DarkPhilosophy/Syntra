@@ -141,6 +141,11 @@ pub struct Service {
     /// Live logging configuration, shared with the installed logger so a
     /// client can retune verbosity without restarting the daemon.
     log_config: syntra_log::LogConfig,
+    /// Plugins discovered from manifests, and their supervised state.
+    ///
+    /// The daemon is the master here: clients render this and request
+    /// changes, they never manage a plugin process themselves.
+    plugins: crate::plugins::PluginRegistry,
 }
 
 #[derive(Debug)]
@@ -342,6 +347,12 @@ impl Service {
             file_receive_settings,
             transfer_progress: HashMap::new(),
             log_config,
+            plugins: crate::plugins::PluginRegistry::discover(
+                &std::env::current_exe().unwrap_or_default(),
+                syntra_api::paths::config_dir()
+                    .ok()
+                    .map(|directory| directory.join("plugins")),
+            ),
         };
         match peer_profile::load_cached(
             service.config.config_path(),

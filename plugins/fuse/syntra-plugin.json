@@ -3,13 +3,21 @@
   "manifest_version": 1,
   "protocol_version": 1,
   "id": "fuse",
-  "name": "Read-only Clipboard FUSE",
+  "name": "Received files",
+  "description": "Exposes files offered by a peer as an ordinary folder, so pasting them in your file manager works exactly like pasting a local file. Runs separately because mounting is privileged and can block, which must never affect input forwarding.",
+  "version": "0.11.0",
+  "author": "Syntra contributors",
+  "homepage": "https://github.com/DarkPhilosophy/syntra",
+  "source": "https://github.com/DarkPhilosophy/syntra/tree/main/plugins/fuse",
+  "update_url": "https://github.com/DarkPhilosophy/syntra/releases",
+  "license": "GPL-3.0-or-later",
+  "bundled": true,
   "executable": "syntra-plugin-fuse",
   "capabilities": {
-    "clipboard_read": true,
+    "clipboard_read": false,
     "paste": true,
     "cancel": true,
-    "mime_types": ["text/uri-list", "x-special/gnome-copied-files"],
+    "mime_types": ["text/uri-list"],
     "requires_live_mount": true
   }
 }

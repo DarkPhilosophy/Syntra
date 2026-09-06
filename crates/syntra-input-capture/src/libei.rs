@@ -245,33 +245,38 @@ async fn update_barriers(
     Ok((barriers, id_map))
 }
 
-fn restore_token_path() -> PathBuf {
-    let cache_dir = env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
-        .expect("HOME or XDG_CACHE_HOME must be set");
-    cache_dir.join("syntra/input-capture.token")
+fn restore_token_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|dir| dir.join("syntra/input-capture.token"))
 }
 
 fn read_restore_token() -> Option<String> {
-    fs::read_to_string(restore_token_path())
-        .ok()
-        .map(|token| token.trim().to_string())
-        .filter(|token| !token.is_empty())
+    let path = restore_token_path()?;
+    match fs::read_to_string(path) {
+        Ok(token) => {
+            let token = token.trim().to_string();
+            (!token.is_empty()).then_some(token)
+        }
+        Err(error) => {
+            log::debug!("unable to read input-capture restore token: {error}");
+            None
+        }
+    }
 }
 
 fn write_restore_token(token: &str) {
-    let path = restore_token_path();
+    let Some(path) = restore_token_path() else {
+        log::debug!("configuration directory unavailable; restore token not saved");
+        return;
+    };
     let result = path
         .parent()
         .ok_or_else(|| io::Error::other("restore token path has no parent"))
         .and_then(fs::create_dir_all)
         .and_then(|()| fs::write(path, token));
     if let Err(error) = result {
-        log::warn!("failed to persist input-capture permission: {error}");
+        log::debug!("failed to persist input-capture restore token: {error}");
     }
 }
-
 async fn create_session(
     syntra_input_capture: &InputCapture,
 ) -> std::result::Result<(Session<InputCapture>, BitFlags<Capabilities>, bool), ashpd::Error> {

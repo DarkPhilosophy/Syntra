@@ -496,6 +496,91 @@ pub const MAX_DEVICE_PROFILE_NAME_BYTES: usize = 128;
 /// pushing an arbitrarily large image through the handshake.
 pub const MAX_PEER_AVATAR_DIMENSION: u32 = 128;
 
+/// Health of a supervised plugin process.
+#[derive(Debug, Eq, PartialEq, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginHealth {
+    /// Switched off by the user.
+    Disabled,
+    /// Declared by a manifest but its executable is missing.
+    NotInstalled,
+    /// Enabled and installed, but the process is not up yet.
+    Stopped,
+    /// Process launched, handshake not yet completed.
+    Starting,
+    /// Running and answering.
+    Healthy,
+    /// Running but not answering, or restarting repeatedly.
+    ///
+    /// Distinct from [`PluginHealth::Failed`] because the process still
+    /// exists: it is the state a user resolves by restarting the plugin.
+    Unresponsive,
+    /// Exited or refused to start.
+    Failed,
+}
+
+/// A plugin the daemon knows about, with the metadata from its manifest.
+///
+/// Plugins are separate processes supervised by the daemon, which is the
+/// single source of truth: a client renders this and asks the daemon to act,
+/// it never manages plugin processes itself.
+///
+/// The provenance fields matter because a plugin sees clipboard contents and
+/// file paths. A user deciding whether to trust one needs to know who wrote
+/// it and where its source is, so those are part of the contract rather than
+/// documentation.
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
+pub struct PluginStatus {
+    /// Stable identifier, unique per daemon.
+    pub id: String,
+    /// Human-readable name shown in the interface.
+    pub name: String,
+    /// What capability this plugin adds.
+    pub description: String,
+    /// Plugin version as declared in its manifest.
+    pub version: String,
+    /// Protocol version the plugin declares it speaks.
+    pub protocol_version: u32,
+    /// Protocol version this daemon speaks.
+    ///
+    /// A client compares the two: a plugin built against an older protocol
+    /// may still load but cannot be relied on, and the user should be warned
+    /// rather than left to debug silent misbehaviour.
+    pub supported_protocol_version: u32,
+    /// Health of the supervised process.
+    pub health: PluginHealth,
+    /// How many times the daemon has restarted this plugin in this session.
+    ///
+    /// Repeated restarts are the signature of a crash loop.
+    pub restarts: u32,
+    /// Person or organisation responsible for the plugin.
+    pub author: String,
+    /// Project or documentation page, if declared.
+    pub homepage: Option<String>,
+    /// Where the source can be audited, if declared.
+    pub source: Option<String>,
+    /// Where newer releases are published, if declared.
+    pub update_url: Option<String>,
+    /// SPDX licence identifier, if declared.
+    pub license: Option<String>,
+    /// MIME types the plugin declares it handles.
+    pub mime_types: Vec<String>,
+    /// Shipped with Syntra, so updated with it and not removable here.
+    pub bundled: bool,
+    /// Absolute path of the manifest this was read from.
+    pub manifest_path: String,
+    /// Absolute path of the executable the daemon would launch.
+    pub executable: String,
+    /// Whether that executable exists and is runnable.
+    pub installed: bool,
+    /// Whether the user has this plugin switched on.
+    pub enabled: bool,
+    /// Whether the process is running and has completed its handshake.
+    pub running: bool,
+    /// Why the plugin is unavailable, when it is.
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
 /// RGBA image data used as the authenticated device avatar.
 pub struct PeerAvatar {
@@ -674,6 +759,8 @@ pub enum FrontendEvent {
     /// Emitted after any change so every attached client agrees on the level
     /// currently in force.
     LogSpec(String),
+    /// Authoritative list of plugins and their current state.
+    Plugins(Vec<PluginStatus>),
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
@@ -791,6 +878,28 @@ pub enum FrontendRequest {
     SetLogSpec(String),
     /// Ask for the logging configuration currently in force.
     QueryLogSpec,
+    /// Ask for every plugin the daemon knows about.
+    QueryPlugins,
+    /// Switch a plugin on or off by [`PluginStatus::id`].
+    ///
+    /// Enabling starts the process; disabling stops it. The daemon replies
+    /// with a fresh [`FrontendEvent::Plugins`] either way, including on
+    /// failure, so the interface always shows the real state.
+    SetPluginEnabled {
+        /// Plugin identifier.
+        id: String,
+        /// Requested state.
+        enabled: bool,
+    },
+    /// Restart a plugin's process.
+    ///
+    /// The remedy for a plugin that is running but unresponsive, or stuck in
+    /// a stale state after a peer disappeared, without disturbing the rest of
+    /// the daemon.
+    RestartPlugin {
+        /// Plugin identifier.
+        id: String,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]

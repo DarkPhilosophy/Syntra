@@ -367,6 +367,14 @@ impl AndroidHostController {
             FrontendRequest::SetLogSpec(_) | FrontendRequest::QueryLogSpec => {
                 events.push(FrontendEvent::LogSpec(String::new()));
             }
+            // Android hosts the service in-process and cannot spawn helper
+            // processes, so the plugin list is always empty rather than
+            // unavailable.
+            FrontendRequest::QueryPlugins
+            | FrontendRequest::SetPluginEnabled { .. }
+            | FrontendRequest::RestartPlugin { .. } => {
+                events.push(FrontendEvent::Plugins(Vec::new()));
+            }
         }
         events
     }
