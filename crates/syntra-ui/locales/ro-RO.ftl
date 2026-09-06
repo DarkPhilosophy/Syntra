@@ -327,3 +327,26 @@ service-install-location-choose = Schimbă locația…
 service-install-location-reset = Revino la implicit
 overview-service-start = Pornește serviciul
 overview-service-starting = Pornește…
+# Etichetele filtrelor de diagnostic sunt separate de valorile stabile trimise către Rust.
+diagnostics-filter-level = Nivel
+diagnostics-filter-stage = Etapă
+diagnostics-filter-direction = Direcție
+
+# Diagnostics filter controls
+diagnostics-all-levels = Toate nivelurile
+diagnostics-all-stages = Toate etapele
+diagnostics-all-directions = Toate direcțiile
+diagnostics-level-info = Informativ
+diagnostics-level-warning = Avertisment
+diagnostics-level-error = Eroare
+diagnostics-stage-capture = Captură
+diagnostics-stage-network = Rețea
+diagnostics-stage-clipboard = Clipboard
+diagnostics-stage-authorization = Autorizare
+diagnostics-direction-local = Local
+diagnostics-direction-incoming = Primite
+diagnostics-direction-outgoing = Trimise
+diagnostics-column-time = Oră
+diagnostics-column-event = Eveniment
+diagnostics-column-message = Mesaj
+plugin-process = Proces

@@ -1673,6 +1673,11 @@ fn project_app_state(app: &AppWindow, state: &AppViewState, settings: &Presentat
                 running: plugin.running,
                 health: plugin_health_id(plugin.health).into(),
                 restarts: plugin.restarts as i32,
+                pid: plugin
+                    .pid
+                    .map(|pid| pid.to_string())
+                    .unwrap_or_default()
+                    .into(),
                 protocol_version: plugin.protocol_version as i32,
                 supported_protocol_version: plugin.supported_protocol_version as i32,
                 error: plugin.error.clone().unwrap_or_default().into(),

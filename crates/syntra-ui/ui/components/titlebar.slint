@@ -27,35 +27,112 @@ export component TitleBar inherits Rectangle {
     callback toggle-maximize-window();
     callback close-window();
     callback begin-window-drag();
-    height: 44px;
+    height: 52px;
     background: Theme.titlebar;
+
+    // The timer keeps the first click available for native window dragging,
+    // then recognises a second click in the platform double-click interval.
+    double-click-timer := Timer {
+        interval: 300ms;
+        triggered => { self.running = false; }
+    }
+
     Rectangle {
-        x: 0; y: 0; width: min(Theme.large-spacing + 136px, parent.width - 220px); height: parent.height;
+        x: 0;
+        y: 0;
+        width: min(Theme.large-spacing + 164px, parent.width - 220px);
+        height: parent.height;
         background: transparent;
-        
-        Image { source: @image-url("../assets/shell/syntra.svg"); width: 32px; height: 32px; x: Theme.large-spacing; y: (parent.height - self.height) / 2; image-fit: contain; }
-        Text { x: Theme.large-spacing + 40px; y: 0; width: max(0px, parent.width - self.x); height: parent.height; text: Translations.tr("app-title"); color: Theme.text; font-size: 20px; font-weight: 600; vertical-alignment: center; overflow: elide; }
-        TouchArea { changed pressed => { if (self.pressed) { root.begin-window-drag(); } } }
+
+        Image {
+            source: @image-url("../assets/shell/syntra.svg");
+            width: 40px;
+            height: 40px;
+            x: Theme.large-spacing;
+            y: (parent.height - self.height) / 2;
+            image-fit: contain;
+        }
+        Text {
+            x: Theme.large-spacing + 50px;
+            y: 0;
+            width: max(0px, parent.width - self.x);
+            height: parent.height;
+            text: Translations.tr("app-title");
+            color: Theme.text;
+            font-size: 22px;
+            font-weight: 600;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        TouchArea {
+            pointer-event(event) => {
+                if event.kind == PointerEventKind.down {
+                    root.begin-window-drag();
+                }
+            }
+            clicked => {
+                if (double-click-timer.running) {
+                    double-click-timer.running = false;
+                    root.toggle-maximize-window();
+                } else {
+                    double-click-timer.running = true;
+                }
+            }
+        }
     }
     TitleButton {
-        x: min(Theme.large-spacing + 136px, parent.width - 220px);
-        y: 0;
+        x: min(Theme.large-spacing + 164px, parent.width - 220px);
+        y: (parent.height - self.height) / 2;
         icon: root.sidebar-expanded ? @image-url("../assets/shell/chevron.svg") : @image-url("../assets/shell/expand.svg");
         label: root.sidebar-expanded ? Translations.tr("nav-collapse") : Translations.tr("nav-expand");
         clicked => { root.toggle-sidebar(); }
     }
     TouchArea {
-        x: min(Theme.large-spacing + 136px, parent.width - 220px) + 44px;
+        x: min(Theme.large-spacing + 164px, parent.width - 220px) + 44px;
         y: 0;
         width: max(0px, parent.width - 176px - self.x);
         height: parent.height;
-        changed pressed => { if (self.pressed) { root.begin-window-drag(); } }
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down {
+                root.begin-window-drag();
+            }
+        }
+        clicked => {
+            if (double-click-timer.running) {
+                double-click-timer.running = false;
+                root.toggle-maximize-window();
+            } else {
+                double-click-timer.running = true;
+            }
+        }
     }
     HorizontalLayout {
-        x: parent.width - 176px; y: 0; width: 176px; height: parent.height; spacing: 0;
-        TitleButton { icon: @image-url("../assets/shell/hide-to-tray.svg"); label: Translations.tr("window-hide-to-tray"); enabled: hide-to-tray-enabled; clicked => { root.hide-to-tray(); } }
-        TitleButton { icon: @image-url("../assets/shell/minimize.svg"); label: Translations.tr("window-minimize"); clicked => { root.minimize-window(); } }
-        TitleButton { icon: maximized ? @image-url("../assets/shell/restore.svg") : @image-url("../assets/shell/maximize.svg"); label: maximized ? Translations.tr("window-restore") : Translations.tr("window-maximize"); clicked => { root.toggle-maximize-window(); } }
-        TitleButton { icon: @image-url("../assets/shell/close.svg"); label: Translations.tr("window-close"); danger: true; clicked => { root.close-window(); } }
+        x: parent.width - 176px;
+        y: (parent.height - self.height) / 2;
+        width: 176px;
+        height: 44px;
+        spacing: 0;
+        TitleButton {
+            icon: @image-url("../assets/shell/hide-to-tray.svg");
+            label: Translations.tr("window-hide-to-tray");
+            enabled: hide-to-tray-enabled;
+            clicked => { root.hide-to-tray(); }
+        }
+        TitleButton {
+            icon: @image-url("../assets/shell/minimize.svg");
+            label: Translations.tr("window-minimize");
+            clicked => { root.minimize-window(); }
+        }
+        TitleButton {
+            icon: maximized ? @image-url("../assets/shell/restore.svg") : @image-url("../assets/shell/maximize.svg");
+            label: maximized ? Translations.tr("window-restore") : Translations.tr("window-maximize");
+            clicked => { root.toggle-maximize-window(); }
+        }
+        TitleButton {
+            icon: @image-url("../assets/shell/close.svg");
+            label: Translations.tr("window-close");
+            danger: true;
+            clicked => { root.close-window(); }
+        }
     }
 }

@@ -102,6 +102,9 @@ pub(crate) struct PluginRegistry {
     restarts: HashMap<String, u32>,
     /// Most recent failure reported for a plugin.
     failures: HashMap<String, String>,
+    /// Process id of the running plugin, so the interface can prove the
+    /// entry corresponds to a real process rather than a file on disk.
+    pids: HashMap<String, u32>,
 }
 
 impl PluginRegistry {
@@ -135,6 +138,7 @@ impl PluginRegistry {
             starting: HashMap::new(),
             restarts: HashMap::new(),
             failures: HashMap::new(),
+            pids: HashMap::new(),
         }
     }
 
@@ -176,10 +180,11 @@ impl PluginRegistry {
         }
     }
 
-    /// Records that a plugin's process has been launched.
-    pub(crate) fn set_starting(&mut self, id: &str) {
+    /// Records that a plugin's process has been launched, with its pid.
+    pub(crate) fn set_starting(&mut self, id: &str, pid: u32) {
         self.starting.insert(id.to_owned(), true);
         self.running.insert(id.to_owned(), false);
+        self.pids.insert(id.to_owned(), pid);
     }
 
     /// Records a failure reported for a plugin.
@@ -187,12 +192,20 @@ impl PluginRegistry {
         self.failures.insert(id.to_owned(), reason.into());
         self.running.insert(id.to_owned(), false);
         self.starting.insert(id.to_owned(), false);
+        // The process is gone; keeping its pid would advertise a dead one.
+        self.pids.remove(id);
     }
 
-    /// Counts a restart, used to recognise a crash loop.
+    /// Counts a restart requested by a client, used to spot a crash loop.
+    ///
+    /// The pid is cleared rather than kept: the old process is on its way out
+    /// and the supervisor reports the new one when it launches, so showing
+    /// the previous pid meanwhile would be a lie.
     pub(crate) fn record_restart(&mut self, id: &str) {
         *self.restarts.entry(id.to_owned()).or_default() += 1;
-        self.set_starting(id);
+        self.starting.insert(id.to_owned(), true);
+        self.running.insert(id.to_owned(), false);
+        self.pids.remove(id);
     }
 
     /// Health of one plugin, derived from user intent and process state.
@@ -235,6 +248,7 @@ impl PluginRegistry {
                     protocol_version: plugin.manifest.protocol_version,
                     supported_protocol_version: SUPPORTED_PROTOCOL_VERSION,
                     health: self.health(&plugin.manifest.id, installed, enabled),
+                    pid: self.pids.get(&plugin.manifest.id).copied(),
                     restarts: self.restarts.get(&plugin.manifest.id).copied().unwrap_or(0),
                     author: plugin.manifest.author.clone(),
                     homepage: plugin.manifest.homepage.clone(),

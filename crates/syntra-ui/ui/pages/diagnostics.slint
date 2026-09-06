@@ -30,21 +30,67 @@ export component DiagnosticsPage inherits Rectangle {
     VerticalLayout {
         spacing: Theme.spacing;
         padding: Theme.content-gap;
-        Text { text: "Diagnostics"; color: Theme.text; font-size: Theme.title-size; }
         HorizontalLayout {
-            spacing: 8px;
-            ComboBox { model: ["all", "info", "warning", "error"]; current-value: selected-level; selected(value) => { root.level-filter-changed(value); } }
-            ComboBox { model: ["all", "capture", "network", "clipboard", "authorization"]; current-value: selected-stage; selected(value) => { root.stage-filter-changed(value); } }
-            ComboBox { model: ["all", "local", "incoming", "outgoing"]; current-value: selected-direction; selected(value) => { root.direction-filter-changed(value); } }
-            LineEdit { horizontal-stretch: 1; placeholder-text: "Filter messages"; text: text-filter; edited => { root.text-filter-changed(self.text); } }
-            AppButton { text: paused ? "Resume" : "Pause"; clicked => { root.pause-toggled(!paused); } }
-            AppButton { text: "Clear"; clicked => { root.clear-requested(); } }
+            spacing: Theme.small-spacing;
+            Text { text: Translations.tr("navigation-diagnostics"); color: Theme.text; font-size: Theme.title-size; vertical-alignment: center; horizontal-stretch: 1; }
+            LineEdit { width: 0px; horizontal-stretch: 1; placeholder-text: Translations.tr("diagnostics-filter"); text: text-filter; edited => { root.text-filter-changed(self.text); } }
+        }
+        HorizontalLayout {
+            spacing: Theme.small-spacing;
+            Rectangle {
+                horizontal-stretch: 1;
+                min-width: 0px;
+                VerticalLayout {
+                    spacing: 2px;
+                    Text { text: Translations.tr("diagnostics-filter-level"); color: Theme.muted-text; font-size: Theme.caption-size; }
+                    ComboBox {
+                        width: 0px;
+                        horizontal-stretch: 1;
+                        model: [Translations.tr("diagnostics-all-levels"), Translations.tr("diagnostics-level-info"), Translations.tr("diagnostics-level-warning"), Translations.tr("diagnostics-level-error")];
+                        current-index: selected-level == "all" ? 0 : selected-level == "info" ? 1 : selected-level == "warning" ? 2 : 3;
+                        selected(value) => { root.level-filter-changed(self.current-index == 0 ? "all" : self.current-index == 1 ? "info" : self.current-index == 2 ? "warning" : "error"); }
+                    }
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+                min-width: 0px;
+                VerticalLayout {
+                    spacing: 2px;
+                    Text { text: Translations.tr("diagnostics-filter-stage"); color: Theme.muted-text; font-size: Theme.caption-size; }
+                    ComboBox {
+                        width: 0px;
+                        horizontal-stretch: 1;
+                        model: [Translations.tr("diagnostics-all-stages"), Translations.tr("diagnostics-stage-capture"), Translations.tr("diagnostics-stage-network"), Translations.tr("diagnostics-stage-clipboard"), Translations.tr("diagnostics-stage-authorization")];
+                        current-index: selected-stage == "all" ? 0 : selected-stage == "capture" ? 1 : selected-stage == "network" ? 2 : selected-stage == "clipboard" ? 3 : 4;
+                        selected(value) => { root.stage-filter-changed(self.current-index == 0 ? "all" : self.current-index == 1 ? "capture" : self.current-index == 2 ? "network" : self.current-index == 3 ? "clipboard" : "authorization"); }
+                    }
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+                min-width: 0px;
+                VerticalLayout {
+                    spacing: 2px;
+                    Text { text: Translations.tr("diagnostics-filter-direction"); color: Theme.muted-text; font-size: Theme.caption-size; }
+                    ComboBox {
+                        width: 0px;
+                        horizontal-stretch: 1;
+                        model: [Translations.tr("diagnostics-all-directions"), Translations.tr("diagnostics-direction-local"), Translations.tr("diagnostics-direction-incoming"), Translations.tr("diagnostics-direction-outgoing")];
+                        current-index: selected-direction == "all" ? 0 : selected-direction == "local" ? 1 : selected-direction == "incoming" ? 2 : 3;
+                        selected(value) => { root.direction-filter-changed(self.current-index == 0 ? "all" : self.current-index == 1 ? "local" : self.current-index == 2 ? "incoming" : "outgoing"); }
+                    }
+                }
+            }
         }
         HorizontalLayout {
             height: 30px;
-            Text { text: paused ? "Paused — new events are retained" : "Live"; color: paused ? Theme.warning : Theme.success; font-size: Theme.body-size; vertical-alignment: center; }
-            Text { text: "\{visible-count} events"; color: Theme.muted-text; font-size: Theme.body-size; horizontal-stretch: 1; horizontal-alignment: right; vertical-alignment: center; }
-            AppButton { text: follow-tail ? "Following tail" : "Follow tail"; clicked => { root.follow-tail = !root.follow-tail; } }
+            spacing: Theme.small-spacing;
+            Text { text: paused ? Translations.tr("diagnostics-paused") : Translations.tr("diagnostics-live"); color: paused ? Theme.warning : Theme.success; font-size: Theme.body-size; vertical-alignment: center; horizontal-stretch: 1; }
+            Text { text: "\{visible-count} events"; color: Theme.muted-text; font-size: Theme.body-size; vertical-alignment: center; }
+            AppButton { text: follow-tail ? Translations.tr("diagnostics-following-tail") : Translations.tr("diagnostics-follow-tail"); clicked => { root.follow-tail = !root.follow-tail; } }
+            AppButton { text: paused ? Translations.tr("diagnostics-resume") : Translations.tr("diagnostics-pause"); clicked => { root.pause-toggled(!paused); } }
+            AppButton { text: Translations.tr("diagnostics-clear"); clicked => { root.clear-requested(); } }
         }
         horizontal-scroll := ScrollView {
             vertical-stretch: 1;
@@ -65,7 +111,7 @@ export component DiagnosticsPage inherits Rectangle {
                 DiagnosticRow {
                     header: true;
                     message-width: horizontal-scroll.message-width;
-                    entry: { timestamp: "Time", level: "Level", stage: "Stage", direction: "Direction", correlation: "Event", message: "Message" };
+                    entry: { timestamp: Translations.tr("diagnostics-column-time"), level: Translations.tr("diagnostics-filter-level"), stage: Translations.tr("diagnostics-filter-stage"), direction: Translations.tr("diagnostics-filter-direction"), correlation: Translations.tr("diagnostics-column-event"), message: Translations.tr("diagnostics-column-message") };
                 }
                 ListView {
                     // ListView virtualises: only rows inside the viewport are

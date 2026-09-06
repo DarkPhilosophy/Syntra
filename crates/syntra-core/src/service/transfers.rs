@@ -27,8 +27,8 @@ impl Service {
         match event {
             // Lifecycle notices drive the health the plugin manager shows;
             // without them every plugin would read as stopped.
-            ManagerEvent::Started(adapter) => {
-                self.plugins.set_starting(plugin_id(&adapter));
+            ManagerEvent::Started(adapter, pid) => {
+                self.plugins.set_starting(plugin_id(&adapter), pid);
                 self.publish_plugins();
             }
             ManagerEvent::Ready(adapter) => {

@@ -74,9 +74,13 @@ fn configure_backend_once() -> BackendConfiguration {
         // event loop onto X11 there would route the whole UI through
         // XWayland, and fail outright when XWayland is unavailable or its
         // authority cookie is stale.
+        // winit 0.30 exposes file-drop event variants, but its Wayland backend
+        // does not bind the data-device protocol, so those events never arrive.
+        // Keep the dashboard on Wayland rather than forcing the whole UI through
+        // XWayland, and tell users how to transfer a file instead.
         if std::env::var_os("WAYLAND_DISPLAY").is_some_and(|value| !value.is_empty()) {
             return BackendConfiguration::Skipped(
-                "native file drop uses the Wayland backend's own drag handling".into(),
+                "native file drop is unavailable on Wayland: winit 0.30 does not implement the Wayland data-device protocol; use your file manager's Copy action instead".into(),
             );
         }
 

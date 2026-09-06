@@ -25,6 +25,7 @@ export struct PluginEntry {
     running: bool,
     health: string,
     restarts: int,
+    pid: string,
     protocol-version: int,
     supported-protocol-version: int,
     error: string,
@@ -117,6 +118,12 @@ component PluginCard inherits Rectangle {
                 font-size: Theme.caption-size;
             }
             Rectangle { horizontal-stretch: 1; }
+            // Proof the entry is a live process, not a manifest on disk.
+            if plugin.pid != "": Text {
+                text: Translations.tr("plugin-process") + " " + plugin.pid;
+                color: Theme.muted-text;
+                font-size: Theme.caption-size;
+            }
             if plugin.restarts > 0: Text {
                 text: Translations.tr("plugin-restarts") + ": " + plugin.restarts;
                 color: Theme.warning;

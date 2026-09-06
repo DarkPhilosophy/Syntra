@@ -70,7 +70,11 @@ pub(crate) enum ManagerCommand {
 #[derive(Debug)]
 pub(crate) enum ManagerEvent {
     /// The plugin process has been launched but has not handshaken yet.
-    Started(AdapterId),
+    ///
+    /// Carries the process id so a user can confirm in a task manager that
+    /// the plugin they see listed is a real running process, rather than an
+    /// entry inferred from a file sitting in a directory.
+    Started(AdapterId, u32),
     /// The plugin completed its handshake and is answering.
     Ready(AdapterId),
     Message {
@@ -639,7 +643,7 @@ async fn spawn_adapter(
     };
     let generation = state.next_generation;
     state.next_generation = state.next_generation.wrapping_add(1).max(1);
-    let runtime = launch(
+    let (runtime, pid) = launch(
         executable,
         adapter.clone(),
         generation,
@@ -647,7 +651,7 @@ async fn spawn_adapter(
     )
     .await?;
     state.processes.insert(adapter.clone(), runtime);
-    emit(events, ManagerEvent::Started(adapter.clone())).await;
+    emit(events, ManagerEvent::Started(adapter.clone(), pid)).await;
     Ok(())
 }
 
@@ -656,7 +660,7 @@ async fn launch(
     adapter: AdapterId,
     generation: u64,
     events: mpsc::Sender<ProcessEvent>,
-) -> Result<AdapterRuntime, String> {
+) -> Result<(AdapterRuntime, u32), String> {
     let mut child = Command::new(&executable)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -664,6 +668,10 @@ async fn launch(
         .kill_on_drop(true)
         .spawn()
         .map_err(|error| format!("failed to spawn {executable:?}: {error}"))?;
+    // Recorded before the handles are taken: once the child is moved into the
+    // runtime the id is no longer reachable, and the interface needs it to
+    // prove the plugin is a real process rather than an inferred entry.
+    let pid = child.id().unwrap_or_default();
     let stdin = child
         .stdin
         .take()
@@ -763,13 +771,16 @@ async fn launch(
         supervise_child(&mut child, terminate_rx, wait_adapter, generation, events).await;
     });
 
-    Ok(AdapterRuntime {
-        generation,
-        writer,
-        terminate: Some(terminate),
-        tasks: vec![writer_task, reader_task, stderr_task, waiter_task],
-        ready: false,
-    })
+    Ok((
+        AdapterRuntime {
+            generation,
+            writer,
+            terminate: Some(terminate),
+            tasks: vec![writer_task, reader_task, stderr_task, waiter_task],
+            ready: false,
+        },
+        pid,
+    ))
 }
 
 async fn supervise_child(

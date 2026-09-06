@@ -327,3 +327,26 @@ service-install-location-choose = Change location…
 service-install-location-reset = Use default
 overview-service-start = Start service
 overview-service-starting = Starting…
+# Diagnostics filter labels are separate from their stable Rust filter values.
+diagnostics-filter-level = Level
+diagnostics-filter-stage = Stage
+diagnostics-filter-direction = Direction
+
+# Diagnostics filter controls
+diagnostics-all-levels = All levels
+diagnostics-all-stages = All stages
+diagnostics-all-directions = All directions
+diagnostics-level-info = Info
+diagnostics-level-warning = Warning
+diagnostics-level-error = Error
+diagnostics-stage-capture = Capture
+diagnostics-stage-network = Network
+diagnostics-stage-clipboard = Clipboard
+diagnostics-stage-authorization = Authorisation
+diagnostics-direction-local = Local
+diagnostics-direction-incoming = Incoming
+diagnostics-direction-outgoing = Outgoing
+diagnostics-column-time = Time
+diagnostics-column-event = Event
+diagnostics-column-message = Message
+plugin-process = Process

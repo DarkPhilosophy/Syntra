@@ -591,6 +591,12 @@ pub struct PluginStatus {
     pub supported_protocol_version: u32,
     /// Health of the supervised process.
     pub health: PluginHealth,
+    /// Process id while the plugin is running.
+    ///
+    /// Present only for a live process, so an interface can show that the
+    /// entry corresponds to something actually running rather than a
+    /// manifest found on disk.
+    pub pid: Option<u32>,
     /// How many times the daemon has restarted this plugin in this session.
     ///
     /// Repeated restarts are the signature of a crash loop.
