@@ -48,18 +48,28 @@ export component DiagnosticsPage inherits Rectangle {
         }
         horizontal-scroll := ScrollView {
             vertical-stretch: 1;
-            viewport-width: max(self.visible-width, DiagnosticColumns.fixed-width + root.message-columns * Theme.body-size * 0.75);
+            // The message column is sized from the longest message, but a
+            // single long line must not stretch the table to tens of
+            // thousands of pixels: past this the column scrolls instead.
+            property <length> message-width: clamp(
+                root.message-columns * Theme.body-size * 0.55,
+                240px,
+                1600px
+            );
+            viewport-width: max(self.visible-width, DiagnosticColumns.fixed-width + self.message-width);
             viewport-height: self.visible-height;
             contents := VerticalLayout {
                 width: horizontal-scroll.viewport-width;
+                height: horizontal-scroll.viewport-height;
                 spacing: 0px;
-                alignment: start;
                 DiagnosticRow {
                     header: true;
-                    message-width: root.message-columns * Theme.body-size * 0.75;
+                    message-width: horizontal-scroll.message-width;
                     entry: { timestamp: "Time", level: "Level", stage: "Stage", direction: "Direction", correlation: "Event", message: "Message" };
                 }
                 rows-scroll := ScrollView {
+                    // Takes every remaining pixel, so the rows area is the
+                    // part that scrolls while the header above stays put.
                     vertical-stretch: 1;
                     viewport-width: horizontal-scroll.viewport-width;
                     viewport-height: rows.preferred-height;
@@ -75,7 +85,7 @@ export component DiagnosticsPage inherits Rectangle {
                         for entry in entries: DiagnosticRow {
                             entry: entry;
                             compact: root.compact;
-                            message-width: root.message-columns * Theme.body-size * 0.75;
+                            message-width: horizontal-scroll.message-width;
                         }
                     }
                 }

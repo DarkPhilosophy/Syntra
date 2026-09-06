@@ -257,6 +257,33 @@ where
         timer
     };
 
+    // Latest state awaiting projection. Only the newest matters, so a burst
+    // collapses to one rebuild rather than one per event.
+    let pending_projection: Arc<Mutex<Option<(AppViewState, PresentationSettings)>>> =
+        Arc::new(Mutex::new(None));
+    let _projection_timer = {
+        let weak = app.as_weak();
+        let pending = Arc::clone(&pending_projection);
+        let timer = Timer::default();
+        timer.start(
+            TimerMode::Repeated,
+            // Fast enough to feel immediate, slow enough that a chatty peer
+            // cannot monopolise the UI thread.
+            std::time::Duration::from_millis(60),
+            move || {
+                let Some((snapshot, presentation)) =
+                    pending.lock().ok().and_then(|mut slot| slot.take())
+                else {
+                    return;
+                };
+                if let Some(app) = weak.upgrade() {
+                    project_app_state(&app, &snapshot, &presentation);
+                }
+            },
+        );
+        timer
+    };
+    let pending_projection = Arc::clone(&pending_projection);
     let (request_tx, request_rx) = mpsc::channel::<FrontendRequest>();
     let request_error_window = app.as_weak();
     let request_error_state = Arc::clone(&state);
@@ -337,6 +364,14 @@ where
                     }
                     Err(_) => PresentationSettings::default(),
                 };
+                // Only the cheap, order-sensitive work runs per event. The
+                // full projection rebuilds every model and is handed to a
+                // timer instead: a burst of events used to rebuild the whole
+                // interface once per event, which is what made History and
+                // the window feel like they were reloading constantly.
+                if let Ok(mut slot) = pending_projection.lock() {
+                    *slot = Some((snapshot, presentation));
+                }
                 let _ = event_window.upgrade_in_event_loop(move |app| {
                     let global = app.global::<AppState>();
                     if settings_saved {
@@ -350,7 +385,6 @@ where
                     {
                         global.set_manual_offer_busy(false);
                     }
-                    project_app_state(&app, &snapshot, &presentation);
                     if incoming_offer && global.get_manual_offer_visible() {
                         let _ = app.show();
                     }
@@ -1031,7 +1065,8 @@ fn project_live_diagnostics(
         .map(|entry| entry.message.len())
         .max()
         .unwrap_or(80)
-        .clamp(80, 4_000) as i32;
+        // One pathological line must not widen the table for every row.
+        .clamp(80, 400) as i32;
     global.set_diagnostics_message_columns(message_columns);
     global.set_diagnostics(ModelRc::new(VecModel::from(entries)));
     global.set_diagnostics_paused(store.filter.paused);
