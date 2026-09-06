@@ -33,6 +33,12 @@ impl Service {
                 self.plugins.set_starting(plugin_id(&adapter), pid);
                 self.publish_plugins();
             }
+            ManagerEvent::Stopped(adapter) => {
+                // A deliberate stop clears the process state without
+                // recording a failure the user would have to dismiss.
+                self.plugins.set_stopped(plugin_id(&adapter));
+                self.publish_plugins();
+            }
             ManagerEvent::Ready(adapter) => {
                 self.plugins.set_running(plugin_id(&adapter), true);
                 self.publish_plugins();

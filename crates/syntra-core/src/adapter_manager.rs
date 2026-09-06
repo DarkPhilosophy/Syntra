@@ -64,7 +64,43 @@ pub(crate) enum ManagerCommand {
         adapter: AdapterId,
         transfer_id: String,
     },
+    /// Stop a plugin's processes and do not relaunch them.
+    ///
+    /// Used when a client disables a plugin: the entry must stop being a
+    /// running process, not merely be labelled as off.
+    StopPlugin {
+        plugin: PluginTarget,
+    },
+    /// Stop and immediately relaunch a plugin's processes.
+    ///
+    /// The remedy for one that is running but unresponsive.
+    RestartPlugin {
+        plugin: PluginTarget,
+    },
     Shutdown,
+}
+
+/// A plugin as a client addresses it, rather than as the supervisor keys it.
+///
+/// The supervisor keys FUSE adapters per transfer, but a client acts on the
+/// plugin as a whole, so a single request may affect several processes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PluginTarget {
+    /// The file-clipboard plugin.
+    Clipboard,
+    /// Every FUSE process, whichever transfers they serve.
+    Fuse,
+}
+
+impl PluginTarget {
+    /// Whether `adapter` belongs to this plugin.
+    fn matches(self, adapter: &AdapterId) -> bool {
+        matches!(
+            (self, adapter),
+            (PluginTarget::Clipboard, AdapterId::Gtk)
+                | (PluginTarget::Fuse, AdapterId::Fuse { .. })
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -77,6 +113,12 @@ pub(crate) enum ManagerEvent {
     Started(AdapterId, u32),
     /// The plugin completed its handshake and is answering.
     Ready(AdapterId),
+    /// The plugin was stopped because a client asked for it.
+    ///
+    /// Distinct from `Exited`: a deliberate stop is not a failure, and
+    /// reporting it as one would show a red state for an action the user
+    /// just took.
+    Stopped(AdapterId),
     Message {
         adapter: AdapterId,
         message: Message,
@@ -270,6 +312,19 @@ async fn run_manager(
     }
 }
 
+/// Every live adapter belonging to `plugin`.
+///
+/// Collected before mutating, because stopping an adapter removes it from the
+/// map being iterated.
+fn matching_adapters(state: &State, plugin: PluginTarget) -> Vec<AdapterId> {
+    state
+        .processes
+        .keys()
+        .filter(|adapter| plugin.matches(adapter))
+        .cloned()
+        .collect()
+}
+
 async fn handle_command(
     command: ManagerCommand,
     state: &mut State,
@@ -399,6 +454,31 @@ async fn handle_command(
                 return;
             }
             send_ready(state, &adapter, Message::Cancel { transfer_id }, events).await;
+        }
+        ManagerCommand::StopPlugin { plugin } => {
+            for adapter in matching_adapters(state, plugin) {
+                // Marked terminal first, so the exit is not treated as a
+                // crash and does not trigger the relaunch path.
+                state.terminal.insert(adapter.clone());
+                stop_adapter(state, &adapter).await;
+                emit(events, ManagerEvent::Stopped(adapter)).await;
+            }
+        }
+        ManagerCommand::RestartPlugin { plugin } => {
+            for adapter in matching_adapters(state, plugin) {
+                state.terminal.insert(adapter.clone());
+                stop_adapter(state, &adapter).await;
+            }
+            // Only the clipboard plugin is long-running. A FUSE process
+            // exists solely for a transfer, so relaunching one outside a
+            // transfer would create a process with nothing to serve.
+            if plugin == PluginTarget::Clipboard && !state.stopping {
+                if let Err(reason) =
+                    spawn_adapter(state, AdapterId::Gtk, process_events, events).await
+                {
+                    reject(events, Some(AdapterId::Gtk), reason).await;
+                }
+            }
         }
         ManagerCommand::Shutdown => state.stopping = true,
     }

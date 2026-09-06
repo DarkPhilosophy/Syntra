@@ -203,6 +203,17 @@ impl PluginRegistry {
         self.pids.insert(id.to_owned(), pid);
     }
 
+    /// Records that a plugin stopped because it was asked to.
+    ///
+    /// Clears the process state without a failure, so the interface shows a
+    /// stopped plugin rather than a broken one.
+    pub(crate) fn set_stopped(&mut self, id: &str) {
+        self.running.insert(id.to_owned(), false);
+        self.starting.remove(id);
+        self.failures.remove(id);
+        self.pids.remove(id);
+    }
+
     /// Records a failure reported for a plugin.
     pub(crate) fn set_failed(&mut self, id: &str, reason: impl Into<String>) {
         self.failures.insert(id.to_owned(), reason.into());

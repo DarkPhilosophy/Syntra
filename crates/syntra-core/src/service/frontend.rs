@@ -5,6 +5,19 @@
 //! an outcome: it applies the change, then reports what happened.
 
 use super::*;
+/// Maps a plugin identifier onto the processes the supervisor owns for it.
+///
+/// Returns `None` for a plugin the supervisor does not manage, so a request
+/// naming one is refused rather than silently doing nothing.
+fn plugin_target(id: &str) -> Option<crate::adapter_manager::PluginTarget> {
+    use crate::adapter_manager::PluginTarget;
+    match id {
+        crate::plugins::CLIPBOARD_PLUGIN_ID => Some(PluginTarget::Clipboard),
+        crate::plugins::FUSE_PLUGIN_ID => Some(PluginTarget::Fuse),
+        _ => None,
+    }
+}
+
 use std::time::Instant;
 /// Infers how this process was started.
 ///
@@ -324,6 +337,17 @@ impl Service {
             FrontendRequest::QueryPlugins => self.publish_plugins(),
             FrontendRequest::SetPluginEnabled { id, enabled } => {
                 if self.plugins.set_enabled(&id, enabled) {
+                    // Recording the preference is not enough: disabling must
+                    // actually stop the process, and enabling must start one,
+                    // or the control is a label with no effect.
+                    match (plugin_target(&id), enabled) {
+                        (Some(target), false) => {
+                            self.send_plugin_command(ManagerCommand::StopPlugin { plugin: target })
+                        }
+                        (Some(target), true) => self
+                            .send_plugin_command(ManagerCommand::RestartPlugin { plugin: target }),
+                        (None, _) => {}
+                    }
                     log::info!(
                         "plugin `{id}` {}",
                         if enabled { "enabled" } else { "disabled" }
@@ -336,11 +360,14 @@ impl Service {
                 self.publish_plugins();
             }
             FrontendRequest::RestartPlugin { id } => {
-                if self.plugins.executable(&id).is_some() {
-                    self.plugins.record_restart(&id);
-                    log::info!("restarting plugin `{id}` on request");
-                } else {
-                    log::warn!("ignoring restart for unknown plugin `{id}`");
+                match plugin_target(&id) {
+                    Some(target) if self.plugins.is_enabled(&id) => {
+                        self.plugins.record_restart(&id);
+                        self.send_plugin_command(ManagerCommand::RestartPlugin { plugin: target });
+                        log::info!("restarting plugin `{id}` on request");
+                    }
+                    Some(_) => log::info!("ignoring restart for disabled plugin `{id}`"),
+                    None => log::warn!("ignoring restart for unknown plugin `{id}`"),
                 }
                 self.publish_plugins();
             }
@@ -352,6 +379,21 @@ impl Service {
     pub(super) fn publish_plugins(&mut self) {
         let snapshot = self.plugins.snapshot();
         self.notify_frontend(FrontendEvent::Plugins(snapshot));
+    }
+
+    /// Forwards a command to the plugin supervisor, if one is running.
+    ///
+    /// A failure is recorded against the plugin rather than swallowed: a
+    /// control that silently does nothing is exactly what this change exists
+    /// to remove.
+    fn send_plugin_command(&mut self, command: ManagerCommand) {
+        let Some(manager) = self.adapter_manager.as_ref() else {
+            log::warn!("plugin supervisor is not running; command ignored");
+            return;
+        };
+        if let Err(error) = manager.try_send(command) {
+            log::warn!("could not reach the plugin supervisor: {error}");
+        }
     }
 
     /// Reports which daemon is answering and how it was started.
