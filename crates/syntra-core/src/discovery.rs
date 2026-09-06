@@ -1,6 +1,6 @@
-use syntra_api::DiscoveredPeer;
 use mdns_sd::{Receiver, ScopedIp, ServiceDaemon, ServiceEvent, ServiceInfo};
 use std::{collections::HashMap, net::IpAddr, sync::mpsc as std_mpsc, thread, time::Duration};
+use syntra_api::DiscoveredPeer;
 use tokio::sync::watch;
 
 pub const SERVICE_TYPE: &str = "_syntra._udp.local.";

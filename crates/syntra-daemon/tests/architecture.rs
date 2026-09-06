@@ -38,13 +38,21 @@ fn workspace_packages() -> Vec<Package> {
         .expect("metadata contains packages");
     let local: BTreeSet<String> = packages
         .iter()
-        .map(|package| package["name"].as_str().expect("package has a name").to_owned())
+        .map(|package| {
+            package["name"]
+                .as_str()
+                .expect("package has a name")
+                .to_owned()
+        })
         .collect();
 
     packages
         .iter()
         .map(|package| {
-            let name = package["name"].as_str().expect("package has a name").to_owned();
+            let name = package["name"]
+                .as_str()
+                .expect("package has a name")
+                .to_owned();
             let deps = package["dependencies"]
                 .as_array()
                 .expect("package has a dependency list")
@@ -101,7 +109,11 @@ fn dashboard_does_not_depend_on_the_daemon_core() {
     let packages = workspace_packages();
     let reachable = reachable_from(&packages, "syntra-app");
 
-    for forbidden in ["syntra-core", "syntra-input-capture", "syntra-input-emulation"] {
+    for forbidden in [
+        "syntra-core",
+        "syntra-input-capture",
+        "syntra-input-emulation",
+    ] {
         assert!(
             !reachable.contains(forbidden),
             "syntra-app must not depend on {forbidden}; \

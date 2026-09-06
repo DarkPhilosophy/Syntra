@@ -1,6 +1,23 @@
-use syntra_input_event::{Event as InputEvent, KeyboardEvent, PointerEvent};
+//! The Syntra peer protocol: what two devices say to each other.
+//!
+//! This is distinct from [`syntra_api`], which is the local contract between
+//! a daemon and its clients. This crate is the wire format between machines,
+//! carried over UDP for events and TCP for connection setup, under DTLS.
+//!
+//! [`ProtoEvent`] is the message set. Encoding is explicit rather than
+//! derived: the peer on the other end may be a different version on a
+//! different architecture, so field order, widths and endianness are pinned
+//! by hand and covered by round-trip tests.
+//!
+//! # Compatibility
+//!
+//! `ProtoEvent::Hello` carries the protocol version and build identity, and
+//! peers negotiate from it. Any change to an existing message's encoding
+//! requires a version bump: adding a variant is safe, reshaping one is not.
+
 use num_enum::{IntoPrimitive, TryFromPrimitive, TryFromPrimitiveError};
 use std::fmt::{Debug, Display, Formatter};
+use syntra_input_event::{Event as InputEvent, KeyboardEvent, PointerEvent};
 use thiserror::Error;
 
 /// Largest datagram accepted by the application protocol.
@@ -70,7 +87,6 @@ pub const MAX_HISTORY_BOUNDARY_ENTRIES: usize = 100;
 pub const MAX_HISTORY_DEVICE_ID_SIZE: usize = 128;
 pub const MAX_PROFILE_NAME_SIZE: usize = 128;
 pub const MAX_PROFILE_SIZE: usize = 128 * 128 * 4;
-const PROFILE_START_HEADER_SIZE: usize = 1 + 8 + 4 + 4 + 4 + 4 + 1;
 const PROFILE_CHUNK_HEADER_SIZE: usize = 1 + 8 + 4;
 pub const MAX_PROFILE_CHUNK_SIZE: usize = SAFE_DATAGRAM_SIZE - PROFILE_CHUNK_HEADER_SIZE;
 

@@ -1,3 +1,14 @@
+//! Reading pointer and keyboard input from the host.
+//!
+//! [`InputCapture`] is a [`futures::Stream`] of capture events over whichever
+//! backend the platform provides. Backends are tried in priority order —
+//! libei, wlr-layer-shell, X11, then the platform-native path — and the
+//! selected one is logged, because which backend is active determines what
+//! the user must grant permission for.
+//!
+//! Pressed keys are tracked so that losing a session cannot leave a modifier
+//! latched on the remote machine.
+
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt::Display,

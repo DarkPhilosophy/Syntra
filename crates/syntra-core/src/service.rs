@@ -12,21 +12,14 @@ use crate::{
     discovery::{Discovery, DiscoveryEvent},
     dns::{DnsEvent, DnsResolver},
     emulation::{Emulation, EmulationEvent},
-    file_transfer::{FileOffer, OutgoingFile, TransferError},
+    file_transfer::{OutgoingFile, TransferError},
     history, history_sync,
-    listen::{SyntraListener, ListenerCreationError},
+    listen::{ListenerCreationError, SyntraListener},
     manual_transfer::{ManualAction, ManualTransfers},
     peer_profile,
     transfer_manager::{TransferAction, TransferFrontendEvent, TransferOwner, TransferState},
 };
 use futures::StreamExt;
-use syntra_plugin_api::{Message as AdapterMessage, Operation, PublishFileClipboard, Released};
-use syntra_store::{ImportedHistoryEvent, worker::HistoryWorker};
-use syntra_api::{
-    AsyncFrontendListener, ClientHandle, ClipboardSettings, ClipboardTransferDirection,
-    ClipboardTransferState, ClipboardTransferStatus, DeviceProfile, FrontendEvent, FrontendRequest,
-    IpcError, IpcListenerCreationError, Position, Status,
-};
 use log;
 use sha2::{Digest, Sha256};
 use std::{
@@ -37,6 +30,13 @@ use std::{
     sync::{Arc, RwLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+use syntra_api::{
+    AsyncFrontendListener, ClientHandle, ClipboardSettings, ClipboardTransferDirection,
+    ClipboardTransferState, ClipboardTransferStatus, DeviceProfile, FrontendEvent, FrontendRequest,
+    IpcError, IpcListenerCreationError, Position, Status,
+};
+use syntra_plugin_api::{Message as AdapterMessage, Operation, PublishFileClipboard, Released};
+use syntra_store::{ImportedHistoryEvent, worker::HistoryWorker};
 use thiserror::Error;
 use tokio::{
     process::Command,
@@ -138,7 +138,6 @@ pub struct Service {
     /// legacy arboard text view of its URI list so it cannot replace the
     /// remote file offer with plain text.
     native_file_selection: bool,
-    gtk_ready: bool,
     /// Live logging configuration, shared with the installed logger so a
     /// client can retune verbosity without restarting the daemon.
     log_config: syntra_log::LogConfig,
@@ -152,6 +151,20 @@ struct Incoming {
 }
 
 const SOURCE_RESULT_CAPACITY: usize = 32;
+
+/// Executable names of the bundled plugins, looked up beside the daemon.
+///
+/// They are resolved relative to the running binary rather than `PATH` so a
+/// build tree, a package install and a portable directory all pick the
+/// plugins that match the daemon's version.
+#[cfg(windows)]
+const CLIPBOARD_PLUGIN_EXECUTABLE: &str = "syntra-plugin-clipboard.exe";
+#[cfg(not(windows))]
+const CLIPBOARD_PLUGIN_EXECUTABLE: &str = "syntra-plugin-clipboard";
+#[cfg(windows)]
+const FUSE_PLUGIN_EXECUTABLE: &str = "syntra-plugin-fuse.exe";
+#[cfg(not(windows))]
+const FUSE_PLUGIN_EXECUTABLE: &str = "syntra-plugin-fuse";
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum Peer {
@@ -222,11 +235,25 @@ impl Service {
                     "service executable has no parent directory",
                 )
             })?;
+        // Plugins are optional by definition: they run out of process so a
+        // missing or broken one degrades a single capability. Refusing to
+        // start the whole service because a helper is absent would make
+        // input sharing depend on a clipboard integration.
         let adapter_paths = AdapterPaths::new(
-            executable_dir.join("syntra-plugin-gtk-clipboard"),
-            executable_dir.join("syntra-plugin-fuse"),
-        )?;
-        let (adapter_manager, adapter_events) = AdapterProcessManager::start(adapter_paths);
+            executable_dir.join(CLIPBOARD_PLUGIN_EXECUTABLE),
+            executable_dir.join(FUSE_PLUGIN_EXECUTABLE),
+        );
+        let (adapter_manager, adapter_events) = match adapter_paths {
+            Ok(paths) => {
+                let (manager, events) = AdapterProcessManager::start(paths);
+                (Some(manager), events)
+            }
+            Err(error) => {
+                log::warn!("file transfer plugins unavailable: {error}");
+                let (_tx, events) = mpsc::channel(1);
+                (None, events)
+            }
+        };
         let (source_result_tx, source_results) = mpsc::channel(SOURCE_RESULT_CAPACITY);
 
         // create dns resolver
@@ -296,13 +323,12 @@ impl Service {
                 .as_nanos() as u64
                 ^ u64::from(std::process::id()),
             next_trigger_handle: 0,
-            adapter_manager: Some(adapter_manager),
+            adapter_manager,
             adapter_events,
             transfers: TransferState::new(),
             native_file_selection: false,
             source_result_tx,
             source_results,
-            gtk_ready: false,
             last_file_clipboard: None,
             announced_transfers: HashSet::new(),
             manual_transfers: ManualTransfers::new(),
@@ -555,10 +581,7 @@ impl Service {
                             Ok(()) => {
                                 self.local_device_profile = profile;
                                 for (_, peer) in self.connected_authenticated_peers() {
-                                    self.send_peer(
-                                        peer,
-                                        syntra_proto::ProtoEvent::ProfileChanged,
-                                    );
+                                    self.send_peer(peer, syntra_proto::ProtoEvent::ProfileChanged);
                                 }
                             }
                             Err(error) => self.notify_frontend(FrontendEvent::Error(format!(
@@ -2066,10 +2089,7 @@ impl Service {
                                     .entries
                                     .iter()
                                     .filter(|entry| {
-                                        !matches!(
-                                            entry.kind,
-                                            syntra_plugin_api::EntryKind::Other
-                                        )
+                                        !matches!(entry.kind, syntra_plugin_api::EntryKind::Other)
                                     })
                                     .map(|entry| {
                                         (entry.uri.clone(), entry.size.unwrap_or_default())
@@ -2139,10 +2159,10 @@ impl Service {
                     ProcessAdapterId::Gtk => "gtk-clipboard".to_owned(),
                     ProcessAdapterId::Fuse { transfer_id } => transfer_id.clone(),
                 };
-                if let Ok(actions) = self.transfers.adapter_cancelled(
-                    &adapter_id,
-                    syntra_plugin_api::Cancelled { transfer_id },
-                ) {
+                if let Ok(actions) = self
+                    .transfers
+                    .adapter_cancelled(&adapter_id, syntra_plugin_api::Cancelled { transfer_id })
+                {
                     self.execute_transfer_actions(actions);
                 }
             }
@@ -2431,24 +2451,4 @@ fn hex_operation(operation_id: [u8; 16]) -> String {
         let _ = write!(value, "{byte:02x}");
     }
     value
-}
-
-/// Decode a percent-encoded `file://` path body into a filesystem path.
-fn percent_decode_path(encoded: &str) -> PathBuf {
-    let bytes = encoded.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
-            if let Some(byte) = hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
-                out.push(byte);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    PathBuf::from(String::from_utf8_lossy(&out).into_owned())
 }

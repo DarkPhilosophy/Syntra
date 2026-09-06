@@ -1,5 +1,5 @@
-use syntra_api::{ClientHandle, ClipboardTransferId, FrontendEvent, FrontendRequest, Position};
 use std::sync::mpsc::{self, Receiver, Sender};
+use syntra_api::{ClientHandle, ClipboardTransferId, FrontendEvent, FrontendRequest, Position};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UiIntent {
     Activate(ClientHandle, bool),

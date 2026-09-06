@@ -6,15 +6,15 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, mpsc};
 
-use syntra_api::{
-    ClipboardTransferDirection, ClipboardTransferState, ClipboardTransferStatus, FrontendEvent,
-    FrontendRequest, FrontendRequestWriter, Position,
-};
 #[cfg(not(target_os = "android"))]
 use slint::winit_030::{WinitWindowAccessor, winit};
 use slint::{
     Color, ComponentHandle, Model, ModelRc, RenderingState, SharedString, Timer, TimerMode,
     VecModel,
+};
+use syntra_api::{
+    ClipboardTransferDirection, ClipboardTransferState, ClipboardTransferStatus, FrontendEvent,
+    FrontendRequest, FrontendRequestWriter, Position,
 };
 
 use crate::bridge::{EventSource, RequestSink, TransportError, UiIntent};
@@ -27,7 +27,14 @@ use crate::platform::{
 use crate::settings::PresentationSettings;
 use crate::updates::{ArtifactNaming, Preparation, RepositoryConfig, UpdateStatus, Updater};
 
-slint::include_modules!();
+// `include_modules!` expands to the Rust bindings the Slint compiler emits
+// for `ui/app-window.slint`. Generated code cannot carry our doc comments,
+// so the allow is scoped to it and re-exported unchanged.
+#[allow(missing_docs)]
+mod generated {
+    slint::include_modules!();
+}
+pub use generated::*;
 
 use syntra_api::paths::APPLICATION_ID;
 
@@ -2134,7 +2141,7 @@ fn bind_app_state_callbacks(
         tx.clone(),
         &weak,
         &state,
-        |value| UiIntent::SetClipboardText(value),
+        UiIntent::SetClipboardText,
         |g, callback| g.on_set_clipboard_text(callback),
     );
     bind_bool(
@@ -2142,7 +2149,7 @@ fn bind_app_state_callbacks(
         tx.clone(),
         &weak,
         &state,
-        |value| UiIntent::SetClipboardImage(value),
+        UiIntent::SetClipboardImage,
         |g, callback| g.on_set_clipboard_image(callback),
     );
     bind_bool(
@@ -2150,7 +2157,7 @@ fn bind_app_state_callbacks(
         tx.clone(),
         &weak,
         &state,
-        |value| UiIntent::SetClipboardFiles(value),
+        UiIntent::SetClipboardFiles,
         |g, callback| g.on_set_clipboard_files(callback),
     );
     {

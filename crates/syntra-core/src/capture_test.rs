@@ -1,7 +1,9 @@
 use crate::config::Config;
 use clap::Args;
 use futures::StreamExt;
-use syntra_input_capture::{self, CaptureError, CaptureEvent, InputCapture, InputCaptureError, Position};
+use syntra_input_capture::{
+    self, CaptureError, CaptureEvent, InputCapture, InputCaptureError, Position,
+};
 use syntra_input_event::{Event, KeyboardEvent};
 
 #[derive(Args, Clone, Debug, Eq, PartialEq)]

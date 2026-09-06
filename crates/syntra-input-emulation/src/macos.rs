@@ -10,16 +10,16 @@ use core_graphics::event::{
     ScrollEventUnit,
 };
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
-use syntra_input_event::{
-    BTN_BACK, BTN_FORWARD, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, Event, KeyboardEvent, PointerEvent,
-    scancode,
-};
 use keycode::{KeyMap, KeyMapping};
 use std::cell::Cell;
 use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use syntra_input_event::{
+    BTN_BACK, BTN_FORWARD, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, Event, KeyboardEvent, PointerEvent,
+    scancode,
+};
 use tokio::{sync::Notify, task::JoinHandle};
 
 use super::error::MacOSEmulationCreationError;

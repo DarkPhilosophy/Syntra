@@ -15,6 +15,7 @@ use tokio::net::UnixStream;
 #[cfg(windows)]
 use tokio::net::TcpStream;
 
+/// Public reader or writer for the frontend IPC stream.
 pub struct AsyncFrontendEventReader {
     #[cfg(unix)]
     lines_stream: LinesStream<BufReader<ReadHalf<UnixStream>>>,
@@ -22,6 +23,7 @@ pub struct AsyncFrontendEventReader {
     lines_stream: LinesStream<BufReader<ReadHalf<TcpStream>>>,
 }
 
+/// Public reader or writer for the frontend IPC stream.
 pub struct AsyncFrontendRequestWriter {
     #[cfg(unix)]
     tx: WriteHalf<UnixStream>,
@@ -46,6 +48,7 @@ impl Stream for AsyncFrontendEventReader {
 }
 
 impl AsyncFrontendRequestWriter {
+    /// Sends one client request asynchronously to the daemon.
     pub async fn request(&mut self, request: FrontendRequest) -> Result<(), IpcError> {
         let mut json = serde_json::to_string(&request).unwrap();
         log::debug!("requesting: {json}");
@@ -55,6 +58,7 @@ impl AsyncFrontendRequestWriter {
     }
 }
 
+/// Opens an asynchronous frontend IPC connection to the daemon.
 pub async fn connect_async(
     timeout: Option<Duration>,
 ) -> Result<(AsyncFrontendEventReader, AsyncFrontendRequestWriter), ConnectionError> {

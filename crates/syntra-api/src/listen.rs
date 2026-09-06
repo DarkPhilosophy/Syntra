@@ -22,6 +22,7 @@ use tokio::net::TcpStream;
 
 use crate::{FrontendEvent, FrontendRequest, IpcError, IpcListenerCreationError};
 
+/// Public reader or writer for the frontend IPC stream.
 pub struct AsyncFrontendListener {
     #[cfg(windows)]
     listener: TcpListener,
@@ -40,6 +41,7 @@ pub struct AsyncFrontendListener {
 }
 
 impl AsyncFrontendListener {
+    /// Creates a listener for frontend IPC connections.
     pub async fn new() -> Result<Self, IpcListenerCreationError> {
         #[cfg(unix)]
         let (socket_path, listener) = {
@@ -91,6 +93,7 @@ impl AsyncFrontendListener {
         Ok(adapter)
     }
 
+    /// Broadcasts one authoritative event to connected frontend clients.
     pub async fn broadcast(&mut self, notify: FrontendEvent) {
         // encode event
         let mut json = serde_json::to_string(&notify).unwrap();

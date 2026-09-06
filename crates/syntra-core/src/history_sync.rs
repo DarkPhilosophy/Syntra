@@ -1,9 +1,9 @@
 use bincode::Options;
-use syntra_store::{ClearBoundary, ImportedHistoryEvent};
-use syntra_proto::{MAX_HISTORY_CHUNK_SIZE, MAX_HISTORY_RECORD_SIZE, ProtoEvent};
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::time::{Duration, Instant};
+use syntra_proto::{MAX_HISTORY_CHUNK_SIZE, MAX_HISTORY_RECORD_SIZE, ProtoEvent};
+use syntra_store::{ClearBoundary, ImportedHistoryEvent};
 
 pub(crate) fn deduplicate_routes<I, R>(routes: impl IntoIterator<Item = (I, R)>) -> HashMap<I, R>
 where

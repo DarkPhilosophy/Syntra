@@ -18,9 +18,6 @@ use core_graphics::{
     event_source::{CGEventSource, CGEventSourceStateID},
 };
 use futures_core::Stream;
-use syntra_input_event::{
-    BTN_BACK, BTN_FORWARD, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, Event, KeyboardEvent, PointerEvent,
-};
 use keycode::{KeyMap, KeyMapping};
 use libc::c_void;
 use once_cell::unsync::Lazy;
@@ -31,6 +28,9 @@ use std::{
     sync::{Arc, OnceLock},
     task::{Context, Poll, ready},
     thread::{self},
+};
+use syntra_input_event::{
+    BTN_BACK, BTN_FORWARD, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, Event, KeyboardEvent, PointerEvent,
 };
 use tokio::sync::{
     Mutex,

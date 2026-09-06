@@ -71,7 +71,7 @@ fn configure_backend_once() -> BackendConfiguration {
         let mut event_loop =
             winit::event_loop::EventLoop::<slint::winit_030::SlintEvent>::with_user_event();
         event_loop.with_x11();
-        return select_winit_backend(event_loop);
+        select_winit_backend(event_loop)
     }
 
     #[cfg(not(target_os = "linux"))]

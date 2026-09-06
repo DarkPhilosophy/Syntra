@@ -25,7 +25,10 @@ fn main() {
 
     // D-Bus and tray integrations expect a reactor while Slint owns the main
     // thread, so the runtime must outlive the window.
-    let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
         Ok(runtime) => runtime,
         Err(error) => {
             log::error!("could not start the async runtime: {error}");
@@ -35,11 +38,15 @@ fn main() {
     let _guard = runtime.enter();
 
     let daemon = ensure_daemon();
-    if let Err(error) = syntra_ui::app::run() {
+    let result = syntra_ui::app::run();
+    drop(daemon);
+    if let Err(error) = result {
         log::error!("{error}");
+        // The writer thread owns the output; flush before the process dies.
+        log::logger().flush();
         process::exit(1);
     }
-    drop(daemon);
+    log::logger().flush();
 }
 
 /// Makes a best effort to have a daemon available, without ever blocking startup.

@@ -1,5 +1,3 @@
-use syntra_api::{DeviceProfile, PeerAvatar};
-use syntra_proto::{MAX_PROFILE_CHUNK_SIZE, ProtoEvent};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
@@ -7,6 +5,8 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
+use syntra_api::{DeviceProfile, PeerAvatar};
+use syntra_proto::{MAX_PROFILE_CHUNK_SIZE, ProtoEvent};
 
 const MAX_PARTIALS: usize = 8;
 const TTL: Duration = Duration::from_secs(5);

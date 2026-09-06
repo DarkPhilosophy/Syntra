@@ -1,3 +1,11 @@
+//! Resolves capture and emulation backend `cfg` flags and embeds build metadata.
+//!
+//! Cargo features are additive and cross-platform, but a backend such as
+//! wlr-layer-shell is meaningless on macOS. Each feature is therefore
+//! intersected with the target platform here and re-emitted as a `cfg`, so
+//! modules gate on `cfg(layer_shell_capture)` rather than repeating the
+//! platform test at every use site.
+
 use shadow_rs::ShadowBuilder;
 
 fn main() {

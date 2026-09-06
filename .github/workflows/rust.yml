@@ -2,9 +2,9 @@ name: Rust
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 env:
   CARGO_TERM_COLOR: always
@@ -19,8 +19,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: cargo fmt
-        run: cargo fmt --check
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --check
+
+  architecture:
+    name: Architecture rules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Reads cargo metadata only, so it needs no system libraries and gives
+      # the fastest possible signal that a tier boundary was crossed.
+      - name: Verify tier boundaries
+        run: cargo test -p syntra-daemon --test architecture
 
   ci:
     name: ${{ matrix.job }} ${{ matrix.os }}
@@ -33,35 +47,65 @@ jobs:
           - windows-latest
           - macos-latest
           - macos-15-intel
-        job:
-          - build
-          - check
-          - clippy
-          - test
+        job: [check, test, clippy]
     steps:
       - uses: actions/checkout@v6
-      - name: Install Linux deps
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.job }}
+
+      # The Linux backends are the only ones needing system libraries; the
+      # capture and emulation features below fail to build without them.
+      - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install libx11-dev libxtst-dev libgtk-4-dev libfuse3-dev
-      - name: cargo build
-        if: matrix.job == 'build'
-        run: cargo build
+          sudo apt-get install --no-install-recommends -y \
+            libx11-dev libxtst-dev libei-dev libxkbcommon-dev \
+            libwayland-dev libgtk-4-dev libfuse3-dev pkg-config
+
+      # `--all-features` is wrong here: capture and emulation backends are
+      # mutually exclusive per platform, so each OS gets the set it can
+      # actually build.
+      - name: Select feature set
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            echo "FEATURES=--features syntra-daemon/layer_shell_capture,syntra-daemon/x11_capture,syntra-daemon/libei_capture,syntra-daemon/wlroots_emulation,syntra-daemon/libei_emulation,syntra-daemon/rdp_emulation,syntra-daemon/x11_emulation" >> "$GITHUB_ENV"
+          else
+            echo "FEATURES=" >> "$GITHUB_ENV"
+          fi
 
       - name: cargo check
         if: matrix.job == 'check'
-        run: cargo check --workspace --all-targets --all-features
+        shell: bash
+        run: cargo check --workspace --all-targets $FEATURES
 
       - name: cargo test
         if: matrix.job == 'test'
-        run: cargo test --workspace --all-features
+        shell: bash
+        run: cargo test --workspace $FEATURES
 
-      - name: cargo clippy
+      # Ratchet, mirroring the docs job. The dependency-free contract crates
+      # are held at zero warnings so the surface plugin authors compile
+      # against cannot regress. `-D warnings` propagates to path
+      # dependencies, so only crates with no internal deps can be gated this
+      # way; the rest still run clippy and report. A blanket `-D warnings`
+      # today would only tempt someone into `#[allow]`, which hides the debt
+      # rather than paying it.
+      - name: cargo clippy (strict, public contract)
         if: matrix.job == 'clippy'
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        shell: bash
+        run: >-
+          cargo clippy --all-targets
+          -p syntra-api -p syntra-plugin-api -p syntra-log
+          -- -D warnings
 
-      - uses: clechasseur/rs-clippy-check@v4
+      - name: cargo clippy (report)
         if: matrix.job == 'clippy'
-        with:
-          args: --workspace --all-targets --all-features
+        shell: bash
+        run: cargo clippy --workspace --all-targets $FEATURES

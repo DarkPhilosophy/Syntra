@@ -1,3 +1,9 @@
+//! Command-line client for a running Syntra daemon.
+//!
+//! A thin client over [`syntra_api`]: it translates subcommands into
+//! requests and prints the events that come back. It holds no state of its
+//! own, so anything it can do is equally available to any other client.
+
 use clap::{Args, Parser, Subcommand};
 use futures::StreamExt;
 
@@ -9,15 +15,21 @@ use syntra_api::{
     connect_async,
 };
 
+/// Why a CLI invocation could not complete.
 #[derive(Debug, Error)]
 pub enum CliError {
-    /// is the service running?
+    /// No daemon is listening on the control socket.
+    ///
+    /// Almost always means the service is not running, rather than a
+    /// permissions or protocol problem.
     #[error("could not connect: `{0}` - is the service running?")]
     ServiceNotRunning(#[from] ConnectionError),
+    /// The connection was established but the exchange failed.
     #[error("error communicating with service: {0}")]
     Ipc(#[from] IpcError),
 }
 
+/// Parsed `syntra-cli` invocation.
 #[derive(Parser, Clone, Debug, PartialEq, Eq)]
 #[command(name = "syntra-cli", about = "Syntra CLI interface")]
 pub struct CliArgs {
@@ -75,6 +87,10 @@ enum CliSubcommand {
     SaveConfig,
 }
 
+/// Executes one CLI invocation against a running daemon.
+///
+/// Connects, sends the request the subcommand maps to, prints the daemon's
+/// reply, and returns. The CLI keeps no state of its own.
 pub async fn run(args: CliArgs) -> Result<(), CliError> {
     execute(args.command).await?;
     Ok(())

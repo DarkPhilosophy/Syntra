@@ -1,3 +1,11 @@
+//! Platform-independent input event and scancode vocabulary.
+//!
+//! Capture backends translate native events into these types and emulation
+//! backends translate them back out, so a Wayland machine and a Windows
+//! machine agree on what a key is. Any new event kind or scancode belongs
+//! here: duplicating a translation in a backend is how the two ends drift
+//! apart.
+
 use std::fmt::{self, Display};
 
 pub mod error;

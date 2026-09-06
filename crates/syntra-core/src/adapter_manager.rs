@@ -1,15 +1,15 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use futures::StreamExt;
-use syntra_plugin_api::{
-    GNOME_COPIED_FILES_MIME, Message, MountReady, PROTOCOL_VERSION, PublishFileClipboard,
-    RangeRequest, RangeResponse, Released, RemoteManifest, URI_LIST_MIME, Unmounted,
-};
 use std::{
     collections::{HashMap, HashSet},
     io,
     path::{Path, PathBuf},
     process::Stdio,
     time::Duration,
+};
+use syntra_plugin_api::{
+    GNOME_COPIED_FILES_MIME, Message, MountReady, PROTOCOL_VERSION, PublishFileClipboard,
+    RangeResponse, Released, RemoteManifest, URI_LIST_MIME, Unmounted,
 };
 use thiserror::Error;
 use tokio::{
@@ -124,10 +124,6 @@ impl AdapterProcessManager {
             },
             event_rx,
         )
-    }
-
-    pub(crate) fn sender(&self) -> mpsc::Sender<ManagerCommand> {
-        self.commands.clone()
     }
 
     pub(crate) fn try_send(&self, command: ManagerCommand) -> Result<(), ManagerError> {
@@ -888,31 +884,6 @@ async fn stop_adapter(state: &mut State, adapter: &AdapterId) {
     }
     for task in runtime.tasks.drain(..) {
         let _ = task.await;
-    }
-}
-
-async fn send_when_ready(
-    state: &mut State,
-    adapter: &AdapterId,
-    message: Message,
-    events: &mpsc::Sender<ManagerEvent>,
-) {
-    // The writer preserves order, so a newly spawned FUSE adapter receives its manifest only
-    // after the manager has validated Hello; do not queue protocol input before authentication.
-    if state
-        .processes
-        .get(adapter)
-        .is_some_and(|runtime| runtime.ready)
-    {
-        send_ready(state, adapter, message, events).await;
-    } else {
-        reject(
-            events,
-            Some(adapter.clone()),
-            "adapter has not completed Hello validation",
-        )
-        .await;
-        fail_adapter(state, adapter, "command before adapter readiness", events).await;
     }
 }
 

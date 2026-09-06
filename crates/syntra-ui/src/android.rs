@@ -8,11 +8,11 @@ use std::{
     sync::mpsc::{Receiver, Sender},
 };
 
+use serde::{Deserialize, Serialize};
 use syntra_api::{
     ClientConfig, ClientHandle, ClientState, ClipboardSettings, DEFAULT_PORT, FrontendEvent,
     FrontendRequest, Status,
 };
-use serde::{Deserialize, Serialize};
 
 #[cfg(target_os = "android")]
 use crate::bridge::RequestSink;

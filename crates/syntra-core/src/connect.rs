@@ -1,6 +1,4 @@
 use crate::{client::ClientManager, config::local_commit, crypto};
-use syntra_api::{ClientHandle, DEFAULT_PORT};
-use syntra_proto::{MAX_DATAGRAM_SIZE, ProtoEvent};
 use local_channel::mpsc::{Receiver, Sender, channel};
 use std::{
     cell::RefCell,
@@ -11,6 +9,8 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+use syntra_api::{ClientHandle, DEFAULT_PORT};
+use syntra_proto::{MAX_DATAGRAM_SIZE, ProtoEvent};
 use thiserror::Error;
 use tokio::{
     net::UdpSocket,

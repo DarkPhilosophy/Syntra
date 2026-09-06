@@ -42,8 +42,12 @@ fn main() {
     let log_config = init_logging();
     if let Err(error) = run(log_config) {
         log::error!("{error}");
+        // The writer thread owns the output, so the record would be lost if
+        // the process exited first.
+        log::logger().flush();
         process::exit(1);
     }
+    log::logger().flush();
 }
 
 /// Installs the shared logger and returns its live configuration.

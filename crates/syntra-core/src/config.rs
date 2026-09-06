@@ -16,8 +16,8 @@ use thiserror::Error;
 use toml;
 use toml_edit::{self, DocumentMut};
 
-use syntra_cli::CliArgs;
 use syntra_api::{ClipboardSettings, DEFAULT_PORT, FileReceiveSettings, Position};
+use syntra_cli::CliArgs;
 
 use syntra_input_event::scancode::{
     self,
@@ -26,7 +26,14 @@ use syntra_input_event::scancode::{
 
 use shadow_rs::shadow;
 
-shadow!(build);
+// `shadow!` expands to a module of generated build constants. It is not code
+// we author, so `missing_docs` cannot be satisfied here; the allow is scoped
+// to the generated item and nothing else.
+#[allow(missing_docs)]
+mod generated {
+    shadow_rs::shadow!(build);
+}
+use generated::build;
 
 /// Local build's 8-byte ASCII short commit hash, suitable for use
 /// in [`syntra_proto::ProtoEvent::Hello`]. Pads with `'?'` if
@@ -42,28 +49,59 @@ pub fn local_commit() -> [u8; 8] {
 
 const CONFIG_FILE_NAME: &str = "config.toml";
 const CERT_FILE_NAME: &str = "syntra.pem";
+/// Certificate file name used before the rebrand.
+const LEGACY_CERT_FILE_NAME: &str = "lan-mouse.pem";
+/// Directory name used before the rebrand.
+const LEGACY_DIR_NAME: &str = "lan-mouse";
 
 #[cfg(target_os = "android")]
 fn default_path() -> Result<PathBuf, VarError> {
     Err(VarError::NotPresent)
 }
 
+/// Per-user configuration directory, migrating pre-rebrand state on first use.
+///
+/// The directory holds the DTLS certificate that *is* this device's identity,
+/// plus authorised peer fingerprints and clipboard history. Silently starting
+/// fresh under a new name would generate a new fingerprint, so every peer
+/// would see an unknown device and the user would have to re-authorise each
+/// one. The old directory is therefore adopted rather than abandoned.
 #[cfg(not(target_os = "android"))]
 fn default_path() -> Result<PathBuf, VarError> {
-    #[cfg(unix)]
-    let default_path = {
-        let xdg_config_home =
-            env::var("XDG_CONFIG_HOME").unwrap_or(format!("{}/.config", env::var("HOME")?));
-        format!("{xdg_config_home}/syntra/")
-    };
+    let current = syntra_api::paths::config_dir().map_err(|_| VarError::NotPresent)?;
+    if let Some(legacy) = current.parent().map(|base| base.join(LEGACY_DIR_NAME)) {
+        migrate_legacy_directory(&legacy, &current);
+    }
+    Ok(current)
+}
 
-    #[cfg(not(unix))]
-    let default_path = {
-        let app_data =
-            env::var("LOCALAPPDATA").unwrap_or(format!("{}/.config", env::var("USERPROFILE")?));
-        format!("{app_data}\\syntra\\")
-    };
-    Ok(PathBuf::from(default_path))
+/// Moves a pre-rebrand configuration directory into place, once.
+///
+/// Only runs when the new location does not exist yet, so a user who has
+/// already started on the new name never has it overwritten. A rename is
+/// preferred; if the two live on different filesystems the rename fails and
+/// the legacy directory is simply left alone rather than half-copied.
+#[cfg(not(target_os = "android"))]
+fn migrate_legacy_directory(legacy: &std::path::Path, current: &std::path::Path) {
+    if current.exists() || !legacy.is_dir() {
+        return;
+    }
+    if let Err(error) = std::fs::rename(legacy, current) {
+        log::warn!(
+            "could not adopt previous configuration from {}: {error}",
+            legacy.display()
+        );
+        return;
+    }
+    let legacy_cert = current.join(LEGACY_CERT_FILE_NAME);
+    if legacy_cert.is_file() {
+        // Keeping the certificate preserves this device's fingerprint, which
+        // is the whole point of the migration.
+        if let Err(error) = std::fs::rename(&legacy_cert, current.join(CERT_FILE_NAME)) {
+            log::warn!("could not rename the existing certificate: {error}");
+        }
+    }
+    log::info!("adopted previous configuration into {}", current.display());
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -507,7 +545,7 @@ impl Config {
         let directory = stored
             .and_then(|s| s.download_directory.clone())
             .filter(|p| p.is_absolute())
-            .or_else(|| dirs::download_dir())
+            .or_else(dirs::download_dir)
             .or_else(|| dirs::home_dir().map(|p| p.join("Downloads")))
             .unwrap_or_else(|| PathBuf::from("Downloads"));
         FileReceiveSettings {

@@ -1,9 +1,9 @@
 use crate::config::Config;
 use clap::Args;
-use syntra_input_emulation::{InputEmulation, InputEmulationError};
-use syntra_input_event::{Event, PointerEvent};
 use std::f64::consts::PI;
 use std::time::{Duration, Instant};
+use syntra_input_emulation::{InputEmulation, InputEmulationError};
+use syntra_input_event::{Event, PointerEvent};
 
 const FREQUENCY_HZ: f64 = 1.0;
 const RADIUS: f64 = 100.0;

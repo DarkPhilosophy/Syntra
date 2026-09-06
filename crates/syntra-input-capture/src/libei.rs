@@ -228,7 +228,8 @@ async fn create_session(
                 .set_capabilities(
                     Capabilities::Keyboard | Capabilities::Pointer | Capabilities::Touchscreen,
                 );
-            let (session, capabilities) = syntra_input_capture.create_session(None, options).await?;
+            let (session, capabilities) =
+                syntra_input_capture.create_session(None, options).await?;
             return Ok((session, capabilities, false));
         }
     };
@@ -412,7 +413,10 @@ async fn do_capture(
             log::debug!("capture session + session_update task done!");
 
             log::debug!("disabling input capture");
-            if let Err(e) = syntra_input_capture.disable(&session, Default::default()).await {
+            if let Err(e) = syntra_input_capture
+                .disable(&session, Default::default())
+                .await
+            {
                 log::warn!("syntra_input_capture.disable(&session) {e}");
             }
             if let Err(e) = session.close().await {
@@ -489,11 +493,18 @@ async fn do_capture_session(
     let (context, _conn, ei_event_stream) = connect_to_eis(syntra_input_capture, session).await?;
 
     // set barriers
-    let (barriers, pos_for_barrier_id) =
-        update_barriers(syntra_input_capture, session, active_clients, next_barrier_id).await?;
+    let (barriers, pos_for_barrier_id) = update_barriers(
+        syntra_input_capture,
+        session,
+        active_clients,
+        next_barrier_id,
+    )
+    .await?;
 
     log::debug!("enabling session");
-    syntra_input_capture.enable(session, Default::default()).await?;
+    syntra_input_capture
+        .enable(session, Default::default())
+        .await?;
 
     // cancellation token to release session
     let release_session = Arc::new(Notify::new());
@@ -689,7 +700,9 @@ async fn release_capture(
     let release_options = ReleaseOptions::default()
         .set_activation_id(activated.activation_id())
         .set_cursor_position(Some(cursor_position));
-    syntra_input_capture.release(session, release_options).await?;
+    syntra_input_capture
+        .release(session, release_options)
+        .await?;
     Ok(())
 }
 

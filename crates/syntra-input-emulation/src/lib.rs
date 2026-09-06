@@ -1,3 +1,13 @@
+//! Replaying pointer and keyboard input on the host.
+//!
+//! The [`Emulation`] trait is the backend contract: `consume` applies an
+//! event, `create` and `destroy` manage per-peer virtual devices, and
+//! `terminate` shuts a backend down.
+//!
+//! Every backend tracks pressed keys and releases them on disconnect. A peer
+//! that vanishes mid-keystroke must not leave a key held down locally, so
+//! this is a correctness requirement rather than tidiness.
+
 use async_trait::async_trait;
 use std::{
     collections::{HashMap, HashSet},

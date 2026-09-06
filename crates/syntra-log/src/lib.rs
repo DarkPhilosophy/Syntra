@@ -10,8 +10,9 @@
 //! * **Per-subsystem levels.** [`Subsystem`] enumerates the parts of Syntra
 //!   worth tuning separately. Turning `clipboard` up to `trace` leaves the
 //!   input hot path at `warn`, so the interesting records are not buried.
-//! * **Runtime control.** [`set_level`] and [`set_subsystem_level`] take
-//!   effect immediately and are what the API exposes to a dashboard.
+//! * **Runtime control.** [`LogConfig::set_level`] and
+//!   [`LogConfig::set_subsystem_level`] take effect immediately and are what
+//!   the API exposes to a dashboard.
 //! * **Non-blocking output.** Records are handed to a writer thread. A
 //!   launcher or SSH session that stops draining stderr must never stall the
 //!   service event loop.
@@ -63,13 +64,19 @@ pub enum Subsystem {
     Ipc,
     /// Presentation code in a dashboard process.
     Ui,
-    /// Anything not attributable to a specific subsystem.
+    /// Syntra code not attributable to a specific subsystem.
     Other,
+    /// Records emitted by third-party dependencies.
+    ///
+    /// Kept separate because their idea of `info` is not ours: D-Bus and
+    /// windowing crates narrate every message, which would drown the
+    /// application's own output at the default level.
+    External,
 }
 
 impl Subsystem {
     /// Every tunable subsystem, in a stable order suitable for a UI listing.
-    pub const ALL: [Subsystem; 8] = [
+    pub const ALL: [Subsystem; 9] = [
         Subsystem::Input,
         Subsystem::Network,
         Subsystem::Clipboard,
@@ -78,6 +85,7 @@ impl Subsystem {
         Subsystem::Ipc,
         Subsystem::Ui,
         Subsystem::Other,
+        Subsystem::External,
     ];
 
     /// Stable lowercase identifier used on the wire and in configuration.
@@ -91,14 +99,21 @@ impl Subsystem {
             Subsystem::Ipc => "ipc",
             Subsystem::Ui => "ui",
             Subsystem::Other => "other",
+            Subsystem::External => "external",
         }
     }
 
     /// Classifies a `log` target into a subsystem.
     ///
-    /// Matching is substring-based on purpose: module paths differ between
-    /// crates (`syntra_core::clipboard`, `syntra_plugin_clipboard`) yet belong
-    /// to the same subsystem from an operator's point of view.
+    /// Targets outside the `syntra` crates are [`Subsystem::External`]
+    /// regardless of their spelling. That test comes first because
+    /// dependency module paths collide with our vocabulary — `zbus::connection`
+    /// contains "connect" but is not our networking code.
+    ///
+    /// Within Syntra, matching is substring-based on purpose: module paths
+    /// differ between crates (`syntra_core::clipboard`,
+    /// `syntra_plugin_clipboard`) yet belong to the same subsystem from an
+    /// operator's point of view.
     pub fn classify(target: &str) -> Subsystem {
         // Ordered by specificity: `history_sync` mentions transfers, and
         // capture/emulation modules mention clipboard, so the narrower
@@ -118,6 +133,9 @@ impl Subsystem {
             ("ui", Subsystem::Ui),
         ];
         let target = target.to_ascii_lowercase();
+        if !target.starts_with("syntra") {
+            return Subsystem::External;
+        }
         for (needle, subsystem) in RULES {
             if target.contains(needle) {
                 return subsystem;
@@ -206,13 +224,20 @@ impl fmt::Debug for LogConfig {
 
 impl LogConfig {
     /// Creates a configuration with `global` applied to every subsystem.
+    ///
+    /// [`Subsystem::External`] is the one exception: dependencies start at
+    /// `warn`, because a default of `info` buries the application's own
+    /// output under D-Bus and windowing chatter. An explicit
+    /// `external=<level>` in a spec overrides this.
     pub fn new(global: LevelFilter) -> Self {
-        Self {
+        let config = Self {
             inner: Arc::new(Inner {
                 global: AtomicU8::new(encode(global)),
                 overrides: std::array::from_fn(|_| AtomicU8::new(INHERIT)),
             }),
-        }
+        };
+        config.set_subsystem_level(Subsystem::External, Some(LevelFilter::Warn));
+        config
     }
 
     /// Parses a specification such as `info,clipboard=trace,input=off`.
@@ -291,7 +316,10 @@ impl LogConfig {
     pub fn to_spec(&self) -> String {
         let mut spec = self.level().to_string().to_ascii_lowercase();
         for (subsystem, level) in self.overrides() {
-            spec.push_str(&format!(",{subsystem}={}", level.to_string().to_ascii_lowercase()));
+            spec.push_str(&format!(
+                ",{subsystem}={}",
+                level.to_string().to_ascii_lowercase()
+            ));
         }
         spec
     }
@@ -341,7 +369,13 @@ mod tests {
         config.set_level(LevelFilter::Debug);
 
         assert_eq!(config.level_for(Subsystem::Input), LevelFilter::Debug);
-        assert!(config.overrides().is_empty());
+        // `External` keeps its built-in default; only `Input` was cleared.
+        assert!(
+            !config
+                .overrides()
+                .iter()
+                .any(|(subsystem, _)| *subsystem == Subsystem::Input)
+        );
     }
 
     /// `log` consults `max_level` before the logger, so a raised subsystem
@@ -396,6 +430,34 @@ mod tests {
             Subsystem::classify("syntra_input_capture::libei"),
             Subsystem::Input
         );
-        assert_eq!(Subsystem::classify("some::vendor::crate"), Subsystem::Other);
+        assert_eq!(
+            Subsystem::classify("some::vendor::crate"),
+            Subsystem::External
+        );
+    }
+
+    /// A dependency module path may contain our vocabulary: `zbus::connection`
+    /// contains "connect". Misclassifying it as our networking code is what
+    /// flooded the dashboard log, so the crate-prefix test must win.
+    #[test]
+    fn dependency_targets_are_external_despite_familiar_names() {
+        assert_eq!(Subsystem::classify("zbus::connection"), Subsystem::External);
+        assert_eq!(Subsystem::classify("winit::input"), Subsystem::External);
+        assert_eq!(
+            Subsystem::classify("syntra_core::connect"),
+            Subsystem::Network
+        );
+    }
+
+    /// Dependencies must be quiet by default but still reachable, otherwise
+    /// diagnosing a D-Bus problem would require a rebuild.
+    #[test]
+    fn dependencies_are_quiet_by_default_yet_tunable() {
+        let config = LogConfig::new(LevelFilter::Info);
+        assert!(!config.enabled("zbus::connection", log::Level::Info));
+        assert!(config.enabled("zbus::connection", log::Level::Warn));
+
+        let verbose = LogConfig::parse("info,external=debug");
+        assert!(verbose.enabled("zbus::connection", log::Level::Debug));
     }
 }

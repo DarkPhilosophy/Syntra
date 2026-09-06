@@ -626,7 +626,7 @@ mod tests {
                 buffer[..3].copy_from_slice(b"abc");
                 Ok(3)
             } else {
-                Err(io::Error::new(io::ErrorKind::Other, "injected failure"))
+                Err(io::Error::other("injected failure"))
             }
         }
     }

@@ -1,16 +1,20 @@
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
+//! Syntra FUSE plugin: exposes a remote peer's offered files as a mount.
+//!
+//! A file manager can then copy from a remote selection with an ordinary
+//! paste, because the files look local. Chunks are fetched on demand from
+//! the owning peer through the daemon.
+//!
+//! Runs out of process: mounting is privileged, blocking and able to wedge,
+//! none of which may be allowed to affect input forwarding.
+
 #[cfg(target_os = "linux")]
 mod linux {
     use fuser::{
         FileAttr, FileType, Filesystem, MountOption, ReplyAttr, ReplyData, ReplyDirectory,
         ReplyEntry, ReplyOpen, Request,
     };
-    use syntra_plugin_api::{
-        EntryKind, Message, MountReady, Progress, RangeRequest, RangeResponse, RemoteManifest,
-        Unmounted, read_messages, write_message,
-    };
-    use syntra_proto::MAX_CLIPBOARD_FILE_CHUNK_SIZE;
     use libc::{EACCES, EINVAL, EIO, ENOENT, ENOTDIR, EROFS};
     use parking_lot::Mutex;
     use std::{
@@ -28,6 +32,11 @@ mod linux {
         thread,
         time::{Duration, Instant, SystemTime},
     };
+    use syntra_plugin_api::{
+        EntryKind, Message, MountReady, Progress, RangeRequest, RangeResponse, RemoteManifest,
+        Unmounted, read_messages, write_message,
+    };
+    use syntra_proto::MAX_CLIPBOARD_FILE_CHUNK_SIZE;
 
     const TTL: Duration = Duration::from_secs(1);
     const ROOT: u64 = 1;
@@ -535,9 +544,8 @@ mod linux {
             },
         );
         paths.insert(String::new(), ROOT);
-        let mut next_ino = ROOT + 1;
         let mut roots = Vec::new();
-        for entry in &manifest.entries {
+        for (entry, ino) in manifest.entries.iter().zip(ROOT + 1..) {
             if !matches!(entry.kind, EntryKind::File | EntryKind::Directory) {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -559,8 +567,6 @@ mod linux {
             if children.contains_key(&(parent, name.as_bytes().to_vec())) {
                 return Err(io::Error::new(io::ErrorKind::InvalidData, "duplicate path"));
             }
-            let ino = next_ino;
-            next_ino += 1;
             nodes
                 .get_mut(&parent)
                 .expect("parent exists")
@@ -613,10 +619,7 @@ mod linux {
         let runtime = std::env::var_os("XDG_RUNTIME_DIR")
             .map(PathBuf::from)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "XDG_RUNTIME_DIR is unset"))?;
-        let path = runtime
-            .join("syntra")
-            .join("clipboard")
-            .join(transfer_id);
+        let path = runtime.join("syntra").join("clipboard").join(transfer_id);
         fs::create_dir_all(&path)?;
         Ok(path)
     }

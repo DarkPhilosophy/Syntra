@@ -265,8 +265,8 @@ mod tests {
 
     impl TestPaths {
         fn new(label: &str) -> Self {
-            let root = std::env::temp_dir()
-                .join(format!("syntra-identity-{label}-{}", unique_suffix()));
+            let root =
+                std::env::temp_dir().join(format!("syntra-identity-{label}-{}", unique_suffix()));
             let settings = root.join("presentation.json");
             let images = root.join("device-images");
             fs::create_dir_all(&images).unwrap();

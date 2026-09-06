@@ -1,11 +1,11 @@
 use std::path::Path;
 
+use syntra_api::{
+    HistoryEventId, HistoryImage, HistoryKind, HistoryPage, HistoryPreview, HistoryRecordSummary,
+};
 use syntra_store::{
     FileMetadata, HistoryContent,
     worker::{HistoryPage as WorkerPage, HistorySummaryContent, ImagePayload},
-};
-use syntra_api::{
-    HistoryEventId, HistoryImage, HistoryKind, HistoryPage, HistoryPreview, HistoryRecordSummary,
 };
 
 pub(crate) const DATABASE_FILE: &str = "clipboard-history.sqlite3";

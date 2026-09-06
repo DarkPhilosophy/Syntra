@@ -263,7 +263,7 @@ impl ClientManager {
 
     /// returns all clients that are currently registered
     pub(crate) fn registered_clients(&self) -> Vec<ClientHandle> {
-        self.clients.borrow().iter().map(|(h, _)| *h).collect()
+        self.clients.borrow().keys().copied().collect()
     }
 
     /// returns all clients that are currently active

@@ -12,6 +12,7 @@ use std::os::unix::net::UnixStream;
 #[cfg(windows)]
 use std::net::TcpStream;
 
+/// Public reader or writer for the frontend IPC stream.
 pub struct FrontendEventReader {
     #[cfg(unix)]
     lines: Lines<BufReader<UnixStream>>,
@@ -19,6 +20,7 @@ pub struct FrontendEventReader {
     lines: Lines<BufReader<TcpStream>>,
 }
 
+/// Public reader or writer for the frontend IPC stream.
 pub struct FrontendRequestWriter {
     #[cfg(unix)]
     line_writer: LineWriter<UnixStream>,
@@ -27,6 +29,7 @@ pub struct FrontendRequestWriter {
 }
 
 impl FrontendEventReader {
+    /// Reads the next daemon event from the IPC stream.
     pub fn next_event(&mut self) -> Option<Result<FrontendEvent, IpcError>> {
         match self.lines.next()? {
             Err(e) => Some(Err(e.into())),
@@ -36,6 +39,7 @@ impl FrontendEventReader {
 }
 
 impl FrontendRequestWriter {
+    /// Sends one client request to the daemon.
     pub fn request(&mut self, request: FrontendRequest) -> Result<(), io::Error> {
         let mut json = serde_json::to_string(&request).unwrap();
         log::debug!("requesting: {json}");
@@ -45,10 +49,12 @@ impl FrontendRequestWriter {
     }
 }
 
+/// Opens a blocking frontend IPC connection to the daemon.
 pub fn connect() -> Result<(FrontendEventReader, FrontendRequestWriter), ConnectionError> {
     connect_inner(None)
 }
 
+/// Opens a blocking frontend IPC connection, failing if the timeout expires.
 pub fn connect_with_timeout(
     timeout: Duration,
 ) -> Result<(FrontendEventReader, FrontendRequestWriter), ConnectionError> {

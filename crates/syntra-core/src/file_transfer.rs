@@ -1,18 +1,18 @@
-use syntra_proto::{
-    ClipboardEntryKind, ClipboardManifestEntry, MAX_CLIPBOARD_FILE_CHUNK_SIZE,
-    MAX_CLIPBOARD_MANIFEST_ENTRIES, MAX_CLIPBOARD_PATH_SIZE, MAX_CLIPBOARD_SIZE,
-    MAX_MANUAL_FILE_CHUNK_SIZE,
-};
 use same_file::Handle as FileIdentity;
 use sha2::{Digest, Sha256};
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::MetadataExt;
 use std::{
     collections::{HashMap, HashSet},
     ffi::OsStr,
     io,
     path::{Component, Path, PathBuf},
     time::Instant,
+};
+use syntra_proto::{
+    ClipboardEntryKind, ClipboardManifestEntry, MAX_CLIPBOARD_FILE_CHUNK_SIZE,
+    MAX_CLIPBOARD_MANIFEST_ENTRIES, MAX_CLIPBOARD_PATH_SIZE, MAX_CLIPBOARD_SIZE,
+    MAX_MANUAL_FILE_CHUNK_SIZE,
 };
 use thiserror::Error;
 use tokio::{
@@ -300,10 +300,6 @@ pub(crate) struct OutgoingFile {
 }
 
 impl OutgoingFile {
-    pub(crate) async fn next_chunk(&mut self) -> Result<Option<(u64, Vec<u8>)>, TransferError> {
-        self.next_chunk_bounded(MAX_CLIPBOARD_FILE_CHUNK_SIZE).await
-    }
-
     pub(crate) async fn next_chunk_bounded(
         &mut self,
         max_len: usize,
@@ -378,29 +374,6 @@ impl OutgoingFile {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Progress {
-    pub(crate) completed: u64,
-    pub(crate) total: u64,
-    pub(crate) bytes_per_second: u64,
-}
-
-impl Progress {
-    fn new(completed: u64, total: u64, started: Instant) -> Self {
-        let nanos = started.elapsed().as_nanos();
-        let bytes_per_second = if nanos == 0 {
-            0
-        } else {
-            ((completed as u128 * 1_000_000_000) / nanos).min(u64::MAX as u128) as u64
-        };
-        Self {
-            completed,
-            total,
-            bytes_per_second,
-        }
-    }
-}
-
 pub(crate) struct IncomingTransfer {
     pub(crate) transfer_id: TransferId,
     destination: PathBuf,
@@ -413,12 +386,10 @@ pub(crate) struct IncomingTransfer {
 }
 
 struct IncomingFile {
-    path: PathBuf,
     file: File,
     expected: u64,
     offset: u64,
     hasher: Sha256,
-    started: Instant,
 }
 
 struct CreatedFileGuard {
@@ -563,12 +534,10 @@ impl IncomingTransfer {
                     self.files.insert(
                         entry.file_id,
                         IncomingFile {
-                            path: target,
                             file,
                             expected: entry.size,
                             offset: 0,
                             hasher: Sha256::new(),
-                            started: Instant::now(),
                         },
                     );
                     requests.push((entry.file_id, 0));
@@ -583,7 +552,7 @@ impl IncomingTransfer {
         file_id: FileId,
         offset: u64,
         data: &[u8],
-    ) -> Result<Progress, TransferError> {
+    ) -> Result<(), TransferError> {
         self.ensure_active()?;
         if data.is_empty()
             || data.len() > MAX_CLIPBOARD_FILE_CHUNK_SIZE.max(MAX_MANUAL_FILE_CHUNK_SIZE)
@@ -621,48 +590,7 @@ impl IncomingTransfer {
         incoming.file.write_all(data).await?;
         incoming.hasher.update(data);
         incoming.offset = next;
-        Ok(Progress::new(next, incoming.expected, incoming.started))
-    }
-    pub(crate) async fn resume_file(
-        &mut self,
-        file_id: FileId,
-        offset: u64,
-    ) -> Result<u64, TransferError> {
-        self.ensure_active()?;
-        let incoming = self
-            .files
-            .get_mut(&file_id)
-            .ok_or(TransferError::UnknownFile {
-                transfer_id: self.transfer_id,
-                file_id,
-            })?;
-        if offset > incoming.expected {
-            return Err(TransferError::UnexpectedOffset {
-                file_id,
-                expected: incoming.offset,
-                actual: offset,
-            });
-        }
-        incoming.file.seek(SeekFrom::Start(0)).await?;
-        incoming.hasher = Sha256::new();
-        let mut buffer = vec![0u8; MAX_CLIPBOARD_FILE_CHUNK_SIZE];
-        let mut remaining = offset;
-        while remaining > 0 {
-            let want = remaining.min(buffer.len() as u64) as usize;
-            let read = incoming.file.read(&mut buffer[..want]).await?;
-            if read != want {
-                return Err(TransferError::SizeMismatch {
-                    file_id,
-                    expected: offset,
-                    actual: offset - remaining + read as u64,
-                });
-            }
-            incoming.hasher.update(&buffer[..read]);
-            remaining -= read as u64;
-        }
-        incoming.file.seek(SeekFrom::Start(offset)).await?;
-        incoming.offset = offset;
-        Ok(offset)
+        Ok(())
     }
     pub(crate) fn finish(&mut self) -> Result<(), TransferError> {
         self.ensure_active()?;
@@ -701,12 +629,6 @@ impl IncomingTransfer {
         }
         self.files.remove(&file_id).expect("file tracked");
         Ok(())
-    }
-
-    pub(crate) fn progress(&self, file_id: FileId) -> Option<Progress> {
-        self.files
-            .get(&file_id)
-            .map(|f| Progress::new(f.offset, f.expected, f.started))
     }
 
     pub(crate) async fn cancel(&mut self) {

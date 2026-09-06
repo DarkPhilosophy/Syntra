@@ -1,3 +1,9 @@
+//! Resolves which emulation backends are buildable on the target platform.
+//!
+//! Features are intersected with the platform and re-emitted as `cfg` flags
+//! so backend modules gate on a single condition instead of repeating the
+//! feature-and-platform test.
+
 fn desktop_unix_target(family: &str, os: &str) -> bool {
     family == "unix" && os != "macos" && os != "android"
 }

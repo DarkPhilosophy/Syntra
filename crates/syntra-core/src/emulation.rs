@@ -1,12 +1,8 @@
 use crate::clipboard::ClipboardContent;
 use crate::config::local_commit;
-use crate::listen::{SyntraListener, ListenEvent, ListenerCreationError};
+use crate::listen::{ListenEvent, ListenerCreationError, SyntraListener};
 use futures::StreamExt;
 use image::GenericImageView;
-use syntra_input_emulation::{EmulationHandle, InputEmulation, InputEmulationError};
-use syntra_input_event::{Event, PointerEvent};
-use syntra_store::MAX_IMAGE_BYTES as MAX_HISTORY_IMAGE_BYTES;
-use syntra_proto::{MAX_CLIPBOARD_CHUNK_SIZE, Position, ProtoEvent};
 use local_channel::mpsc::{Receiver, Sender, channel};
 use std::{
     cell::Cell,
@@ -15,6 +11,10 @@ use std::{
     rc::Rc,
     time::{Duration, Instant},
 };
+use syntra_input_emulation::{EmulationHandle, InputEmulation, InputEmulationError};
+use syntra_input_event::{Event, PointerEvent};
+use syntra_proto::{MAX_CLIPBOARD_CHUNK_SIZE, Position, ProtoEvent};
+use syntra_store::MAX_IMAGE_BYTES as MAX_HISTORY_IMAGE_BYTES;
 use tokio::{
     select,
     sync::oneshot,

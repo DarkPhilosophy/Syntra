@@ -1,6 +1,13 @@
 use crate::file_transfer::{
     FileOffer, IncomingTransfer, OutgoingFile, SizeLimitPolicy, TransferError,
 };
+use std::{
+    collections::{HashMap, VecDeque},
+    fmt::Debug,
+    hash::Hash,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 use syntra_api::{
     ClipboardTransferDirection, FileReceiveSettings, FrontendEvent, IncomingFileOffer,
     ManualTransferState, ManualTransferStatus,
@@ -8,13 +15,6 @@ use syntra_api::{
 use syntra_proto::{
     ClipboardEntryKind, ClipboardManifestEntry, MAX_MANUAL_FILE_CHUNK_SIZE, ManualDecision,
     ProtoEvent,
-};
-use std::{
-    collections::{HashMap, VecDeque},
-    fmt::Debug,
-    hash::Hash,
-    path::PathBuf,
-    time::{Duration, Instant},
 };
 
 const FILE_ID: u64 = 1;

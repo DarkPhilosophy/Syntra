@@ -1,0 +1,70 @@
+name: docs
+
+# Documentation is generated from the sources, never hand-maintained.
+# `missing_docs` is a warning during development and an error here, so an
+# undocumented public item cannot reach the default branch.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  LINUX_FEATURES: >-
+    syntra-daemon/layer_shell_capture,syntra-daemon/x11_capture,
+    syntra-daemon/libei_capture,syntra-daemon/wlroots_emulation,
+    syntra-daemon/libei_emulation,syntra-daemon/rdp_emulation,
+    syntra-daemon/x11_emulation
+
+jobs:
+  rustdoc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libx11-dev libxtst-dev libei-dev libxkbcommon-dev \
+            libwayland-dev libfuse3-dev libgtk-4-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # Ratchet. The crates a third party compiles against are held to zero
+      # warnings today; the rest carry `missing_docs = "warn"` and are moved
+      # into this list as they are documented. Enforcing everything at once
+      # would mean disabling the lint, which achieves nothing.
+      - name: Enforce documentation on the public contract
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: >-
+          cargo doc --no-deps
+          -p syntra-api -p syntra-plugin-api -p syntra-log
+
+      - name: Generate workspace documentation
+        # Broken intra-doc links are always an error: they are silent rot
+        # that only a reader discovers.
+        env:
+          RUSTDOCFLAGS: -D rustdoc::broken_intra_doc_links -D rustdoc::invalid_html_tags
+        run: >-
+          cargo doc --workspace --no-deps --document-private-items
+          --features "${LINUX_FEATURES//[$'\n' ]/}"
+
+      - name: Verify documentation examples
+        run: >-
+          cargo test --workspace --doc
+          --features "${LINUX_FEATURES//[$'\n' ]/}"
+
+      - name: Publish as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: syntra-docs
+          path: target/doc
+          retention-days: 14

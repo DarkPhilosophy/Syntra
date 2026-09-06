@@ -2,11 +2,11 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use syntra_api::{
     ClipboardTransferDirection, FileReceiveSettings, FrontendRequest, ManualTransferState,
     ManualTransferStatus,
 };
-use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use crate::app::{
     AppState, AppWindow, TransferDirection, TransferItem, TransferPeerItem, TransferState,

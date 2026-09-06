@@ -1,5 +1,9 @@
 use crate::file_transfer::{FileOffer, OutgoingFile, TransferError};
 use base64::Engine;
+use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet, hash_map::Entry};
+use std::fmt::Debug;
+use std::hash::Hash;
 use syntra_plugin_api::{
     Cancelled as AdapterCancelled, Completion, CopyManifest, EntryKind as AdapterEntryKind,
     Message as AdapterMessage, MountReady, Operation, Progress as AdapterProgress, RangeRequest,
@@ -10,10 +14,6 @@ use syntra_proto::{
     MAX_CLIPBOARD_FILE_CHUNK_SIZE, MAX_CLIPBOARD_MANIFEST_ENTRIES, MAX_CLIPBOARD_PATH_SIZE,
     MAX_CLIPBOARD_SIZE, ProtoEvent, ProtocolError,
 };
-use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet, hash_map::Entry};
-use std::fmt::Debug;
-use std::hash::Hash;
 use thiserror::Error;
 
 pub(crate) type UiTransferId = u64;

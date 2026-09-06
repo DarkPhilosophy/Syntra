@@ -7,13 +7,13 @@ use std::{
 };
 
 use futures::StreamExt;
+use local_channel::mpsc::{Receiver, Sender, channel};
 use syntra_input_capture::{
     CaptureCreationError, CaptureError, CaptureEvent, CaptureHandle, InputCapture,
     InputCaptureError, Position,
 };
 use syntra_input_event::{Event, KeyboardEvent, PointerEvent, scancode};
 use syntra_proto::{MAX_CLIPBOARD_CHUNK_SIZE, ProtoEvent};
-use local_channel::mpsc::{Receiver, Sender, channel};
 use tokio::task::{JoinHandle, spawn_local};
 use tokio_util::sync::CancellationToken;
 

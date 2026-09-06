@@ -3,6 +3,7 @@ use ksni::blocking::TrayMethods;
 use ksni::{Tray, menu};
 use std::process::Command;
 
+#[derive(Default)]
 pub struct LinuxPlatform;
 impl LinuxPlatform {
     pub fn new() -> Self {

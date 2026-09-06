@@ -1,9 +1,9 @@
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 use syntra_api::{
     ClientConfig, ClientHandle, ClientState, ClipboardFileId, ClipboardSettings,
     ClipboardTransferId, ClipboardTransferStatus, FrontendEvent, FrontendRequest, Position,
 };
-use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Navigation {
@@ -32,16 +32,12 @@ pub struct Diagnostics {
 }
 
 /// Whether the dashboard currently has a usable daemon connection.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum TransportLifecycle {
+    #[default]
     Unavailable,
     Reconnecting,
     Ready,
-}
-impl Default for TransportLifecycle {
-    fn default() -> Self {
-        Self::Unavailable
-    }
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AppStatus {

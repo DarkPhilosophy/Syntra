@@ -29,10 +29,18 @@ pub enum Mirror {
     Datagram(PathBuf),
 }
 
+/// A record handed to the writer thread.
+enum Entry {
+    /// A formatted line to emit.
+    Line(String),
+    /// A barrier: the writer acknowledges once every earlier line is written.
+    Flush(SyncSender<()>),
+}
+
 /// A logger whose levels can be changed while the process runs.
 pub struct Logger {
     config: LogConfig,
-    sink: SyncSender<String>,
+    sink: SyncSender<Entry>,
 }
 
 impl Log for Logger {
@@ -55,10 +63,20 @@ impl Log for Logger {
         );
         // Never block: a full queue means the consumer is wedged, and the
         // caller may be the input hot path.
-        let _ = self.sink.try_send(line);
+        let _ = self.sink.try_send(Entry::Line(line));
     }
 
-    fn flush(&self) {}
+    /// Blocks until every queued record has been written.
+    ///
+    /// Handing records to a writer thread means a process that exits
+    /// immediately after logging would lose them — precisely the fatal error
+    /// that explains why it exited. Call this before terminating.
+    fn flush(&self) {
+        let (ack, done) = sync_channel(0);
+        if self.sink.send(Entry::Flush(ack)).is_ok() {
+            let _ = done.recv();
+        }
+    }
 }
 
 /// Failure to install the process-wide logger.
@@ -76,7 +94,7 @@ pub struct InstallError(#[from] log::SetLoggerError);
 ///
 /// Returns [`InstallError`] if a logger was already installed.
 pub fn install(config: LogConfig, mirror: Mirror) -> Result<LogConfig, InstallError> {
-    let (sink, records) = sync_channel::<String>(QUEUE_DEPTH);
+    let (sink, records) = sync_channel::<Entry>(QUEUE_DEPTH);
 
     // A dedicated thread owns stderr so that a launcher or SSH session which
     // stops draining the pipe cannot stall the service event loop.
@@ -99,7 +117,17 @@ pub fn install(config: LogConfig, mirror: Mirror) -> Result<LogConfig, InstallEr
 
             let stderr = io::stderr();
             let mut output = stderr.lock();
-            while let Ok(line) = records.recv() {
+            while let Ok(entry) = records.recv() {
+                let line = match entry {
+                    Entry::Line(line) => line,
+                    Entry::Flush(ack) => {
+                        let _ = output.flush();
+                        // The sender is waiting on this; a dropped ack simply
+                        // releases it.
+                        let _ = ack.send(());
+                        continue;
+                    }
+                };
                 #[cfg(unix)]
                 if let Some((socket, path)) = &datagram {
                     let _ = socket.send_to(line.as_bytes(), path);

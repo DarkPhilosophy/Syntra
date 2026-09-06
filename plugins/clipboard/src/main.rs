@@ -1,11 +1,19 @@
+//! Syntra clipboard plugin for Linux desktops.
+//!
+//! Runs as a separate process so the daemon never links GTK: the toolkit
+//! needs a session bus and a display, which a service starting at boot has
+//! neither of. It observes and publishes file-clipboard selections and
+//! speaks [`syntra_plugin_api`] over stdio.
+
 use gtk::{gdk, gio, glib, prelude::*};
+use parking_lot::Mutex;
+use std::io::{self, BufReader};
+use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use syntra_plugin_api::{
     CopyManifest, EntryKind, Message, Operation, SourceEntry, read_messages, write_message,
 };
-use parking_lot::Mutex;
-use std::io::{self, BufReader};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 struct ClipboardBackend(gdk::ContentProvider);
 
@@ -123,8 +131,7 @@ fn main() {
         return;
     };
     let clipboard = display.clipboard();
-    if let Some(path) = std::env::var_os("SYNTRA_DEBUG_COPY_PATH").map(std::path::PathBuf::from)
-    {
+    if let Some(path) = std::env::var_os("SYNTRA_DEBUG_COPY_PATH").map(std::path::PathBuf::from) {
         let clipboard = clipboard.clone();
         glib::timeout_add_local_once(std::time::Duration::from_secs(15), move || {
             let file = gio::File::for_path(&path);
@@ -146,16 +153,16 @@ fn main() {
             }
         });
     }
-    let active_transfer: Arc<Mutex<Option<ActiveTransfer>>> = Arc::new(Mutex::new(None));
-    let suppress_echo = Arc::new(Mutex::new(false));
-    let remote_file_clipboard: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
-    let generation = Arc::new(AtomicU64::new(0));
-    let generation_for_main = Arc::clone(&generation);
+    let active_transfer: Rc<Mutex<Option<ActiveTransfer>>> = Rc::new(Mutex::new(None));
+    let suppress_echo = Rc::new(Mutex::new(false));
+    let remote_file_clipboard: Rc<Mutex<Option<Vec<u8>>>> = Rc::new(Mutex::new(None));
+    let generation = Rc::new(AtomicU64::new(0));
+    let generation_for_main = Rc::clone(&generation);
     let queue_for_main = Arc::clone(&incoming);
     let clipboard_for_main = clipboard.clone();
-    let active_for_main = Arc::clone(&active_transfer);
-    let suppress_for_main = Arc::clone(&suppress_echo);
-    let remote_for_main = Arc::clone(&remote_file_clipboard);
+    let active_for_main = Rc::clone(&active_transfer);
+    let suppress_for_main = Rc::clone(&suppress_echo);
+    let remote_for_main = Rc::clone(&remote_file_clipboard);
     glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
         let messages = std::mem::take(&mut *queue_for_main.lock());
         for message in messages {
@@ -249,10 +256,10 @@ fn main() {
     // whenever the selection owner changes. We only ever READ the offer,
     // never take ownership, so no auxiliary window and no polling.
     let cancel_for_changed = Arc::clone(&cancelled);
-    let suppress_for_changed = Arc::clone(&suppress_echo);
-    let remote_for_changed = Arc::clone(&remote_file_clipboard);
-    let active_for_changed = Arc::clone(&active_transfer);
-    let generation_for_changed = Arc::clone(&generation);
+    let suppress_for_changed = Rc::clone(&suppress_echo);
+    let remote_for_changed = Rc::clone(&remote_file_clipboard);
+    let active_for_changed = Rc::clone(&active_transfer);
+    let generation_for_changed = Rc::clone(&generation);
     let last_seen: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
     clipboard.connect_changed(move |clipboard| {
         if cancel_for_changed.load(Ordering::Acquire) {
@@ -285,9 +292,9 @@ fn main() {
             *last_seen.lock() = None;
             return;
         };
-        let remote = Arc::clone(&remote_for_changed);
-        let active = Arc::clone(&active_for_changed);
-        let generation = Arc::clone(&generation_for_changed);
+        let remote = Rc::clone(&remote_for_changed);
+        let active = Rc::clone(&active_for_changed);
+        let generation = Rc::clone(&generation_for_changed);
         let seen = Arc::clone(&last_seen);
         clipboard.read_async(
             &[mime],

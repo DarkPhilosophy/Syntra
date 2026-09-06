@@ -4,22 +4,18 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BaseMode {
     White,
+    #[default]
     Black,
 }
 
-impl Default for BaseMode {
-    fn default() -> Self {
-        Self::Black
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Palette {
+    #[default]
     Army,
     Forest,
     Ocean,
@@ -32,22 +28,11 @@ pub enum Palette {
     Ice,
 }
 
-impl Default for Palette {
-    fn default() -> Self {
-        Self::Army
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Density {
+    #[default]
     Comfortable,
     Compact,
-}
-
-impl Default for Density {
-    fn default() -> Self {
-        Self::Comfortable
-    }
 }
 
 use std::collections::BTreeMap;

@@ -1,5 +1,4 @@
 use futures::{Stream, StreamExt};
-use syntra_proto::{MAX_DATAGRAM_SIZE, ProtoEvent};
 use local_channel::mpsc::{Receiver, Sender, channel};
 use rustls::pki_types::CertificateDer;
 use std::{
@@ -9,6 +8,7 @@ use std::{
     sync::{Arc, Mutex, RwLock},
     time::Duration,
 };
+use syntra_proto::{MAX_DATAGRAM_SIZE, ProtoEvent};
 use thiserror::Error;
 use tokio::{
     sync::Mutex as AsyncMutex,
