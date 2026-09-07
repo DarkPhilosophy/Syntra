@@ -16,7 +16,7 @@ component TitleButton inherits Rectangle {
     accessible-label: label;
     Image { source: icon; colorize: danger ? Theme.danger : Theme.text; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; image-fit: contain; }
     if btn-touch.has-hover && root.label != "" : Rectangle {
-        x: (parent.width - self.width) / 2; y: -30px; width: max(132px, hint-text.preferred-width + 16px); height: 26px; z: 100;
+        x: (parent.width - self.width) / 2; y: parent.height + 4px; width: max(132px, hint-text.preferred-width + 16px); height: 26px; z: 100;
         background: Theme.elevated-surface; border-width: Theme.border-width; border-color: Theme.border; border-radius: Theme.small-radius;
         hint-text := Text { x: 8px; width: parent.width - 16px; height: parent.height; text: root.label; color: Theme.text; font-size: Theme.caption-size; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
     }
@@ -90,6 +90,7 @@ export component TitleBar inherits Rectangle {
     callback begin-window-drag();
     height: 52px;
     background: Theme.titlebar;
+    z: 10;
 
     HorizontalLayout {
         padding-left: Theme.small-spacing;
