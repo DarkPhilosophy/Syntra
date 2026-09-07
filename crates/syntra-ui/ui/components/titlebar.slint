@@ -15,6 +15,7 @@ component TitleButton inherits Rectangle {
     accessible-role: button;
     accessible-label: label;
     Image { source: icon; colorize: danger ? Theme.danger : Theme.text; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; image-fit: contain; }
+    Tooltip { text: @markdown("\{root.label}"); }
     btn-touch := TouchArea { enabled: root.enabled; clicked => { root.clicked(); } }
 }
 

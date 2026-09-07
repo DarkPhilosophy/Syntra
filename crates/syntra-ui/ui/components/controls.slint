@@ -6,6 +6,7 @@ export component AppButton inherits Rectangle {
     in property <bool> danger: false;
     in property <bool> primary: false;
     in property <string> a11y-label: text;
+    in property <string> tooltip: a11y-label;
     callback clicked();
     min-width: max(72px, label.preferred-width + 2 * Theme.control-padding);
     height: Theme.control-height;
@@ -24,6 +25,7 @@ export component AppButton inherits Rectangle {
     forward-focus: focus-scope;
     function activate() { if (root.enabled) { root.clicked(); } }
     label := Text { x: Theme.control-padding; width: parent.width - 2 * Theme.control-padding; height: parent.height; text: root.text; color: root.primary ? Theme.on-accent : root.danger ? Theme.danger : Theme.text; font-size: Theme.body-size; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
+    if root.tooltip != "" : Tooltip { text: @markdown("\{root.tooltip}"); }
     touch-area := TouchArea { enabled: root.enabled; clicked => { focus-scope.focus(); root.activate(); } }
     focus-scope := FocusScope { x: 0px; width: 0px; enabled: root.enabled; key-pressed(event) => { if (event.text == " " || event.text == "\n") { root.activate(); return accept; } return reject; } }
 }
