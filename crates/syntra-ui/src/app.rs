@@ -3118,6 +3118,13 @@ fn bind_window_callbacks(
             let weak = app.as_weak();
             move || {
                 if let Some(app) = weak.upgrade() {
+                    log::debug!(
+                        target: "syntra::ui::window",
+                        "titlebar minimize clicked: minimized={} maximized={} size={:?}",
+                        app.window().is_minimized(),
+                        app.window().is_maximized(),
+                        app.window().size()
+                    );
                     app.window().set_minimized(true);
                 }
             }
@@ -3126,7 +3133,15 @@ fn bind_window_callbacks(
             let weak = app.as_weak();
             move || {
                 if let Some(app) = weak.upgrade() {
-                    let maximized = !app.window().is_maximized();
+                    let before = app.window().is_maximized();
+                    let maximized = !before;
+                    log::debug!(
+                        target: "syntra::ui::window",
+                        "titlebar maximize clicked: before_maximized={} minimized={} -> {}",
+                        before,
+                        app.window().is_minimized(),
+                        maximized
+                    );
                     app.window().set_maximized(maximized);
                     app.set_window_maximized(maximized);
                 }

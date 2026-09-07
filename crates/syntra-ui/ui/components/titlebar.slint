@@ -7,8 +7,9 @@ component TitleButton inherits Rectangle {
     in property <bool> enabled: true;
     in property <bool> danger: false;
     callback clicked;
-    width: 44px;
-    height: 44px;
+    width: 48px;
+    height: 52px;
+    z: 1;
     background: btn-touch.pressed ? Theme.accent.with-alpha(0.32) : (btn-touch.has-hover ? (danger ? Theme.danger.with-alpha(0.28) : Theme.surface.with-alpha(0.42)) : transparent);
     opacity: enabled ? 1 : 0.35;
     accessible-role: button;
