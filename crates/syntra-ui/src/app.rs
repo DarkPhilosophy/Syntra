@@ -3160,15 +3160,12 @@ fn bind_window_callbacks(
             }
         });
         app.on_close_window({
-            let weak = app.as_weak();
             move || {
-                if tray_started {
-                    if let Some(app) = weak.upgrade() {
-                        let _ = app.window().hide();
-                    }
-                } else {
-                    let _ = slint::quit_event_loop();
-                }
+                log::info!(
+                    target: "syntra::ui::window",
+                    "titlebar close clicked: exiting application; tray remains available for hide"
+                );
+                let _ = slint::quit_event_loop();
             }
         });
     }

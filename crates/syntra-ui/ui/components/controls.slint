@@ -41,6 +41,7 @@ export component AppSwitch inherits Rectangle {
     rail := Rectangle { x: 2px; y: (parent.height - self.height) / 2; width: 40px; height: 22px; border-radius: self.height / 2; border-width: focus-scope.has-focus ? Theme.focus-ring-width : Theme.border-width; border-color: focus-scope.has-focus ? Theme.accent : Theme.border; background: root.checked ? Theme.accent : touch-area.pressed ? Theme.pressed-surface : touch-area.has-hover ? Theme.hover-surface : Theme.elevated-surface; opacity: root.enabled ? 1 : 0.5; animate background, border-color, opacity { duration: Theme.motion-enabled ? Theme.motion-fast : 0ms; easing: ease-out; }
         thumb := Rectangle { x: root.checked ? parent.width - self.width - 3px : 3px; y: (parent.height - self.height) / 2; width: 16px; height: 16px; border-radius: self.height / 2; background: root.checked ? Theme.on-accent : Theme.muted-text; animate x, background { duration: Theme.motion-enabled ? Theme.motion-fast : 0ms; easing: ease-out; } }
     }
+    if root.a11y-label != "" : Tooltip { text: @markdown("\{root.a11y-label}"); }
     touch-area := TouchArea { enabled: root.enabled; clicked => { focus-scope.focus(); root.toggle(); } }
     focus-scope := FocusScope { x: 0px; width: 0px; enabled: root.enabled; key-pressed(event) => { if (event.text == " " || event.text == "\n") { root.toggle(); return accept; } return reject; } }
 }
