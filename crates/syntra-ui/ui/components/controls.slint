@@ -25,7 +25,11 @@ export component AppButton inherits Rectangle {
     forward-focus: focus-scope;
     function activate() { if (root.enabled) { root.clicked(); } }
     label := Text { x: Theme.control-padding; width: parent.width - 2 * Theme.control-padding; height: parent.height; text: root.text; color: root.primary ? Theme.on-accent : root.danger ? Theme.danger : Theme.text; font-size: Theme.body-size; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
-    if root.tooltip != "" : Tooltip { text: @markdown("\{root.tooltip}"); }
+    if touch-area.has-hover && root.tooltip != "" : Rectangle {
+        x: (parent.width - self.width) / 2; y: parent.height + 6px; width: max(140px, tooltip-text.preferred-width + 16px); height: 26px; z: 100;
+        background: Theme.elevated-surface; border-width: Theme.border-width; border-color: Theme.border; border-radius: Theme.small-radius;
+        tooltip-text := Text { x: 8px; width: parent.width - 16px; height: parent.height; text: root.tooltip; color: Theme.text; font-size: Theme.caption-size; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
+    }
     touch-area := TouchArea { enabled: root.enabled; clicked => { focus-scope.focus(); root.activate(); } }
     focus-scope := FocusScope { x: 0px; width: 0px; enabled: root.enabled; key-pressed(event) => { if (event.text == " " || event.text == "\n") { root.activate(); return accept; } return reject; } }
 }
@@ -35,13 +39,13 @@ export component AppSwitch inherits Rectangle {
     in property <bool> enabled: true;
     in property <string> a11y-label;
     callback toggled(bool);
+    function toggle() { if (root.enabled) { root.toggled(!root.checked); } }
     width: 44px; height: Theme.hit-area; horizontal-stretch: 0; vertical-stretch: 0;
     accessible-role: switch; accessible-enabled: root.enabled; accessible-label: root.a11y-label; accessible-checkable: true; accessible-checked <=> root.checked; accessible-action-default => { root.toggle(); }; forward-focus: focus-scope;
-    function toggle() { if (root.enabled) { root.toggled(!root.checked); } }
     rail := Rectangle { x: 2px; y: (parent.height - self.height) / 2; width: 40px; height: 22px; border-radius: self.height / 2; border-width: focus-scope.has-focus ? Theme.focus-ring-width : Theme.border-width; border-color: focus-scope.has-focus ? Theme.accent : Theme.border; background: root.checked ? Theme.accent : touch-area.pressed ? Theme.pressed-surface : touch-area.has-hover ? Theme.hover-surface : Theme.elevated-surface; opacity: root.enabled ? 1 : 0.5; animate background, border-color, opacity { duration: Theme.motion-enabled ? Theme.motion-fast : 0ms; easing: ease-out; }
         thumb := Rectangle { x: root.checked ? parent.width - self.width - 3px : 3px; y: (parent.height - self.height) / 2; width: 16px; height: 16px; border-radius: self.height / 2; background: root.checked ? Theme.on-accent : Theme.muted-text; animate x, background { duration: Theme.motion-enabled ? Theme.motion-fast : 0ms; easing: ease-out; } }
     }
-    if root.a11y-label != "" : Tooltip { text: @markdown("\{root.a11y-label}"); }
     touch-area := TouchArea { enabled: root.enabled; clicked => { focus-scope.focus(); root.toggle(); } }
     focus-scope := FocusScope { x: 0px; width: 0px; enabled: root.enabled; key-pressed(event) => { if (event.text == " " || event.text == "\n") { root.toggle(); return accept; } return reject; } }
+
 }
