@@ -194,6 +194,11 @@ const DEFAULT_POINTER_AREA: (i32, i32) = (1920, 1080);
 struct PeerPointer {
     device: VirtualDevice,
     pen: PenState,
+    /// Events sent before the compositor has opened the new device are
+    /// lost, including the proximity-in that makes the cursor exist; after
+    /// that libinput ignores the pen entirely. Motion is only integrated
+    /// until then.
+    ready_at: std::time::Instant,
 }
 
 /// Device-independent pen state, kept apart so it can be tested.
@@ -240,10 +245,15 @@ impl PeerPointer {
         Ok(Self {
             device,
             pen: PenState::new(area),
+            ready_at: std::time::Instant::now() + DEVICE_SETTLE_TIME,
         })
     }
 
     fn translate(&mut self, event: PointerEvent) -> Vec<RawEvent> {
+        if std::time::Instant::now() < self.ready_at {
+            self.pen.track(event);
+            return Vec::new();
+        }
         self.pen.translate(event)
     }
 
@@ -254,7 +264,18 @@ impl PeerPointer {
     }
 }
 
+/// How long a compositor needs to discover and open a new input device.
+const DEVICE_SETTLE_TIME: std::time::Duration = std::time::Duration::from_millis(600);
+
 impl PenState {
+    /// Follows motion without emitting anything.
+    fn track(&mut self, event: PointerEvent) {
+        let proximity = self.in_proximity;
+        self.in_proximity = true;
+        let _ = self.translate(event);
+        self.in_proximity = proximity;
+    }
+
     fn translate(&mut self, event: PointerEvent) -> Vec<RawEvent> {
         let mut events = Vec::with_capacity(4);
         if !self.in_proximity {
