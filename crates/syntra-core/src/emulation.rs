@@ -316,6 +316,10 @@ fn input_accepted(
     sharing && emulation_ready && (capture_ready || independent)
 }
 
+/// Silence after which a peer is considered gone. Must exceed the sender's
+/// own ping window (4 pings, 500 ms apart) so both sides agree.
+const PEER_SILENCE_TIMEOUT: Duration = Duration::from_secs(3);
+
 impl ListenTask {
     /// Whether a peer may drive input here. Local capture is only needed to
     /// hand the shared pointer back; an independent pointer returns control
@@ -566,17 +570,30 @@ impl ListenTask {
                     EmulationRequest::Terminate => break,
                 },
                 _ = interval.tick() => {
-                    last_response.retain(|&addr,instant| {
-                        if instant.elapsed() > Duration::from_secs(1) {
-                            log::warn!("releasing keys: {addr} not responding!");
-                            self.active_inputs.remove(&addr);
-                            self.emulation_proxy.remove(addr);
-                            self.event_tx.send(EmulationEvent::Disconnected { addr }).expect("channel closed");
-                            false
-                        } else {
-                            true
+                    // Peers ping every 500 ms and give up after 2 s without
+                    // an answer; expiring sooner dropped peers over a couple
+                    // of lost datagrams while they kept sending input.
+                    let mut expired = Vec::new();
+                    last_response.retain(|&addr, instant: &mut Instant| {
+                        let alive = instant.elapsed() <= PEER_SILENCE_TIMEOUT;
+                        if !alive {
+                            expired.push(addr);
                         }
+                        alive
                     });
+                    for addr in expired {
+                        log::warn!("releasing keys: {addr} not responding!");
+                        let was_active = self.active_inputs.remove(&addr);
+                        self.entered_from.remove(&addr);
+                        self.emulation_proxy.remove(addr);
+                        self.event_tx.send(EmulationEvent::Disconnected { addr }).expect("channel closed");
+                        // Its input is ignored from now on; if it is still
+                        // alive it must release capture instead of driving a
+                        // pointer that no longer moves.
+                        if was_active {
+                            self.listener.reply(addr, ProtoEvent::Leave(0)).await;
+                        }
+                    }
                     clipboard_transfers
                         .retain(|_, transfer| transfer.started.elapsed() < CLIPBOARD_TRANSFER_TIMEOUT);
                 }
