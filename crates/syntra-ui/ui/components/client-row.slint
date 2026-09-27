@@ -98,6 +98,15 @@ export component ClientRow inherits Rectangle {
         }
     }
 
+    // Rows are reused by position: after a device above is removed this row
+    // shows a different device. Pending drafts belong to the previous one
+    // and must never be saved onto the new one.
+    private property <string> row-handle: client.handle;
+    changed row-handle => {
+        save-timer.stop();
+        root.editing = false;
+    }
+
     height: content.preferred-height;
     vertical-stretch: 0;
     background: Theme.surface;
@@ -136,6 +145,7 @@ export component ClientRow inherits Rectangle {
                     if (root.editing) {
                         save-timer.triggered();
                     } else {
+                        root.draft-display-name = client.display-name;
                         root.draft-hostname = client.hostname;
                         root.draft-fixed-ips = client.fixed-ips;
                         root.draft-port = client.port > 0 ? "\{client.port}" : "";
