@@ -362,3 +362,6 @@ history-preview-image = Vollständiges Bild öffnen
 action-close = Schließen
 input-independent-pointers = Eigener Zeiger pro Gerät
 input-independent-pointers-description = Jedes verbundene Gerät erhält hier einen eigenen Zeiger, statt deinen zu bewegen. Funktioniert mit dem uinput-Backend; Scrollen nutzt weiterhin den gemeinsamen Zeiger.
+discovery-add = Hinzufügen
+discovery-added = Hinzugefügt
+device-edit-autosave = Änderungen werden automatisch gespeichert.

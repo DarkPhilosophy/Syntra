@@ -1664,7 +1664,11 @@ fn project_app_state(app: &AppWindow, state: &AppViewState, settings: &Presentat
             }
         })
         .collect::<Vec<_>>();
-    global.set_clients(ModelRc::new(VecModel::from(clients)));
+    // Updated row by row: replacing the model recreates every row, which
+    // throws away the open editor and its unsaved text on each daemon event.
+    sync_model(global.get_clients(), clients, |model| {
+        global.set_clients(model)
+    });
     global.set_peer_zone_depth(zone_counts.into_iter().max().unwrap_or(1).max(1));
     global.set_discovered_peers(ModelRc::new(VecModel::from(
         state
@@ -1681,6 +1685,11 @@ fn project_app_state(app: &AppWindow, state: &AppViewState, settings: &Presentat
                     .join(", ")
                     .into(),
                 port: peer.port.into(),
+                added: state.clients.values().any(|client| {
+                    peer.addresses.iter().any(|address| {
+                        client.fixed_ips.contains(address) || client.ips.contains(address)
+                    })
+                }),
             })
             .collect::<Vec<_>>(),
     )));
@@ -2552,6 +2561,27 @@ fn bind_app_state_callbacks(
         let tx = tx.clone();
         let weak = weak.clone();
         let state = Arc::clone(&state);
+        global.on_add_discovered_peer(move |id| {
+            let peer = state.lock().ok().and_then(|view| {
+                view.discovered_peers
+                    .iter()
+                    .find(|peer| peer.id == id.as_str())
+                    .cloned()
+            });
+            if let Some(peer) = peer {
+                dispatch(
+                    UiIntent::CreateDiscovered(peer.addresses, peer.port),
+                    &tx,
+                    &weak,
+                    &state,
+                );
+            }
+        });
+    }
+    {
+        let tx = tx.clone();
+        let weak = weak.clone();
+        let state = Arc::clone(&state);
         global.on_resolve_dns(move |handle| {
             dispatch_client_intent(handle.as_str(), &tx, &weak, &state, UiIntent::ResolveDns)
         });
@@ -3241,6 +3271,31 @@ fn bind_no_arg(
     );
 }
 
+/// Brings `current` to `items` in place when it is a `VecModel`, touching
+/// only rows that changed so row components (and their local state) survive.
+fn sync_model<T: Clone + PartialEq + 'static>(
+    current: ModelRc<T>,
+    items: Vec<T>,
+    replace: impl FnOnce(ModelRc<T>),
+) {
+    let Some(model) = current.as_any().downcast_ref::<VecModel<T>>() else {
+        replace(ModelRc::new(VecModel::from(items)));
+        return;
+    };
+    let shared = model.row_count().min(items.len());
+    for (row, item) in items.iter().enumerate().take(shared) {
+        if model.row_data(row).as_ref() != Some(item) {
+            model.set_row_data(row, item.clone());
+        }
+    }
+    for item in items.iter().skip(shared) {
+        model.push(item.clone());
+    }
+    while model.row_count() > items.len() {
+        model.remove(model.row_count() - 1);
+    }
+}
+
 fn bind_bool(
     global: &AppState,
     tx: mpsc::Sender<FrontendRequest>,
@@ -3518,4 +3573,30 @@ fn save_presentation_settings(settings: &PresentationSettings) -> io::Result<()>
         ));
     };
     settings.save(&path)
+}
+
+#[cfg(test)]
+mod sync_model_tests {
+    use super::sync_model;
+    use slint::{Model, ModelRc, VecModel};
+
+    /// Rows must be updated in place so open editors survive daemon events.
+    #[test]
+    fn keeps_the_model_and_only_touches_changed_rows() {
+        let model = ModelRc::new(VecModel::from(vec![1, 2, 3]));
+        let mut replaced = false;
+        sync_model(model.clone(), vec![1, 5, 3, 4], |_| replaced = true);
+        assert!(!replaced);
+        assert_eq!(model.iter().collect::<Vec<_>>(), vec![1, 5, 3, 4]);
+        sync_model(model.clone(), vec![9], |_| replaced = true);
+        assert!(!replaced);
+        assert_eq!(model.iter().collect::<Vec<_>>(), vec![9]);
+    }
+
+    #[test]
+    fn replaces_a_model_that_is_not_a_vec_model() {
+        let mut replaced = None;
+        sync_model(ModelRc::default(), vec![7], |m| replaced = Some(m));
+        assert_eq!(replaced.unwrap().iter().collect::<Vec<_>>(), vec![7]);
+    }
 }

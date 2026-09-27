@@ -244,6 +244,7 @@ export component AppWindow inherits Window {
                     peer-zone-depth: AppState.peer-zone-depth;
                     discovered-peers: AppState.discovered-peers;
                     discover-peers => { AppState.discover-peers(); }
+                    add-discovered(id) => { AppState.add-discovered-peer(id); }
                     local-name: root.local-device-name;
                     local-image: root.local-device-image;
                     has-local-image: root.has-local-device-image;

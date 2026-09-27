@@ -14,6 +14,34 @@ impl Service {
         self.notify_frontend(FrontendEvent::Created(handle, c, s));
     }
 
+    /// Adds a peer found by discovery unless one of its addresses already
+    /// belongs to a configured client.
+    pub(super) fn add_discovered_client(&mut self, addresses: Vec<std::net::IpAddr>, port: u16) {
+        if addresses.is_empty() || port == 0 {
+            log::warn!("ignoring discovered peer without address or port");
+            return;
+        }
+        let known =
+            self.client_manager
+                .get_client_states()
+                .into_iter()
+                .any(|(_, config, state)| {
+                    addresses.iter().any(|address| {
+                        config.fix_ips.contains(address) || state.ips.contains(address)
+                    })
+                });
+        if known {
+            log::info!("discovered peer {addresses:?} is already configured");
+            return;
+        }
+        let handle = self.client_manager.add_client();
+        self.client_manager.set_fix_ips(handle, addresses);
+        self.client_manager.set_port(handle, port);
+        log::info!("added discovered client {handle}");
+        let (c, s) = self.client_manager.get_state(handle).unwrap();
+        self.notify_frontend(FrontendEvent::Created(handle, c, s));
+    }
+
     pub(super) fn set_client_active(&mut self, handle: ClientHandle, active: bool) {
         if active {
             self.activate_client(handle);

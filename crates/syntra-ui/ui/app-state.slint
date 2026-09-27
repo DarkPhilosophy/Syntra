@@ -16,6 +16,8 @@ export struct DiscoveredPeerItem {
     display-name: string,
     addresses: string,
     port: int,
+    /// A configured device already uses one of these addresses.
+    added: bool,
 }
 
 export global AppState {
@@ -45,6 +47,7 @@ export global AppState {
     in-out property <int> peer-zone-depth: 1;
     in-out property <[DiscoveredPeerItem]> discovered-peers;
     callback discover-peers();
+    callback add-discovered-peer(string);
     in-out property <bool> service-supported;
     in-out property <bool> service-busy;
     in-out property <bool> service-known;

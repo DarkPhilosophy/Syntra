@@ -4,6 +4,7 @@ use syntra_api::{ClientHandle, ClipboardTransferId, FrontendEvent, FrontendReque
 pub enum UiIntent {
     Activate(ClientHandle, bool),
     Create,
+    CreateDiscovered(Vec<std::net::IpAddr>, u16),
     ChangePort(u16),
     Delete(ClientHandle),
     Enumerate,
@@ -38,6 +39,13 @@ impl UiIntent {
         Ok(match self {
             Activate(h, b) => FrontendRequest::Activate(h, b),
             Create => FrontendRequest::Create,
+            CreateDiscovered(_, 0) => return Err(IntentError::InvalidPort),
+            CreateDiscovered(addresses, _) if addresses.is_empty() => {
+                return Err(IntentError::EmptyField("addresses"));
+            }
+            CreateDiscovered(addresses, port) => {
+                FrontendRequest::CreateDiscovered { addresses, port }
+            }
             ChangePort(0) | UpdatePort(_, 0) => return Err(IntentError::InvalidPort),
             ChangePort(p) => FrontendRequest::ChangePort(p),
             Delete(h) => FrontendRequest::Delete(h),

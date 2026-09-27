@@ -362,3 +362,6 @@ history-preview-image = 打开完整图像
 action-close = 关闭
 input-independent-pointers = 每台设备独立指针
 input-independent-pointers-description = 每台已连接的设备在此获得自己的光标，而不会移动你的光标。需要 uinput 后端；滚动仍使用共享指针。
+discovery-add = 添加
+discovery-added = 已添加
+device-edit-autosave = 更改会自动保存。

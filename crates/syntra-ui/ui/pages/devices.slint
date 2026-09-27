@@ -14,6 +14,7 @@ export component DevicesPage inherits Rectangle {
     in property <int> peer-zone-depth: 1;
     in property <[DiscoveredPeerItem]> discovered-peers;
     callback discover-peers();
+    callback add-discovered(string);
     in property <string> title: Translations.tr("navigation-devices");
     in property <string> add-label: Translations.tr("devices-add");
     in property <string> empty-title: Translations.tr("devices-empty");
@@ -111,12 +112,23 @@ export component DevicesPage inherits Rectangle {
         if root.discovered-peers.length > 0 : VerticalLayout {
             spacing: Theme.small-spacing;
             for peer in root.discovered-peers : Rectangle {
-                height: 72px;
+                height: discovered-row.preferred-height;
                 background: Theme.surface;
-                VerticalLayout {
+                border-radius: Theme.corner-radius;
+                discovered-row := HorizontalLayout {
                     padding: Theme.small-spacing;
-                    Text { text: peer.display-name; color: Theme.text; font-size: Theme.body-size; overflow: elide; }
-                    Text { text: peer.addresses + " · " + peer.port; color: Theme.muted-text; font-size: Theme.caption-size; overflow: elide; }
+                    spacing: Theme.small-spacing;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        Text { text: peer.display-name; color: Theme.text; font-size: Theme.body-size; overflow: elide; }
+                        Text { text: peer.addresses + " · " + peer.port; color: Theme.muted-text; font-size: Theme.caption-size; overflow: elide; }
+                    }
+                    AppButton {
+                        text: peer.added ? Translations.tr("discovery-added") : Translations.tr("discovery-add");
+                        enabled: !peer.added;
+                        clicked => { root.add-discovered(peer.id); }
+                    }
                 }
             }
         }

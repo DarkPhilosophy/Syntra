@@ -362,3 +362,6 @@ history-preview-image = Open full image
 action-close = Close
 input-independent-pointers = Independent pointer per device
 input-independent-pointers-description = Each connected device gets its own cursor here instead of moving yours. Works with the uinput backend; scrolling still uses the shared pointer.
+discovery-add = Add
+discovery-added = Added
+device-edit-autosave = Changes are saved automatically.

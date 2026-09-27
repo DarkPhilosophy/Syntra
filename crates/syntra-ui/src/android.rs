@@ -324,6 +324,9 @@ impl AndroidHostController {
                 events.push(Self::unavailable("Input sharing"));
                 events.push(FrontendEvent::InputSharing(false));
             }
+            FrontendRequest::CreateDiscovered { .. } => {
+                events.push(Self::unavailable("Discovered peers"));
+            }
             FrontendRequest::SetIndependentPointers(_) => {
                 events.push(Self::unavailable("Independent pointers"));
                 events.push(FrontendEvent::IndependentPointers(false));

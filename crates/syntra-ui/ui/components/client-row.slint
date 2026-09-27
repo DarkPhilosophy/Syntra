@@ -31,6 +31,15 @@ export struct ClientItem {
     authorized: bool,
 }
 
+/// A caption above one input, sized to its content so fields never stretch.
+component EditField inherits VerticalLayout {
+    in property <string> label;
+    spacing: 4px;
+    vertical-stretch: 0;
+    Text { text: root.label; color: Theme.muted-text; font-size: Theme.caption-size; overflow: elide; }
+    @children
+}
+
 export component ClientRow inherits Rectangle {
     in property <ClientItem> client;
     in property <string> label-edit: Translations.tr("action-edit");
@@ -186,38 +195,73 @@ export component ClientRow inherits Rectangle {
         }
 
         if root.editing : VerticalLayout {
-            spacing: 8px;
+            spacing: Theme.spacing;
+            padding-top: Theme.small-spacing;
+
+            // Identity: how this device looks here.
             HorizontalLayout {
-                spacing: 10px;
-                Text { width: 110px; text: root.label-hostname; color: Theme.muted-text; vertical-alignment: center; }
-                LineEdit { horizontal-stretch: 1; text <=> root.draft-hostname; edited(value) => { root.schedule-save(); } }
-            }
-            HorizontalLayout {
-                spacing: 10px;
-                Text { width: 110px; text: Translations.tr("label-display-name"); color: Theme.muted-text; vertical-alignment: center; }
-                LineEdit { horizontal-stretch: 1; text <=> root.draft-display-name; enabled: client.identity-key != ""; edited(value) => { root.schedule-save(); } }
-            }
-            HorizontalLayout {
-                spacing: 10px;
-                AppButton { text: Translations.tr("device-image-peer"); a11y-label: Translations.tr("device-image-peer") + ": " + client.display-name; enabled: client.identity-key != ""; clicked => { root.choose-display-image(client.identity-key); } }
-                AppButton { text: Translations.tr("label-remove-image"); enabled: client.has-custom-image; clicked => { root.clear-display-image(client.identity-key); } }
-            }
-            HorizontalLayout {
-                spacing: 10px;
-                Text { width: 110px; text: root.label-ip-addresses; color: Theme.muted-text; vertical-alignment: center; }
-                LineEdit { horizontal-stretch: 1; text <=> root.draft-fixed-ips; edited(value) => { root.schedule-save(); } }
-            }
-            HorizontalLayout {
-                spacing: 10px;
-                Text { width: 110px; text: root.label-port; color: Theme.muted-text; vertical-alignment: center; }
-                LineEdit { width: 140px; input-type: number; text <=> root.draft-port; edited(value) => { root.schedule-save(); } }
-                Text { width: 110px; text: root.label-position; color: Theme.muted-text; vertical-alignment: center; }
-                ComboBox {
-                    horizontal-stretch: 1;
-                    model: root.position-options;
-                    current-index <=> root.draft-position;
-                    selected(value) => { root.schedule-save(); }
+                spacing: Theme.spacing;
+                VerticalLayout {
+                    alignment: start;
+                    spacing: Theme.small-spacing;
+                    Avatar { source: client.custom-image; has-image: client.has-custom-image; size: 72px; }
                 }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: Theme.small-spacing;
+                    EditField {
+                        label: Translations.tr("label-display-name");
+                        LineEdit { height: Theme.control-height; text <=> root.draft-display-name; enabled: client.identity-key != ""; edited(value) => { root.schedule-save(); } }
+                    }
+                    HorizontalLayout {
+                        alignment: start;
+                        spacing: Theme.small-spacing;
+                        AppButton { text: Translations.tr("device-image-peer"); a11y-label: Translations.tr("device-image-peer") + ": " + client.display-name; enabled: client.identity-key != ""; clicked => { root.choose-display-image(client.identity-key); } }
+                        AppButton { text: Translations.tr("label-remove-image"); enabled: client.has-custom-image; clicked => { root.clear-display-image(client.identity-key); } }
+                    }
+                }
+            }
+
+            Rectangle { height: 1px; background: Theme.elevated-surface; }
+
+            // Connection: where the device is reached and where it sits.
+            HorizontalLayout {
+                spacing: Theme.spacing;
+                EditField {
+                    horizontal-stretch: 1;
+                    label: root.label-hostname;
+                    LineEdit { height: Theme.control-height; placeholder-text: "host.local"; text <=> root.draft-hostname; edited(value) => { root.schedule-save(); } }
+                }
+                EditField {
+                    horizontal-stretch: 1;
+                    label: root.label-ip-addresses;
+                    LineEdit { height: Theme.control-height; placeholder-text: "192.168.1.10"; text <=> root.draft-fixed-ips; edited(value) => { root.schedule-save(); } }
+                }
+            }
+            HorizontalLayout {
+                spacing: Theme.spacing;
+                EditField {
+                    width: 140px;
+                    label: root.label-port;
+                    LineEdit { height: Theme.control-height; input-type: number; text <=> root.draft-port; edited(value) => { root.schedule-save(); } }
+                }
+                EditField {
+                    width: 200px;
+                    label: root.label-position;
+                    ComboBox {
+                        height: Theme.control-height;
+                        model: root.position-options;
+                        current-index <=> root.draft-position;
+                        selected(value) => { root.schedule-save(); }
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            Text {
+                text: Translations.tr("device-edit-autosave");
+                color: Theme.muted-text;
+                font-size: Theme.caption-size;
+                wrap: word-wrap;
             }
         }
     }

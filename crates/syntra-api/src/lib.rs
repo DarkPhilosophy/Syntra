@@ -853,6 +853,9 @@ pub enum FrontendRequest {
     Activate(ClientHandle, bool),
     /// add a new client
     Create,
+    /// Add a client for a peer found by discovery, reachable at its
+    /// advertised addresses and port.
+    CreateDiscovered { addresses: Vec<IpAddr>, port: u16 },
     /// change the listen port (recreate udp listener)
     ChangePort(u16),
     /// remove a client

@@ -88,6 +88,10 @@ impl Service {
                 self.add_client();
                 self.save_config();
             }
+            FrontendRequest::CreateDiscovered { addresses, port } => {
+                self.add_discovered_client(addresses, port);
+                self.save_config();
+            }
             FrontendRequest::Delete(handle) => {
                 self.remove_client(handle);
                 self.save_config();
