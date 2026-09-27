@@ -125,6 +125,73 @@ fn open_link(url: &str) {
     }
 }
 
+#[cfg(not(target_os = "android"))]
+fn bind_install_destination(global: &AppState<'_>, weak: &slint::Weak<AppWindow>) {
+    let install_destination = crate::platform::install::status()
+        .ok()
+        .and_then(|paths| paths.daemon.parent().map(|path| path.display().to_string()))
+        .unwrap_or_else(|| "Unavailable".to_string());
+    let source_directory = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|path| path.display().to_string()))
+        .unwrap_or_else(|| "Unavailable".to_string());
+    global.set_service_source_path(source_directory.into());
+    global.set_service_install_destination(install_destination.into());
+    global.set_service_destination_customised(
+        crate::platform::install::configured_directory().is_some(),
+    );
+    {
+        // Choosing a directory must not block the event loop, so the dialog
+        // runs on the Slint executor and the result is applied on return.
+        let weak = weak.clone();
+        global.on_choose_install_destination(move || {
+            let weak = weak.clone();
+            let _ = slint::spawn_local(async move {
+                let Some(directory) = rfd::AsyncFileDialog::new().pick_folder().await else {
+                    return;
+                };
+                let chosen = directory.path().to_path_buf();
+                let outcome = crate::platform::install::set_configured_directory(Some(&chosen));
+                if let Some(app) = weak.upgrade() {
+                    let global = app.global::<AppState>();
+                    match outcome {
+                        Ok(()) => {
+                            global.set_service_install_destination(
+                                chosen.display().to_string().into(),
+                            );
+                            global.set_service_destination_customised(true);
+                            global.set_service_error(Default::default());
+                        }
+                        Err(error) => global.set_service_error(error.to_string().into()),
+                    }
+                }
+            });
+        });
+    }
+    {
+        let weak = weak.clone();
+        global.on_reset_install_destination(move || {
+            let outcome = crate::platform::install::set_configured_directory(None);
+            if let Some(app) = weak.upgrade() {
+                let global = app.global::<AppState>();
+                match outcome {
+                    Ok(()) => {
+                        global.set_service_install_destination(
+                            crate::platform::install::default_directory()
+                                .map(|path| path.display().to_string())
+                                .unwrap_or_default()
+                                .into(),
+                        );
+                        global.set_service_destination_customised(false);
+                        global.set_service_error(Default::default());
+                    }
+                    Err(error) => global.set_service_error(error.to_string().into()),
+                }
+            }
+        });
+    }
+}
+
 /// One diagnostic as a single plain-text line, for copying.
 fn diagnostic_line(entry: &DiagnosticEntry) -> String {
     [
@@ -2259,69 +2326,10 @@ fn bind_app_state_callbacks(
             .unwrap_or_else(|error| error.to_string())
             .into(),
     );
-    let install_destination = crate::platform::install::status()
-        .ok()
-        .and_then(|paths| paths.daemon.parent().map(|path| path.display().to_string()))
-        .unwrap_or_else(|| "Unavailable".to_string());
-    let source_directory = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(|path| path.display().to_string()))
-        .unwrap_or_else(|| "Unavailable".to_string());
-    global.set_service_source_path(source_directory.into());
-    global.set_service_install_destination(install_destination.into());
-    global.set_service_destination_customised(
-        crate::platform::install::configured_directory().is_some(),
-    );
-    {
-        // Choosing a directory must not block the event loop, so the dialog
-        // runs on the Slint executor and the result is applied on return.
-        let weak = weak.clone();
-        global.on_choose_install_destination(move || {
-            let weak = weak.clone();
-            let _ = slint::spawn_local(async move {
-                let Some(directory) = rfd::AsyncFileDialog::new().pick_folder().await else {
-                    return;
-                };
-                let chosen = directory.path().to_path_buf();
-                let outcome = crate::platform::install::set_configured_directory(Some(&chosen));
-                if let Some(app) = weak.upgrade() {
-                    let global = app.global::<AppState>();
-                    match outcome {
-                        Ok(()) => {
-                            global.set_service_install_destination(
-                                chosen.display().to_string().into(),
-                            );
-                            global.set_service_destination_customised(true);
-                            global.set_service_error(Default::default());
-                        }
-                        Err(error) => global.set_service_error(error.to_string().into()),
-                    }
-                }
-            });
-        });
-    }
-    {
-        let weak = weak.clone();
-        global.on_reset_install_destination(move || {
-            let outcome = crate::platform::install::set_configured_directory(None);
-            if let Some(app) = weak.upgrade() {
-                let global = app.global::<AppState>();
-                match outcome {
-                    Ok(()) => {
-                        global.set_service_install_destination(
-                            crate::platform::install::default_directory()
-                                .map(|path| path.display().to_string())
-                                .unwrap_or_default()
-                                .into(),
-                        );
-                        global.set_service_destination_customised(false);
-                        global.set_service_error(Default::default());
-                    }
-                    Err(error) => global.set_service_error(error.to_string().into()),
-                }
-            }
-        });
-    }
+    // Installing binaries and choosing where they go only exists on
+    // desktops; Android ships the dashboard inside its package.
+    #[cfg(not(target_os = "android"))]
+    bind_install_destination(&global, &weak);
     {
         let weak = weak.clone();
         let service_requests = tx.clone();
@@ -2339,6 +2347,7 @@ fn bind_app_state_callbacks(
                 let result = (|| {
                     match action.as_str() {
                         "refresh" => {}
+                        #[cfg(not(target_os = "android"))]
                         "install" => {
                             // Copy first: a unit pointing at a build tree
                             // silently fails once that tree moves.

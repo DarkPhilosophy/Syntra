@@ -20,8 +20,8 @@
 //!
 //! # Connecting
 //!
-//! [`connect`] and [`connect_with_timeout`] open a blocking client pair,
-//! [`connect_async`] an async one, and [`AsyncFrontendListener`] is the
+//! [`connect()`] and [`connect_with_timeout`] open a blocking client pair,
+//! [`connect_async()`] an async one, and [`AsyncFrontendListener`] is the
 //! daemon's accept side.
 
 use std::{

@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="../docs/brand/splash.gif" alt="Syntra splash: a brass gear train turning around the horned mark" width="420">
+<img src="../docs/brand/splash.png" alt="Syntra splash: a brass gear train turning around the horned mark" width="420">
 
 # Syntra
 

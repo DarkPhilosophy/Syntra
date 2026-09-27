@@ -1,6 +1,6 @@
 //! The Syntra peer protocol: what two devices say to each other.
 //!
-//! This is distinct from [`syntra_api`], which is the local contract between
+//! This is distinct from `syntra_api`, which is the local contract between
 //! a daemon and its clients. This crate is the wire format between machines,
 //! carried over UDP for events and TCP for connection setup, under DTLS.
 //!
