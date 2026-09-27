@@ -15,6 +15,7 @@ import { SettingsPage } from "pages/settings.slint";
 import { AuthorizationPage } from "pages/authorization.slint";
 import { WelcomeOverlay } from "components/welcome.slint";
 import { AboutPage } from "pages/about.slint";
+import { NavItem, NavSection } from "components/navigation.slint";
 import { Palette, ScrollView } from "std-widgets.slint";
 import { Avatar, AvatarRenderer } from "components/avatar.slint";
 import { IncomingFileDialog } from "components/incoming-file-dialog.slint";
@@ -102,32 +103,57 @@ export component AppWindow inherits Window {
                     alignment: start;
                     padding: Theme.small-spacing;
                     spacing: Theme.small-spacing;
-                    for item[index] in [
-                        { id: "overview", icon: @image-url("assets/navigation/overview.svg"), label: Translations.tr("navigation-overview") },
-                        { id: "devices", icon: @image-url("assets/navigation/devices.svg"), label: Translations.tr("navigation-devices") },
-                        { id: "input", icon: @image-url("assets/navigation/input.svg"), label: Translations.tr("navigation-input") },
-                        { id: "clipboard", icon: @image-url("assets/navigation/clipboard.svg"), label: Translations.tr("navigation-clipboard") },
-                        { id: "history", icon: @image-url("assets/navigation/history.svg"), label: Translations.tr("history-title") },
-                        { id: "transfers", icon: @image-url("assets/navigation/transfers.svg"), label: Translations.tr("navigation-transfers") },
-                        { id: "diagnostics", icon: @image-url("assets/navigation/diagnostics.svg"), label: Translations.tr("navigation-diagnostics") },
-                        { id: "plugins", icon: @image-url("assets/navigation/plugins.svg"), label: Translations.tr("navigation-plugins") },
-                        { id: "authorization", icon: @image-url("assets/navigation/authorization.svg"), label: Translations.tr("navigation-authorization") },
-                        { id: "settings", icon: @image-url("assets/navigation/settings.svg"), label: Translations.tr("navigation-settings") },
-                        { id: "about", icon: @image-url("assets/navigation/about.svg"), label: Translations.tr("navigation-about") }
-                    ]: Rectangle {
-                        height: Theme.nav-item-height;
-                        vertical-stretch: 0;
-                        accessible-role: button;
-                        accessible-label: item.label;
-                        background: selected-page == item.id ? Theme.accent.with-alpha(0.18) : (nav-touch.has-hover ? Theme.text.with-alpha(0.06) : transparent);
-                        border-radius: Theme.small-radius;
-                        Image { source: item.icon; colorize: selected-page == item.id ? Theme.accent : Theme.muted-text; width: 28px; height: 28px; x: 12px; y: (parent.height - self.height) / 2; image-fit: contain; }
-                        Text { text: item.label; visible: sidebar-expanded; color: selected-page == item.id ? Theme.text : Theme.muted-text; font-size: Theme.body-size; x: 52px; width: max(0px, parent.width - self.x - 8px); vertical-alignment: center; overflow: elide; }
-                        nav-touch := TouchArea { clicked => { selected-page = item.id; root.navigate(item.id); } }
-                        Tooltip { text: @markdown("\{item.label}"); }
+                    // Ordered by how often each destination is used: what is
+                    // connected, what is shared, then how the app is run.
+                    NavSection {
+                        title: Translations.tr("navigation-group-connect");
+                        expanded: root.sidebar-expanded;
+                        selected: root.selected-page;
+                        activate(id) => { root.selected-page = id; root.navigate(id); }
+                        entries: [
+                            { id: "overview", icon: @image-url("assets/navigation/overview.svg"), label: Translations.tr("navigation-overview") },
+                            { id: "devices", icon: @image-url("assets/navigation/devices.svg"), label: Translations.tr("navigation-devices") },
+                            { id: "authorization", icon: @image-url("assets/navigation/authorization.svg"), label: Translations.tr("navigation-authorization") },
+                        ];
+                    }
+                    NavSection {
+                        title: Translations.tr("navigation-group-share");
+                        expanded: root.sidebar-expanded;
+                        selected: root.selected-page;
+                        activate(id) => { root.selected-page = id; root.navigate(id); }
+                        entries: [
+                            { id: "input", icon: @image-url("assets/navigation/input.svg"), label: Translations.tr("navigation-input") },
+                            { id: "clipboard", icon: @image-url("assets/navigation/clipboard.svg"), label: Translations.tr("navigation-clipboard") },
+                            { id: "history", icon: @image-url("assets/navigation/history.svg"), label: Translations.tr("history-title") },
+                            { id: "transfers", icon: @image-url("assets/navigation/transfers.svg"), label: Translations.tr("navigation-transfers") },
+                        ];
+                    }
+                    NavSection {
+                        title: Translations.tr("navigation-group-system");
+                        expanded: root.sidebar-expanded;
+                        selected: root.selected-page;
+                        activate(id) => { root.selected-page = id; root.navigate(id); }
+                        entries: [
+                            { id: "settings", icon: @image-url("assets/navigation/settings.svg"), label: Translations.tr("navigation-settings") },
+                            { id: "plugins", icon: @image-url("assets/navigation/plugins.svg"), label: Translations.tr("navigation-plugins") },
+                            { id: "diagnostics", icon: @image-url("assets/navigation/diagnostics.svg"), label: Translations.tr("navigation-diagnostics") },
+                        ];
                     }
                 }
                 }
+                }
+                // Pinned below the scrolling list, next to the device card.
+                Rectangle {
+                    height: about-item.height + Theme.small-spacing;
+                    about-item := NavItem {
+                        x: Theme.small-spacing;
+                        y: 0;
+                        width: parent.width - 2 * Theme.small-spacing;
+                        entry: { id: "about", icon: @image-url("assets/navigation/about.svg"), label: Translations.tr("navigation-about") };
+                        active: root.selected-page == "about";
+                        expanded: root.sidebar-expanded;
+                        activate(id) => { root.selected-page = id; root.navigate(id); }
+                    }
                 }
                 profile := Rectangle {
                     height: max(64px, Theme.control-height + 2 * Theme.small-spacing);

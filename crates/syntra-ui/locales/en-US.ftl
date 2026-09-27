@@ -401,3 +401,6 @@ about-role-gtk = Linux clipboard helper
 about-role-arboard = Cross-platform clipboard access
 about-role-sunshine = Model for kernel-level remote input
 about-role-lan-mouse = The project Syntra was originally forked from
+navigation-group-connect = CONNECT
+navigation-group-share = SHARE
+navigation-group-system = SYSTEM

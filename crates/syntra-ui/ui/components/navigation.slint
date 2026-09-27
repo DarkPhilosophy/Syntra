@@ -1,0 +1,98 @@
+import { Theme } from "../theme.slint";
+
+export struct NavEntry {
+    id: string,
+    icon: image,
+    label: string,
+}
+
+// One destination in the sidebar. The active entry gets a tinted pill, an
+// accent-colored icon and a bar on its leading edge; hover is a faint wash.
+export component NavItem inherits Rectangle {
+    in property <NavEntry> entry;
+    in property <bool> active;
+    in property <bool> expanded: true;
+    callback activate(string);
+
+    height: 40px;
+    vertical-stretch: 0;
+    border-radius: Theme.small-radius;
+    background: root.active ? Theme.accent.with-alpha(0.14)
+        : touch.pressed ? Theme.text.with-alpha(0.10)
+        : touch.has-hover ? Theme.text.with-alpha(0.05) : transparent;
+    animate background { duration: Theme.motion-enabled ? 120ms : 0ms; }
+    accessible-role: button;
+    accessible-label: root.entry.label;
+    accessible-action-default => { root.activate(root.entry.id); }
+
+    // Leading indicator: grows in when the entry becomes active.
+    Rectangle {
+        x: 0;
+        width: 3px;
+        height: root.active ? parent.height * 0.5 : 0px;
+        y: (parent.height - self.height) / 2;
+        border-radius: 2px;
+        background: Theme.accent;
+        animate height { duration: Theme.motion-enabled ? 180ms : 0ms; easing: ease-out; }
+    }
+    Image {
+        source: root.entry.icon;
+        colorize: root.active ? Theme.accent : touch.has-hover ? Theme.text : Theme.muted-text;
+        width: 22px;
+        height: 22px;
+        x: 14px;
+        y: (parent.height - self.height) / 2;
+        image-fit: contain;
+    }
+    if root.expanded: Text {
+        x: 48px;
+        width: max(0px, parent.width - self.x - 8px);
+        height: parent.height;
+        text: root.entry.label;
+        color: root.active || touch.has-hover ? Theme.text : Theme.muted-text;
+        font-size: Theme.body-size;
+        font-weight: root.active ? 600 : 400;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.activate(root.entry.id); }
+    }
+    // Labels are hidden on the collapsed rail; the tooltip names the target.
+    if !root.expanded: Tooltip { text: @markdown("\{root.entry.label}"); }
+}
+
+// A labelled group of destinations. Collapsed, the label becomes a hairline
+// so groups stay visually distinct without text.
+export component NavSection inherits VerticalLayout {
+    in property <string> title;
+    in property <[NavEntry]> entries;
+    in property <string> selected;
+    in property <bool> expanded: true;
+    callback activate(string);
+
+    spacing: 2px;
+    vertical-stretch: 0;
+    if root.expanded: Text {
+        text: root.title;
+        color: Theme.muted-text.with-alpha(0.75);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 1.2px;
+        height: 28px;
+        x: 14px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    if !root.expanded: Rectangle {
+        height: 17px;
+        Rectangle { y: 8px; x: 14px; width: parent.width - 28px; height: 1px; background: Theme.border; }
+    }
+    for entry in root.entries: NavItem {
+        entry: entry;
+        active: root.selected == entry.id;
+        expanded: root.expanded;
+        activate(id) => { root.activate(id); }
+    }
+}

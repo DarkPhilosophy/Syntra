@@ -401,3 +401,6 @@ about-role-gtk = Linux 剪贴板辅助程序
 about-role-arboard = 跨平台剪贴板访问
 about-role-sunshine = 内核级远程输入的参考
 about-role-lan-mouse = Syntra 最初分叉自的项目
+navigation-group-connect = 连接
+navigation-group-share = 共享
+navigation-group-system = 系统

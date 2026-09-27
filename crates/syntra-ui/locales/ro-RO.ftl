@@ -1,6 +1,6 @@
 app-title = Syntra
 navigation-overview = Prezentare
-navigation-input = Permisiuni
+navigation-input = Control
 navigation-devices = Dispozitive
 navigation-clipboard = Clipboard
 navigation-transfers = Transferuri
@@ -401,3 +401,6 @@ about-role-gtk = Helperul de clipboard pentru Linux
 about-role-arboard = Acces la clipboard pe toate platformele
 about-role-sunshine = Modelul pentru input de la distanță la nivel de kernel
 about-role-lan-mouse = Proiectul din care Syntra a pornit ca fork
+navigation-group-connect = CONECTARE
+navigation-group-share = PARTAJARE
+navigation-group-system = SISTEM

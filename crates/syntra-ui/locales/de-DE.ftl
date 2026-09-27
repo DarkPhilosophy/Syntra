@@ -401,3 +401,6 @@ about-role-gtk = Linux-Zwischenablagehelfer
 about-role-arboard = Plattformübergreifender Zwischenablagezugriff
 about-role-sunshine = Vorbild für Ferneingabe auf Kernel-Ebene
 about-role-lan-mouse = Das Projekt, von dem Syntra ursprünglich abgespalten wurde
+navigation-group-connect = VERBINDEN
+navigation-group-share = TEILEN
+navigation-group-system = SYSTEM
