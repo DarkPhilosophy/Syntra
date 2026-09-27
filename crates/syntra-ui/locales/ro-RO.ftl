@@ -360,3 +360,5 @@ manual-transfer-overwrite = Înlocuiește fișierul existent
 history-copy = Copiază textul
 history-preview-image = Deschide imaginea completă
 action-close = Închide
+input-independent-pointers = Cursor independent pentru fiecare dispozitiv
+input-independent-pointers-description = Fiecare dispozitiv conectat primește aici propriul cursor, fără să-l miște pe al tău. Funcționează cu backend-ul uinput; derularea folosește în continuare cursorul comun.

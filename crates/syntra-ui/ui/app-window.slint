@@ -217,6 +217,8 @@ export component AppWindow inherits Window {
                     emulation-enabled: AppState.emulation-enabled;
                     capture-supported: AppState.capture-supported;
                     emulation-supported: AppState.emulation-supported;
+                    independent-pointers-enabled: AppState.independent-pointers-enabled;
+                    independent-pointers-toggled(value) => { AppState.set-independent-pointers(value); }
                     enable-capture => { AppState.enable-capture(); }
                     enable-emulation => { AppState.enable-emulation(); }
                 }

@@ -64,6 +64,7 @@ export global AppState {
     in-out property <bool> clipboard-text-enabled;
     in-out property <bool> clipboard-image-enabled;
     in-out property <bool> clipboard-files-enabled;
+    in-out property <bool> independent-pointers-enabled;
     in-out property <bool> clipboard-files-supported;
     in-out property <[FlatpakApplication]> flatpak-applications;
     in-out property <[FlatpakApplication]> flatpak-all-applications;
@@ -224,6 +225,7 @@ export global AppState {
     callback set-clipboard-text(bool);
     callback set-clipboard-image(bool);
     callback set-clipboard-files(bool);
+    callback set-independent-pointers(bool);
     callback cancel-transfer(string);
     callback synchronize();
     callback request-permission();

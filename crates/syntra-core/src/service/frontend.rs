@@ -103,6 +103,12 @@ impl Service {
                 }
                 self.notify_frontend(FrontendEvent::InputSharing(enabled));
             }
+            FrontendRequest::SetIndependentPointers(enabled) => {
+                self.config.set_independent_pointers(enabled);
+                self.emulation.set_independent_pointers(enabled);
+                self.save_config();
+                self.notify_frontend(FrontendEvent::IndependentPointers(enabled));
+            }
             FrontendRequest::Enumerate() => self.enumerate(),
             FrontendRequest::UpdateFixIps(handle, fix_ips) => {
                 self.update_fix_ips(handle, fix_ips);
@@ -530,6 +536,9 @@ impl Service {
         self.notify_frontend(FrontendEvent::EmulationStatus(self.emulation_status));
         self.notify_frontend(FrontendEvent::CaptureStatus(self.capture_status));
         self.notify_frontend(FrontendEvent::InputSharing(self.input_sharing));
+        self.notify_frontend(FrontendEvent::IndependentPointers(
+            self.config.independent_pointers(),
+        ));
         self.notify_frontend(FrontendEvent::ClipboardSettings(self.clipboard_settings));
         self.notify_frontend(FrontendEvent::PortChanged(self.port, None));
         self.notify_frontend(FrontendEvent::PublicKeyFingerprint(

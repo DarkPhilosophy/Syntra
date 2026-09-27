@@ -2,11 +2,14 @@ import { Theme } from "../theme.slint";
 import { Translations } from "../localization.slint";
 import { StatusPill } from "../components/status-pill.slint";
 import { AppButton } from "../components/controls.slint";
+import { SettingRow } from "../components/setting-row.slint";
 export component InputPage inherits Rectangle {
     in property <bool> capture-enabled: false;
     in property <bool> emulation-enabled: false;
     in property <bool> capture-supported: true;
     in property <bool> emulation-supported: true;
+    in property <bool> independent-pointers-enabled: false;
+    callback independent-pointers-toggled(bool);
     callback enable-capture();
     callback enable-emulation();
     background: Theme.background;
@@ -33,6 +36,12 @@ export component InputPage inherits Rectangle {
                 StatusPill { label: emulation-enabled ? Translations.tr("status-enabled") : Translations.tr("status-disabled"); tone: emulation-enabled ? Theme.success : Theme.warning; }
                 AppButton { text: Translations.tr("input-enable-emulation"); enabled: emulation-supported && !emulation-enabled; clicked => { root.enable-emulation(); } }
             }
+        }
+        SettingRow {
+            title: Translations.tr("input-independent-pointers");
+            description: Translations.tr("input-independent-pointers-description");
+            enabled: root.independent-pointers-enabled;
+            toggled(value) => { root.independent-pointers-toggled(value); }
         }
         Rectangle { vertical-stretch: 1; }
     }

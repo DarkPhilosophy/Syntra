@@ -9,6 +9,7 @@
 //! Access requires write permission on `/dev/uinput`, normally granted by the
 //! udev rule shipped in `build-aux/60-syntra-uinput.rules`.
 
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::fd::AsRawFd;
@@ -67,22 +68,69 @@ pub enum UinputEmulationCreationError {
 }
 
 pub(crate) struct UinputEmulation {
-    device: File,
+    device: VirtualDevice,
     scroll: ScrollAccumulator,
+    /// When set, each peer drives its own pen-tablet cursor instead of the
+    /// shared pointer.
+    independent: bool,
+    pointers: HashMap<EmulationHandle, PeerPointer>,
 }
 
 impl UinputEmulation {
     pub(crate) fn new() -> Result<Self, UinputEmulationCreationError> {
-        let device = OpenOptions::new()
-            .write(true)
-            .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
-            .open(DEVICE_PATH)
-            .map_err(UinputEmulationCreationError::Open)?;
-        configure(&device).map_err(UinputEmulationCreationError::Setup)?;
+        let device = VirtualDevice::open().map_err(UinputEmulationCreationError::Open)?;
+        configure(&device.file).map_err(UinputEmulationCreationError::Setup)?;
         Ok(Self {
             device,
             scroll: ScrollAccumulator::default(),
+            independent: false,
+            pointers: HashMap::new(),
         })
+    }
+
+    /// Routes a pointer event to the peer's own cursor, creating it on first
+    /// use. Returns `false` when the event is not handled there.
+    fn consume_independent(&mut self, event: Event, handle: EmulationHandle) -> io::Result<bool> {
+        let Event::Pointer(pointer_event) = event else {
+            return Ok(false);
+        };
+        if matches!(
+            pointer_event,
+            PointerEvent::Axis { .. } | PointerEvent::AxisDiscrete120 { .. }
+        ) {
+            // A pen has no wheel: scrolling goes through the shared device.
+            return Ok(false);
+        }
+        let pointer = match self.pointers.entry(handle) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let area = pointer_area();
+                log::info!(
+                    "creating independent pointer for peer {handle} over {}x{}",
+                    area.0,
+                    area.1
+                );
+                entry.insert(PeerPointer::create(handle, area)?)
+            }
+        };
+        let events = pointer.translate(pointer_event);
+        pointer.device.write_events(&events)?;
+        Ok(true)
+    }
+}
+
+/// An open `/dev/uinput` handle; dropping it destroys the device.
+struct VirtualDevice {
+    file: File,
+}
+
+impl VirtualDevice {
+    fn open() -> io::Result<Self> {
+        let file = OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
+            .open(DEVICE_PATH)?;
+        Ok(Self { file })
     }
 
     fn write_events(&self, events: &[RawEvent]) -> io::Result<()> {
@@ -101,8 +149,7 @@ impl UinputEmulation {
         }
         let bytes = std::mem::size_of_val(buffer.as_slice());
         // SAFETY: the pointer and length describe the initialised buffer.
-        let written =
-            unsafe { libc::write(self.device.as_raw_fd(), buffer.as_ptr().cast(), bytes) };
+        let written = unsafe { libc::write(self.file.as_raw_fd(), buffer.as_ptr().cast(), bytes) };
         if written < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -116,12 +163,199 @@ impl UinputEmulation {
     }
 }
 
-impl Drop for UinputEmulation {
+impl Drop for VirtualDevice {
     fn drop(&mut self) {
         // SAFETY: plain ioctl on an fd owned by `self`; closing the fd would
         // destroy the device as well, this only makes it explicit.
-        unsafe { libc::ioctl(self.device.as_raw_fd(), UI_DEV_DESTROY) };
+        unsafe { libc::ioctl(self.file.as_raw_fd(), UI_DEV_DESTROY) };
     }
+}
+
+// Pen-tablet vocabulary used for independent pointers.
+const EV_ABS: u16 = 0x03;
+const ABS_X: u16 = 0x00;
+const ABS_Y: u16 = 0x01;
+const BTN_TOOL_PEN: u16 = 0x140;
+const BTN_TOUCH: u16 = 0x14a;
+const BTN_STYLUS: u16 = 0x14b;
+const BTN_STYLUS2: u16 = 0x14c;
+const UI_SET_ABSBIT: libc::c_ulong = 0x4004_5567;
+const UI_ABS_SETUP: libc::c_ulong =
+    0x4000_0000 | ((std::mem::size_of::<libc::uinput_abs_setup>() as libc::c_ulong) << 16) | 0x5504;
+/// Used when the desktop size cannot be determined.
+const DEFAULT_POINTER_AREA: (i32, i32) = (1920, 1080);
+
+/// A peer's own cursor on the local desktop.
+///
+/// Compositors give each pen-tablet tool a cursor of its own, separate from
+/// the seat pointer; GNOME does so without any patch. Relative motion from
+/// the peer is integrated into an absolute position whose range equals the
+/// desktop in pixels, so one unit moves the cursor by one pixel.
+struct PeerPointer {
+    device: VirtualDevice,
+    pen: PenState,
+}
+
+/// Device-independent pen state, kept apart so it can be tested.
+struct PenState {
+    area: (i32, i32),
+    position: (f64, f64),
+    in_proximity: bool,
+}
+
+impl PenState {
+    fn new(area: (i32, i32)) -> Self {
+        Self {
+            area,
+            position: (f64::from(area.0) / 2.0, f64::from(area.1) / 2.0),
+            in_proximity: false,
+        }
+    }
+}
+
+impl PeerPointer {
+    fn create(handle: EmulationHandle, area: (i32, i32)) -> io::Result<Self> {
+        let device = VirtualDevice::open()?;
+        let file = &device.file;
+        ioctl(file, UI_SET_EVBIT, EV_KEY.into())?;
+        ioctl(file, UI_SET_EVBIT, EV_ABS.into())?;
+        for key in [BTN_TOOL_PEN, BTN_TOUCH, BTN_STYLUS, BTN_STYLUS2] {
+            ioctl(file, UI_SET_KEYBIT, key.into())?;
+        }
+        for (axis, extent) in [(ABS_X, area.0), (ABS_Y, area.1)] {
+            ioctl(file, UI_SET_ABSBIT, axis.into())?;
+            // SAFETY: plain old data; all-zero is valid.
+            let mut setup: libc::uinput_abs_setup = unsafe { std::mem::zeroed() };
+            setup.code = axis;
+            setup.absinfo.maximum = extent - 1;
+            // libinput rejects tablets without a physical resolution.
+            setup.absinfo.resolution = 10;
+            // SAFETY: UI_ABS_SETUP reads one uinput_abs_setup.
+            if unsafe { libc::ioctl(file.as_raw_fd(), UI_ABS_SETUP, &setup) } < 0 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        let name = format!("Syntra peer pointer {handle}");
+        create_device(file, name.as_bytes(), 0x0002)?;
+        Ok(Self {
+            device,
+            pen: PenState::new(area),
+        })
+    }
+
+    fn translate(&mut self, event: PointerEvent) -> Vec<RawEvent> {
+        self.pen.translate(event)
+    }
+
+    /// Lifts the pen away so the compositor hides the cursor.
+    fn leave(&mut self) -> io::Result<()> {
+        let events = self.pen.leave();
+        self.device.write_events(&events)
+    }
+}
+
+impl PenState {
+    fn translate(&mut self, event: PointerEvent) -> Vec<RawEvent> {
+        let mut events = Vec::with_capacity(4);
+        if !self.in_proximity {
+            // Entering proximity makes the cursor appear where it last was.
+            self.in_proximity = true;
+            events.push(raw(EV_ABS, ABS_X, self.position.0 as i32));
+            events.push(raw(EV_ABS, ABS_Y, self.position.1 as i32));
+            events.push(raw(EV_KEY, BTN_TOOL_PEN, 1));
+        }
+        match event {
+            PointerEvent::Motion { dx, dy, .. } => {
+                if dx.is_finite() && dy.is_finite() {
+                    let max = (f64::from(self.area.0 - 1), f64::from(self.area.1 - 1));
+                    self.position.0 = (self.position.0 + dx).clamp(0.0, max.0);
+                    self.position.1 = (self.position.1 + dy).clamp(0.0, max.1);
+                    events.push(raw(EV_ABS, ABS_X, self.position.0 as i32));
+                    events.push(raw(EV_ABS, ABS_Y, self.position.1 as i32));
+                }
+            }
+            PointerEvent::Button { button, state, .. } => {
+                // Tip for the primary button; the barrel buttons carry the
+                // secondary and middle clicks, as GNOME maps them by default.
+                let code = match button {
+                    syntra_input_event::BTN_LEFT => Some(BTN_TOUCH),
+                    syntra_input_event::BTN_RIGHT => Some(BTN_STYLUS2),
+                    syntra_input_event::BTN_MIDDLE => Some(BTN_STYLUS),
+                    _ => None,
+                };
+                if let Some(code) = code {
+                    events.push(raw(EV_KEY, code, i32::from(state != 0)));
+                }
+            }
+            PointerEvent::Axis { .. } | PointerEvent::AxisDiscrete120 { .. } => {}
+        }
+        events
+    }
+
+    fn leave(&mut self) -> Vec<RawEvent> {
+        if !self.in_proximity {
+            return Vec::new();
+        }
+        self.in_proximity = false;
+        vec![
+            raw(EV_KEY, BTN_TOUCH, 0),
+            raw(EV_KEY, BTN_STYLUS, 0),
+            raw(EV_KEY, BTN_STYLUS2, 0),
+            raw(EV_KEY, BTN_TOOL_PEN, 0),
+        ]
+    }
+}
+
+impl Drop for PeerPointer {
+    fn drop(&mut self) {
+        let _ = self.leave();
+    }
+}
+
+/// Logical desktop size in pixels, which the pen range is mapped onto.
+///
+/// `SYNTRA_POINTER_AREA=WIDTHxHEIGHT` overrides detection. Otherwise the
+/// Xwayland/X11 root window is used: it spans every monitor in logical
+/// pixels, which is also what the compositor maps an unbound tablet onto.
+fn pointer_area() -> (i32, i32) {
+    if let Some(area) = std::env::var("SYNTRA_POINTER_AREA")
+        .ok()
+        .and_then(|value| parse_area(&value))
+    {
+        return area;
+    }
+    x_root_size().unwrap_or(DEFAULT_POINTER_AREA)
+}
+
+fn parse_area(value: &str) -> Option<(i32, i32)> {
+    let (width, height) = value.trim().split_once(['x', 'X'])?;
+    let area = (width.parse().ok()?, height.parse().ok()?);
+    (area.0 > 1 && area.1 > 1).then_some(area)
+}
+
+#[cfg(x11)]
+fn x_root_size() -> Option<(i32, i32)> {
+    use x11::xlib;
+    // SAFETY: standard Xlib connection lifecycle; the display is closed
+    // before returning and no pointers escape.
+    unsafe {
+        let display = xlib::XOpenDisplay(std::ptr::null());
+        if display.is_null() {
+            return None;
+        }
+        let screen = xlib::XDefaultScreen(display);
+        let size = (
+            xlib::XDisplayWidth(display, screen),
+            xlib::XDisplayHeight(display, screen),
+        );
+        xlib::XCloseDisplay(display);
+        (size.0 > 1 && size.1 > 1).then_some(size)
+    }
+}
+
+#[cfg(not(x11))]
+fn x_root_size() -> Option<(i32, i32)> {
+    None
 }
 
 fn ioctl(device: &File, request: libc::c_ulong, value: libc::c_int) -> io::Result<()> {
@@ -149,13 +383,17 @@ fn configure(device: &File) -> io::Result<()> {
         ioctl(device, UI_SET_RELBIT, axis.into())?;
     }
 
+    create_device(device, DEVICE_NAME, 0x0001)
+}
+
+fn create_device(device: &File, name: &[u8], product: u16) -> io::Result<()> {
     // SAFETY: uinput_setup is plain old data and all-zero is valid.
     let mut setup: libc::uinput_setup = unsafe { std::mem::zeroed() };
     setup.id.bustype = BUS_VIRTUAL;
     setup.id.vendor = 0x5359; // "SY"
-    setup.id.product = 0x0001;
+    setup.id.product = product;
     setup.id.version = 1;
-    for (slot, byte) in setup.name.iter_mut().zip(DEVICE_NAME) {
+    for (slot, byte) in setup.name.iter_mut().zip(name) {
         *slot = *byte as libc::c_char;
     }
     // SAFETY: UI_DEV_SETUP reads one uinput_setup from the pointer.
@@ -195,13 +433,23 @@ struct ScrollAccumulator {
     hi_res: [i32; 2],
 }
 
+/// Largest scroll accepted from one event, in 1/120 detents.
+const MAX_SCROLL_PER_EVENT: i32 = 120 * 100;
+/// Largest pointer motion accepted from one event, in pixels.
+const MAX_MOTION_PER_EVENT: f64 = 10_000.0;
+
 impl ScrollAccumulator {
     fn translate(&mut self, event: Event) -> Vec<RawEvent> {
         match event {
             Event::Pointer(PointerEvent::Motion { dx, dy, .. }) => {
                 let mut events = Vec::with_capacity(2);
                 for (index, (delta, code)) in [(dx, REL_X), (dy, REL_Y)].into_iter().enumerate() {
-                    self.motion[index] += delta;
+                    // A NaN or infinity would poison the accumulator and
+                    // freeze the pointer for the rest of the session.
+                    if !delta.is_finite() {
+                        continue;
+                    }
+                    self.motion[index] += delta.clamp(-MAX_MOTION_PER_EVENT, MAX_MOTION_PER_EVENT);
                     let whole = self.motion[index].trunc();
                     self.motion[index] -= whole;
                     if whole != 0.0 {
@@ -238,6 +486,9 @@ impl ScrollAccumulator {
     /// `value` uses Wayland's sign convention (positive scrolls down/right);
     /// evdev wheels are positive up, horizontal wheels positive right.
     fn scroll(&mut self, axis: u8, value: i32) -> Vec<RawEvent> {
+        // Peer-supplied: bound it so negation and accumulation cannot
+        // overflow. The accumulator itself stays within one detent.
+        let value = value.clamp(-MAX_SCROLL_PER_EVENT, MAX_SCROLL_PER_EVENT);
         if value == 0 {
             return Vec::new();
         }
@@ -258,21 +509,51 @@ impl ScrollAccumulator {
 
 #[async_trait]
 impl Emulation for UinputEmulation {
+    fn set_independent_pointers(&mut self, enabled: bool) {
+        if self.independent == enabled {
+            return;
+        }
+        log::info!(
+            "independent peer pointers {}",
+            if enabled { "enabled" } else { "disabled" }
+        );
+        // A button held on the old route would never see its release, which
+        // leaves a drag stuck on the desktop. Release it before switching.
+        if enabled {
+            let release: Vec<_> = BUTTONS.map(|button| raw(EV_KEY, button, 0)).collect();
+            if let Err(error) = self.device.write_events(&release) {
+                log::warn!("could not release shared pointer buttons: {error}");
+            }
+        } else {
+            // Dropping a peer pointer lifts its pen, releasing its buttons.
+            self.pointers.clear();
+        }
+        self.independent = enabled;
+    }
+
     async fn consume(
         &mut self,
         event: Event,
-        _handle: EmulationHandle,
+        handle: EmulationHandle,
     ) -> Result<(), EmulationError> {
+        if self.independent && self.consume_independent(event, handle)? {
+            return Ok(());
+        }
         let events = self.scroll.translate(event);
-        self.write_events(&events)?;
+        self.device.write_events(&events)?;
         Ok(())
     }
 
-    // One device serves every peer: key state per peer is tracked by
-    // `InputEmulation`, and the kernel merges input like two real mice.
+    // The shared keyboard/mouse serves every peer: key state per peer is
+    // tracked by `InputEmulation`, and the kernel merges input like two real
+    // mice. Independent pointers are created lazily on first motion.
     async fn create(&mut self, _handle: EmulationHandle) {}
-    async fn destroy(&mut self, _handle: EmulationHandle) {}
-    async fn terminate(&mut self) {}
+    async fn destroy(&mut self, handle: EmulationHandle) {
+        self.pointers.remove(&handle);
+    }
+    async fn terminate(&mut self) {
+        self.pointers.clear();
+    }
 }
 
 #[cfg(test)]
@@ -289,9 +570,114 @@ mod tests {
     }
 
     #[test]
+    fn peer_pen_enters_at_center_moves_in_pixels_and_clamps_to_the_desktop() {
+        let mut pen = PenState::new((1000, 500));
+        let motion = |dx, dy| PointerEvent::Motion { time: 0, dx, dy };
+        assert_eq!(
+            pen.translate(motion(10.0, -5.0)),
+            vec![
+                raw(EV_ABS, ABS_X, 500),
+                raw(EV_ABS, ABS_Y, 250),
+                raw(EV_KEY, BTN_TOOL_PEN, 1),
+                raw(EV_ABS, ABS_X, 510),
+                raw(EV_ABS, ABS_Y, 245),
+            ]
+        );
+        assert_eq!(
+            pen.translate(motion(1e9, -1e9)),
+            vec![raw(EV_ABS, ABS_X, 999), raw(EV_ABS, ABS_Y, 0)]
+        );
+        assert_eq!(
+            pen.translate(motion(f64::NAN, 1.0)),
+            Vec::new(),
+            "invalid motion is dropped without moving the pen"
+        );
+    }
+
+    #[test]
+    fn peer_pen_maps_buttons_and_releases_everything_on_leave() {
+        let mut pen = PenState::new((100, 100));
+        pen.translate(PointerEvent::Motion {
+            time: 0,
+            dx: 0.0,
+            dy: 0.0,
+        });
+        let button = |button, state| PointerEvent::Button {
+            time: 0,
+            button,
+            state,
+        };
+        assert_eq!(
+            pen.translate(button(BTN_LEFT, 1)),
+            vec![raw(EV_KEY, BTN_TOUCH, 1)]
+        );
+        assert_eq!(
+            pen.translate(button(syntra_input_event::BTN_RIGHT, 1)),
+            vec![raw(EV_KEY, BTN_STYLUS2, 1)]
+        );
+        assert_eq!(
+            pen.translate(button(syntra_input_event::BTN_BACK, 1)),
+            Vec::new()
+        );
+        let leave = pen.leave();
+        assert_eq!(leave.last(), Some(&raw(EV_KEY, BTN_TOOL_PEN, 0)));
+        assert!(leave.contains(&raw(EV_KEY, BTN_TOUCH, 0)));
+        assert!(pen.leave().is_empty(), "leaving twice sends nothing");
+    }
+
+    #[test]
+    fn pointer_area_override_parses_and_rejects_nonsense() {
+        assert_eq!(parse_area("3840x2160"), Some((3840, 2160)));
+        assert_eq!(parse_area(" 1920X1080 "), Some((1920, 1080)));
+        for bad in ["", "1920", "0x0", "ax b", "1x1"] {
+            assert_eq!(parse_area(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
     fn ioctl_numbers_match_the_kernel_abi() {
         assert_eq!(std::mem::size_of::<libc::uinput_setup>(), 92);
         assert_eq!(UI_DEV_SETUP, 0x405c_5503);
+    }
+
+    /// Hostile or broken peers must not panic the emulation task or wedge it.
+    #[test]
+    fn extreme_values_are_bounded_and_do_not_poison_state() {
+        let mut state = ScrollAccumulator::default();
+        for value in [i32::MIN, i32::MAX, i32::MIN, i32::MAX] {
+            for axis in [0, 1] {
+                for event in state.translate(Event::Pointer(PointerEvent::AxisDiscrete120 {
+                    axis,
+                    value,
+                })) {
+                    assert!(event.value.abs() <= MAX_SCROLL_PER_EVENT);
+                }
+            }
+        }
+        assert!(state.hi_res.iter().all(|rest| rest.abs() < WHEEL_DETENT));
+        for _ in 0..10_000 {
+            state.translate(Event::Pointer(PointerEvent::Axis {
+                time: 0,
+                axis: 0,
+                value: f64::MAX,
+            }));
+        }
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            state.translate(Event::Pointer(PointerEvent::Motion {
+                time: 0,
+                dx: bad,
+                dy: bad,
+            }));
+        }
+        assert_eq!(
+            state.translate(Event::Pointer(PointerEvent::Motion {
+                time: 0,
+                dx: 1.0,
+                dy: 0.0,
+            })),
+            vec![raw(EV_REL, REL_X, 1)],
+            "motion must keep working after invalid input"
+        );
     }
 
     #[test]

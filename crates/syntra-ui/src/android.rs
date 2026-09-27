@@ -324,6 +324,10 @@ impl AndroidHostController {
                 events.push(Self::unavailable("Input sharing"));
                 events.push(FrontendEvent::InputSharing(false));
             }
+            FrontendRequest::SetIndependentPointers(_) => {
+                events.push(Self::unavailable("Independent pointers"));
+                events.push(FrontendEvent::IndependentPointers(false));
+            }
             FrontendRequest::ResolveDns(_) => {
                 events.push(Self::unavailable("DNS resolution"));
             }

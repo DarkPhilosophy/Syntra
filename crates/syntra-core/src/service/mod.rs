@@ -243,6 +243,7 @@ impl Service {
         let capture = Capture::new(capture_backend, conn, config.release_bind());
         let emulation_backend = config.emulation_backend().map(|b| b.into());
         let emulation = Emulation::new(emulation_backend, listener);
+        emulation.set_independent_pointers(config.independent_pointers());
         let legacy_clipboard = !match config.emulation_backend() {
             #[cfg(libei_emulation)]
             Some(EmulationBackend::Libei) => true,

@@ -114,6 +114,8 @@ struct ConfigToml {
     clipboard_text: Option<bool>,
     clipboard_image: Option<bool>,
     clipboard_files: Option<bool>,
+    /// Give each peer its own local cursor (uinput pen-tablet pointers).
+    independent_pointers: Option<bool>,
     #[serde(default)]
     file_receive: Option<FileReceiveToml>,
 }
@@ -581,6 +583,20 @@ impl Config {
             return Err(error);
         }
         Ok(())
+    }
+
+    /// Whether each peer drives its own local cursor. Off by default.
+    pub fn independent_pointers(&self) -> bool {
+        self.config_toml
+            .as_ref()
+            .and_then(|c| c.independent_pointers)
+            .unwrap_or(false)
+    }
+
+    pub fn set_independent_pointers(&mut self, enabled: bool) {
+        self.config_toml
+            .get_or_insert_with(Default::default)
+            .independent_pointers = Some(enabled);
     }
 
     pub fn set_clipboard_settings(&mut self, settings: ClipboardSettings) {

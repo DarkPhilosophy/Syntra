@@ -360,3 +360,5 @@ manual-transfer-overwrite = Replace existing file
 history-copy = Copy text
 history-preview-image = Open full image
 action-close = Close
+input-independent-pointers = Independent pointer per device
+input-independent-pointers-description = Each connected device gets its own cursor here instead of moving yours. Works with the uinput backend; scrolling still uses the shared pointer.

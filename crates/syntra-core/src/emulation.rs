@@ -115,6 +115,7 @@ enum EmulationRequest {
     ChangePort(u16),
     CaptureReady(bool),
     SetInputSharing(bool),
+    SetIndependentPointers(bool),
     SendProto {
         addr: SocketAddr,
         event: ProtoEvent,
@@ -166,6 +167,12 @@ impl Emulation {
     pub(crate) fn set_input_sharing(&self, enabled: bool) {
         self.request_tx
             .send(EmulationRequest::SetInputSharing(enabled))
+            .expect("channel closed");
+    }
+
+    pub(crate) fn set_independent_pointers(&self, enabled: bool) {
+        self.request_tx
+            .send(EmulationRequest::SetIndependentPointers(enabled))
             .expect("channel closed");
     }
 
@@ -479,6 +486,9 @@ impl ListenTask {
                     EmulationRequest::CaptureReady(ready) => {
                         self.capture_ready = ready;
                     }
+                    EmulationRequest::SetIndependentPointers(enabled) => {
+                        self.emulation_proxy.set_independent_pointers(enabled);
+                    }
                     EmulationRequest::SetInputSharing(enabled) => {
                         self.input_sharing = enabled;
                         self.emulation_proxy.set_input_sharing(enabled);
@@ -528,6 +538,7 @@ pub(crate) struct EmulationProxy {
     emulation_active: Rc<Cell<bool>>,
     emulation_ready: Rc<Cell<bool>>,
     input_sharing: Rc<Cell<bool>>,
+    independent_pointers: Rc<Cell<bool>>,
     exit_requested: Rc<Cell<bool>>,
     request_tx: Sender<ProxyRequest>,
     event_rx: Receiver<EmulationEvent>,
@@ -540,6 +551,9 @@ enum ProxyRequest {
     Terminate,
     Reenable,
     SetInputSharing(bool),
+    /// Applied to the live backend; `independent_pointers` also keeps the
+    /// value for backends created later.
+    SetIndependentPointers(bool),
     PublishFileClipboard {
         contents: Vec<(String, Vec<u8>)>,
         reply: oneshot::Sender<Result<(), String>>,
@@ -553,11 +567,13 @@ impl EmulationProxy {
         let emulation_active = Rc::new(Cell::new(false));
         let emulation_ready = Rc::new(Cell::new(false));
         let input_sharing = Rc::new(Cell::new(true));
+        let independent_pointers = Rc::new(Cell::new(false));
         let exit_requested = Rc::new(Cell::new(false));
         let emulation_task = EmulationTask {
             backend,
             emulation_ready: emulation_ready.clone(),
             input_sharing: input_sharing.clone(),
+            independent_pointers: independent_pointers.clone(),
             exit_requested: exit_requested.clone(),
             request_rx,
             event_tx,
@@ -570,6 +586,7 @@ impl EmulationProxy {
             emulation_active,
             emulation_ready,
             input_sharing,
+            independent_pointers,
             exit_requested,
             request_tx,
             task,
@@ -602,6 +619,13 @@ impl EmulationProxy {
             .send(ProxyRequest::Remove(addr))
             .expect("channel closed");
     }
+    fn set_independent_pointers(&self, enabled: bool) {
+        self.independent_pointers.set(enabled);
+        self.request_tx
+            .send(ProxyRequest::SetIndependentPointers(enabled))
+            .expect("channel closed");
+    }
+
     fn set_input_sharing(&self, enabled: bool) {
         self.input_sharing.set(enabled);
         self.request_tx
@@ -637,6 +661,7 @@ struct EmulationTask {
     backend: Option<syntra_input_emulation::Backend>,
     emulation_ready: Rc<Cell<bool>>,
     input_sharing: Rc<Cell<bool>>,
+    independent_pointers: Rc<Cell<bool>>,
     exit_requested: Rc<Cell<bool>>,
     request_rx: Receiver<ProxyRequest>,
     event_tx: Sender<EmulationEvent>,
@@ -667,6 +692,8 @@ impl EmulationTask {
                             self.pressed_buttons.clear();
                         }
                     }
+                    // Kept in the shared cell; applied on the next backend.
+                    ProxyRequest::SetIndependentPointers(_) => {}
                     ProxyRequest::PublishFileClipboard { reply, .. } => {
                         let _ = reply.send(Err("emulation inactive".to_string()));
                     }
@@ -713,7 +740,7 @@ impl EmulationTask {
                         self.handles.remove(&addr);
                         self.pressed_buttons.remove(&addr);
                     }
-                    ProxyRequest::Input(..) => {}
+                    ProxyRequest::Input(..) | ProxyRequest::SetIndependentPointers(_) => {}
                     ProxyRequest::PublishFileClipboard { reply, .. } => {
                         let _ = reply.send(Err("emulation not ready".to_string()));
                     }
@@ -731,6 +758,8 @@ impl EmulationTask {
         else {
             return Ok(());
         };
+
+        emulation.set_independent_pointers(self.independent_pointers.get());
 
         // The portal being approved is not enough: only advertise readiness
         // after the backend has completed initialization and can consume input.
@@ -810,6 +839,9 @@ impl EmulationTask {
                     },
                     ProxyRequest::Remove(addr) => {
                         self.release_client(emulation, addr).await?;
+                    }
+                    ProxyRequest::SetIndependentPointers(enabled) => {
+                        emulation.set_independent_pointers(enabled);
                     }
                     ProxyRequest::SetInputSharing(enabled) => {
                         if !enabled {
@@ -944,7 +976,7 @@ async fn wait_for_termination(rx: &mut Receiver<ProxyRequest>) {
             ProxyRequest::Terminate => return,
             ProxyRequest::Input(_, _) => continue,
             ProxyRequest::Remove(_) => continue,
-            ProxyRequest::SetInputSharing(_) => continue,
+            ProxyRequest::SetInputSharing(_) | ProxyRequest::SetIndependentPointers(_) => continue,
             ProxyRequest::Reenable => continue,
             ProxyRequest::PublishFileClipboard { reply, .. } => {
                 let _ = reply.send(Err("emulation task stopped".to_string()));
@@ -1052,6 +1084,7 @@ mod tests {
             backend: None,
             emulation_ready: Default::default(),
             input_sharing: super::Rc::new(super::Cell::new(true)),
+            independent_pointers: Default::default(),
             exit_requested: Default::default(),
             request_rx,
             event_tx,

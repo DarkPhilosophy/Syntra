@@ -174,6 +174,12 @@ impl InputEmulation {
         self.selected
     }
 
+    /// Gives each peer its own local cursor instead of sharing the pointer.
+    /// Backends without support keep sharing it.
+    pub fn set_independent_pointers(&mut self, enabled: bool) {
+        self.emulation.set_independent_pointers(enabled);
+    }
+
     /// Whether the backend transport is still able to consume input.
     pub fn healthy(&self) -> bool {
         self.emulation.healthy()
@@ -294,6 +300,8 @@ trait Emulation: Send {
     fn healthy(&self) -> bool {
         true
     }
+    /// Gives each peer its own cursor where the backend supports it.
+    fn set_independent_pointers(&mut self, _enabled: bool) {}
     fn take_clipboard_receiver(&mut self) -> Option<mpsc::Receiver<(String, Vec<u8>)>> {
         None
     }

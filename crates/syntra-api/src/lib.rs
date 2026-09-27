@@ -827,6 +827,8 @@ pub enum FrontendEvent {
     ManualTransferError(String),
     /// authoritative global input sharing state
     InputSharing(bool),
+    /// Whether each peer drives its own local cursor.
+    IndependentPointers(bool),
     /// A replacement certificate was saved; active sessions change only on restart.
     IdentityRegenerated {
         /// Carries the fingerprint for this protocol variant.
@@ -919,6 +921,10 @@ pub enum FrontendRequest {
     ClearGlobalHistory,
     /// globally enable or disable outgoing and incoming input sharing
     SetInputSharing(bool),
+    /// Give each peer its own local cursor instead of sharing the pointer.
+    ///
+    /// Supported by the uinput backend; other backends keep one pointer.
+    SetIndependentPointers(bool),
     /// Explicitly confirmed replacement of the certificate used on the next restart.
     RegenerateIdentity,
     /// This variant reports or requests the sendfiles protocol state.
