@@ -1,0 +1,155 @@
+import { Theme } from "../theme.slint";
+import { NavEntry, NavItem } from "navigation.slint";
+
+// Phone header: the mark and the name of the current page. Window controls
+// do not exist on a phone, so there is nothing else to show.
+export component MobileTopBar inherits Rectangle {
+    in property <string> title;
+    height: 56px;
+    background: Theme.sidebar;
+    HorizontalLayout {
+        padding-left: Theme.spacing;
+        padding-right: Theme.spacing;
+        spacing: Theme.small-spacing;
+        Image {
+            source: @image-url("../assets/shell/syntra.svg");
+            width: 32px;
+            height: 32px;
+            y: (parent.height - self.height) / 2;
+        }
+        Text {
+            text: root.title;
+            color: Theme.text;
+            font-size: 20px;
+            font-weight: 600;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+    }
+    Rectangle { y: parent.height - 1px; height: 1px; background: Theme.border; }
+}
+
+// Thumb-reachable tabs for the most used pages; the rest live under More.
+export component MobileBottomNav inherits Rectangle {
+    in property <[NavEntry]> tabs;
+    in property <string> selected;
+    in property <bool> more-active;
+    in property <string> more-label;
+    callback activate(string);
+    callback open-more();
+
+    height: 64px;
+    background: Theme.sidebar;
+    Rectangle { height: 1px; y: 0; background: Theme.border; }
+    HorizontalLayout {
+        for item in root.tabs: Rectangle {
+            private property <bool> active: root.selected == item.id;
+            accessible-role: button;
+            accessible-label: item.label;
+            accessible-action-default => { root.activate(item.id); }
+            TouchArea { clicked => { root.activate(item.id); } }
+            Rectangle {
+                y: 8px;
+                x: (parent.width - self.width) / 2;
+                width: 56px;
+                height: 30px;
+                border-radius: 15px;
+                background: parent.active ? Theme.accent.with-alpha(0.18) : transparent;
+                animate background { duration: Theme.motion-enabled ? 150ms : 0ms; }
+                Image {
+                    source: item.icon;
+                    colorize: root.selected == item.id ? Theme.accent : Theme.muted-text;
+                    width: 22px;
+                    height: 22px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+            Text {
+                y: 42px;
+                width: parent.width;
+                text: item.label;
+                color: parent.active ? Theme.text : Theme.muted-text;
+                font-size: 11px;
+                font-weight: parent.active ? 600 : 400;
+                horizontal-alignment: center;
+                overflow: elide;
+            }
+        }
+        Rectangle {
+            accessible-role: button;
+            accessible-label: root.more-label;
+            accessible-action-default => { root.open-more(); }
+            TouchArea { clicked => { root.open-more(); } }
+            Rectangle {
+                y: 8px;
+                x: (parent.width - self.width) / 2;
+                width: 56px;
+                height: 30px;
+                border-radius: 15px;
+                background: root.more-active ? Theme.accent.with-alpha(0.18) : transparent;
+                // Three dots: the conventional "more" affordance.
+                for i in [0, 1, 2]: Rectangle {
+                    width: 5px;
+                    height: 5px;
+                    border-radius: 3px;
+                    x: parent.width / 2 - 12px + i * 10px;
+                    y: (parent.height - self.height) / 2;
+                    background: root.more-active ? Theme.accent : Theme.muted-text;
+                }
+            }
+            Text {
+                y: 42px;
+                width: parent.width;
+                text: root.more-label;
+                color: root.more-active ? Theme.text : Theme.muted-text;
+                font-size: 11px;
+                horizontal-alignment: center;
+                overflow: elide;
+            }
+        }
+    }
+}
+
+// Bottom sheet listing the pages that do not fit in the tab bar.
+export component MobileMoreSheet inherits Rectangle {
+    in property <[NavEntry]> entries;
+    in property <string> selected;
+    in-out property <bool> open;
+    callback activate(string);
+
+    visible: root.open;
+    background: #00000080;
+    TouchArea { clicked => { root.open = false; } }
+    sheet := Rectangle {
+        y: parent.height - self.height;
+        height: list.preferred-height + 2 * Theme.spacing + 20px;
+        background: Theme.sidebar;
+        border-top-left-radius: 20px;
+        border-top-right-radius: 20px;
+        // Stop taps on the sheet from closing it.
+        TouchArea { }
+        Rectangle {
+            y: 8px;
+            x: (parent.width - self.width) / 2;
+            width: 36px;
+            height: 4px;
+            border-radius: 2px;
+            background: Theme.border;
+        }
+        list := VerticalLayout {
+            y: 20px;
+            padding: Theme.small-spacing;
+            spacing: 2px;
+            for entry in root.entries: NavItem {
+                entry: entry;
+                active: root.selected == entry.id;
+                activate(id) => {
+                    root.open = false;
+                    root.activate(id);
+                }
+            }
+        }
+    }
+}

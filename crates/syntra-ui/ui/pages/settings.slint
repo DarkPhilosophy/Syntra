@@ -76,6 +76,9 @@ export component SettingsPage inherits Rectangle {
     ScrollView {
         mouse-drag-pan-enabled: Theme.touch-input-active;
         VerticalLayout {
+            // Fit the page to the window: without this the content takes its
+            // preferred width and runs off the right edge on narrow screens.
+            width: root.width;
             padding: Theme.content-gap; spacing: Theme.spacing; alignment: start;
             Text { text: Translations.tr("navigation-settings"); color: Theme.text; font-size: Theme.title-size; vertical-stretch: 0; }
             HorizontalLayout {
@@ -142,7 +145,7 @@ export component SettingsPage inherits Rectangle {
                     Slider { minimum: 75; maximum: 200; value: root.zoom-percent; changed(value) => { root.change-zoom(round(value)); } }
                 }
             }
-            ServiceControls {
+            if Theme.desktop-platform: ServiceControls {
                 supported: root.service-supported; busy: root.service-busy; known: root.service-known;
                 installed: root.service-installed; running: root.service-running; autostart: root.service-autostart;
                 connected: root.backend-connected; error: root.service-error;
@@ -154,7 +157,7 @@ export component SettingsPage inherits Rectangle {
                 desktop-entry-installed: root.desktop-entry-installed;
                 action(value) => { root.service-action(value); }
             }
-            UpdateControls {
+            if Theme.desktop-platform: UpdateControls {
                 repository: root.update-repository;
                 automatic-check: root.update-automatic-check;
                 busy: root.update-busy;

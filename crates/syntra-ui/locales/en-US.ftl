@@ -1,6 +1,6 @@
 app-title = Syntra
 navigation-overview = Overview
-navigation-input = Permissions
+navigation-input = Control
 navigation-devices = Devices
 navigation-clipboard = Clipboard
 navigation-transfers = Transfers
@@ -409,3 +409,5 @@ welcome-connecting = Connecting to the service
 welcome-connected = Service connected
 about-disclaimer = Disclaimer
 about-warranty = Syntra is free software provided as is, without any warranty, to the extent permitted by law. The authors are not liable for any damage, data loss or misuse arising from its use. Use it only on devices you own or are authorised to operate.
+navigation-more = More
+overview-mobile-unsupported = This phone shows the Syntra interface only. Sharing input, clipboard and files with your computers is not available on Android yet.

@@ -82,6 +82,9 @@ export component AboutPage inherits Rectangle {
     ScrollView {
         mouse-drag-pan-enabled: Theme.touch-input-active;
         VerticalLayout {
+            // Fit the page to the window: without this the content takes its
+            // preferred width and runs off the right edge on narrow screens.
+            width: root.width;
             padding: Theme.content-gap;
             spacing: Theme.large-spacing;
             alignment: start;

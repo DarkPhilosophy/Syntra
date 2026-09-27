@@ -68,6 +68,9 @@ export component DevicesPage inherits Rectangle {
     ScrollView {
         mouse-drag-pan-enabled: Theme.touch-input-active;
     VerticalLayout {
+        // Fit the page to the window: without this the content takes its
+        // preferred width and runs off the right edge on narrow screens.
+        width: root.width;
         padding: Theme.content-gap;
         spacing: Theme.spacing;
         alignment: start;
@@ -89,7 +92,12 @@ export component DevicesPage inherits Rectangle {
                     Avatar { source: root.local-image; has-image: root.has-local-image; size: Theme.device-avatar-size; }
                     LineEdit { horizontal-stretch: 1; text: root.draft-local-name; edited(value) => { root.draft-local-name = value; local-name-save.start(); local-name-save.restart(); } accepted => { local-name-save.stop(); root.update-local-name(self.text); } }
                 }
-                HorizontalLayout {
+                if root.width >= 600px: HorizontalLayout {
+                    spacing: Theme.small-spacing;
+                    AppButton { text: Translations.tr("device-image-local"); clicked => { root.choose-local-image(); } }
+                    AppButton { text: Translations.tr("label-remove-image"); enabled: root.has-local-image; clicked => { root.clear-local-image(); } }
+                }
+                if root.width < 600px: VerticalLayout {
                     spacing: Theme.small-spacing;
                     AppButton { text: Translations.tr("device-image-local"); clicked => { root.choose-local-image(); } }
                     AppButton { text: Translations.tr("label-remove-image"); enabled: root.has-local-image; clicked => { root.clear-local-image(); } }

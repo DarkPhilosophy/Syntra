@@ -16,6 +16,7 @@ import { AuthorizationPage } from "pages/authorization.slint";
 import { WelcomeOverlay } from "components/welcome.slint";
 import { AboutPage } from "pages/about.slint";
 import { NavItem, NavSection } from "components/navigation.slint";
+import { MobileTopBar, MobileBottomNav, MobileMoreSheet } from "components/mobile-nav.slint";
 import { Palette, ScrollView } from "std-widgets.slint";
 import { Avatar, AvatarRenderer } from "components/avatar.slint";
 import { IncomingFileDialog } from "components/incoming-file-dialog.slint";
@@ -74,11 +75,36 @@ export component AppWindow inherits Window {
     // The sidebar runs the full height of the window and carries the
     // application mark at its top; the title bar occupies only the region to
     // its right, so the two never overlap.
+    // Phones get their own shell: no sidebar or window controls, a page
+    // header, thumb-reachable tabs, and nothing under the system bars.
+    property <bool> mobile: self.width < 600px;
+    private property <Edges> safe: root.safe-area-insets;
+    private property <string> mobile-title:
+        selected-page == "overview" ? Translations.tr("navigation-overview")
+        : selected-page == "devices" ? Translations.tr("navigation-devices")
+        : selected-page == "clipboard" ? Translations.tr("navigation-clipboard")
+        : selected-page == "transfers" ? Translations.tr("navigation-transfers")
+        : selected-page == "history" ? Translations.tr("history-title")
+        : selected-page == "authorization" ? Translations.tr("navigation-authorization")
+        : selected-page == "input" ? Translations.tr("navigation-input")
+        : selected-page == "settings" ? Translations.tr("navigation-settings")
+        : selected-page == "plugins" ? Translations.tr("navigation-plugins")
+        : selected-page == "diagnostics" ? Translations.tr("navigation-diagnostics")
+        : Translations.tr("navigation-about");
+    private property <bool> more-open: false;
     Rectangle {
     visible: root.launch-ready;
+    x: root.mobile ? root.safe.left : 0;
+    y: root.mobile ? root.safe.top : 0;
+    width: root.width - (root.mobile ? root.safe.left + root.safe.right : 0);
+    height: root.height - (root.mobile ? root.safe.top + root.safe.bottom : 0);
+    VerticalLayout {
+    spacing: 0;
+    if root.mobile: MobileTopBar { title: root.mobile-title; }
     HorizontalLayout {
+        vertical-stretch: 1;
         spacing: 0;
-        Rectangle {
+        if !root.mobile: Rectangle {
             width: rail-width;
             clip: true;
             background: Theme.sidebar;
@@ -173,7 +199,7 @@ export component AppWindow inherits Window {
         VerticalLayout {
             horizontal-stretch: 1;
             spacing: 0;
-            TitleBar {
+            if !root.mobile: TitleBar {
                 maximized: root.window-maximized;
                 hide-to-tray-enabled: root.hide-to-tray-enabled;
                 sidebar-expanded: root.sidebar-expanded;
@@ -456,6 +482,39 @@ export component AppWindow inherits Window {
             }
         }
     }
+    if root.mobile: MobileBottomNav {
+        more-label: Translations.tr("navigation-more");
+        selected: root.selected-page;
+        more-active: root.more-open || (root.selected-page != "overview" && root.selected-page != "devices"
+            && root.selected-page != "clipboard" && root.selected-page != "transfers");
+        activate(id) => { root.more-open = false; root.selected-page = id; root.navigate(id); }
+        open-more => { root.more-open = !root.more-open; }
+        tabs: [
+            { id: "overview", icon: @image-url("assets/navigation/overview.svg"), label: Translations.tr("navigation-overview") },
+            { id: "devices", icon: @image-url("assets/navigation/devices.svg"), label: Translations.tr("navigation-devices") },
+            { id: "clipboard", icon: @image-url("assets/navigation/clipboard.svg"), label: Translations.tr("navigation-clipboard") },
+            { id: "transfers", icon: @image-url("assets/navigation/transfers.svg"), label: Translations.tr("navigation-transfers") },
+        ];
+    }
+    }
+    }
+    if root.mobile: MobileMoreSheet {
+        x: root.safe.left;
+        y: root.safe.top;
+        width: root.width - root.safe.left - root.safe.right;
+        height: root.height - root.safe.top - root.safe.bottom - 64px;
+        open <=> root.more-open;
+        selected: root.selected-page;
+        activate(id) => { root.selected-page = id; root.navigate(id); }
+        entries: [
+            { id: "history", icon: @image-url("assets/navigation/history.svg"), label: Translations.tr("history-title") },
+            { id: "authorization", icon: @image-url("assets/navigation/authorization.svg"), label: Translations.tr("navigation-authorization") },
+            { id: "input", icon: @image-url("assets/navigation/input.svg"), label: Translations.tr("navigation-input") },
+            { id: "settings", icon: @image-url("assets/navigation/settings.svg"), label: Translations.tr("navigation-settings") },
+            { id: "plugins", icon: @image-url("assets/navigation/plugins.svg"), label: Translations.tr("navigation-plugins") },
+            { id: "diagnostics", icon: @image-url("assets/navigation/diagnostics.svg"), label: Translations.tr("navigation-diagnostics") },
+            { id: "about", icon: @image-url("assets/navigation/about.svg"), label: Translations.tr("navigation-about") },
+        ];
     }
     WelcomeOverlay {
         x: 0;

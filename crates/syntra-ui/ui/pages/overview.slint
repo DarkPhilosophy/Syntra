@@ -55,6 +55,9 @@ export component OverviewPage inherits Rectangle {
     ScrollView {
         mouse-drag-pan-enabled: Theme.touch-input-active;
         VerticalLayout {
+            // Fit the page to the window: without this the content takes its
+            // preferred width and runs off the right edge on narrow screens.
+            width: root.width;
             padding: Theme.content-gap;
             spacing: Theme.spacing;
             alignment: start;
@@ -68,11 +71,12 @@ export component OverviewPage inherits Rectangle {
                 service-summary := VerticalLayout {
                     padding: Theme.spacing; spacing: Theme.small-spacing;
                     Text { text: Translations.tr("overview-service-title"); color: Theme.text; font-size: Theme.body-size; font-weight: 600; }
-                    if !root.daemon-known : Text { text: Translations.tr("overview-service-disconnected"); color: Theme.warning; font-size: Theme.caption-size; wrap: word-wrap; }
+                    if !Theme.desktop-platform : Text { text: Translations.tr("overview-mobile-unsupported"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
+                    if Theme.desktop-platform && !root.daemon-known : Text { text: Translations.tr("overview-service-disconnected"); color: Theme.warning; font-size: Theme.caption-size; wrap: word-wrap; }
                     // Without this the dashboard is a dead end once the
                     // service is stopped or uninstalled: nothing in the
                     // window could start one again.
-                    if !root.daemon-known : HorizontalLayout {
+                    if Theme.desktop-platform && !root.daemon-known : HorizontalLayout {
                         spacing: Theme.small-spacing;
                         AppButton {
                             text: Translations.tr("overview-service-start");
@@ -86,7 +90,7 @@ export component OverviewPage inherits Rectangle {
                     // A daemon that is alive but not answering holds the peer
                     // port, so starting another can only ever fail. Offer the
                     // way out rather than leaving the user to find a terminal.
-                    if !root.daemon-known && root.unreachable-daemons > 0 : VerticalLayout {
+                    if Theme.desktop-platform && !root.daemon-known && root.unreachable-daemons > 0 : VerticalLayout {
                         spacing: Theme.small-spacing;
                         Text {
                             text: Translations.tr("overview-service-unreachable-found");

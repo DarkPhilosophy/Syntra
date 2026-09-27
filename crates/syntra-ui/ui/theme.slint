@@ -18,6 +18,9 @@ export global Theme {
     in-out property <length> window-preferred-width: 1440px;
     in-out property <length> window-preferred-height: 820px;
     in-out property <bool> touch-input-active: false;
+    // False on Android: no service to install, no Flatpak, no desktop
+    // integration. Desktop-only controls are hidden rather than broken.
+    in-out property <bool> desktop-platform: true;
     in-out property <length> content-gap: 24px;
     in-out property <length> corner-radius: 12px;
     in-out property <length> small-radius: 8px;

@@ -409,3 +409,5 @@ welcome-connecting = 正在连接服务
 welcome-connected = 服务已连接
 about-disclaimer = 免责声明
 about-warranty = Syntra 是自由软件，在法律允许的范围内按“原样”提供，不附带任何担保。作者不对使用本软件导致的任何损害、数据丢失或滥用承担责任。请仅在你拥有或获授权操作的设备上使用。
+navigation-more = 更多
+overview-mobile-unsupported = 此手机仅运行 Syntra 界面。在 Android 上暂不支持与电脑共享输入、剪贴板和文件。

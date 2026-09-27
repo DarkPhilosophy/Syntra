@@ -1082,6 +1082,7 @@ fn apply_appearance(app: &AppWindow, settings: &PresentationSettings) {
     theme.set_body_size(16.0 * zoom);
     theme.set_caption_size(14.0 * zoom);
     theme.set_title_size(26.0 * zoom);
+    theme.set_desktop_platform(!cfg!(target_os = "android"));
     theme.set_sidebar_expanded_width(248.0 * zoom);
     theme.set_sidebar_collapsed_width(68.0 * zoom);
     theme.set_nav_item_height(48.0 * zoom);
