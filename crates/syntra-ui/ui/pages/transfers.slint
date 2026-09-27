@@ -45,7 +45,7 @@ export component TransfersPage inherits Rectangle {
     background: Theme.background;
 
     ScrollView {
-        mouse-drag-pan-enabled: Theme.touch-input-active;
+        mouse-drag-pan-enabled: Theme.touch-input-active || !Theme.desktop-platform;
         VerticalLayout {
             // Fit the page to the window: without this the content takes its
             // preferred width and runs off the right edge on narrow screens.

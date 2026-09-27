@@ -21,25 +21,35 @@ fn plugin_target(id: &str) -> Option<crate::adapter_manager::PluginTarget> {
 use std::time::Instant;
 /// Infers how this process was started.
 ///
+/// Android always starts the service inside its dashboard process. Elsewhere,
 /// systemd exports `INVOCATION_ID` to the units it starts, and its
 /// `NOTIFY_SOCKET` is present for notify-type units. Absent those, a parent
 /// named after the dashboard means the dashboard spawned it. Everything else
 /// is a hand-started process.
 fn daemon_origin() -> syntra_api::DaemonOrigin {
     use syntra_api::DaemonOrigin;
-    if std::env::var_os("INVOCATION_ID").is_some() || std::env::var_os("NOTIFY_SOCKET").is_some() {
-        return DaemonOrigin::Service;
-    }
-    #[cfg(target_os = "linux")]
+    #[cfg(target_os = "android")]
     {
-        let parent = std::os::unix::process::parent_id();
-        if let Ok(command) = std::fs::read_to_string(format!("/proc/{parent}/comm")) {
-            if command.trim() == "syntra" {
-                return DaemonOrigin::Dashboard;
+        DaemonOrigin::Dashboard
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        if std::env::var_os("INVOCATION_ID").is_some()
+            || std::env::var_os("NOTIFY_SOCKET").is_some()
+        {
+            return DaemonOrigin::Service;
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let parent = std::os::unix::process::parent_id();
+            if let Ok(command) = std::fs::read_to_string(format!("/proc/{parent}/comm")) {
+                if command.trim() == "syntra" {
+                    return DaemonOrigin::Dashboard;
+                }
             }
         }
+        DaemonOrigin::Manual
     }
-    DaemonOrigin::Manual
 }
 
 impl Service {

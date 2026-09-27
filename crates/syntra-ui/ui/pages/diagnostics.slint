@@ -51,7 +51,7 @@ export component DiagnosticsPage inherits Rectangle {
                 entry: { timestamp: Translations.tr("diagnostics-column-time"), level: Translations.tr("diagnostics-filter-level"), stage: Translations.tr("diagnostics-filter-stage"), direction: Translations.tr("diagnostics-filter-direction"), correlation: Translations.tr("diagnostics-column-event"), message: Translations.tr("diagnostics-column-message") };
             }
             ListView {
-                mouse-drag-pan-enabled: Theme.touch-input-active;
+                mouse-drag-pan-enabled: Theme.touch-input-active || !Theme.desktop-platform;
                 vertical-stretch: 1;
                 changed viewport-height => {
                     if root.follow-tail { self.viewport-y = min(0px, self.visible-height - self.viewport-height); }

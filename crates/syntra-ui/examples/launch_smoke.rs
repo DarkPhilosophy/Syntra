@@ -46,6 +46,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ => key,
         });
 
+    if std::env::var_os("SYNTRA_SMOKE_MOBILE").is_some() {
+        let theme = app.global::<syntra_ui::app::Theme>();
+        theme.set_desktop_platform(false);
+        theme.set_window_preferred_width(412.0);
+        theme.set_window_preferred_height(915.0);
+        app.window().set_size(slint::LogicalSize::new(412.0, 915.0));
+        app.show()?;
+        app.window().set_size(slint::LogicalSize::new(412.0, 915.0));
+        app.set_launch_ready(true);
+        app.set_launch_visible(false);
+        let weak = app.as_weak();
+        slint::Timer::single_shot(std::time::Duration::from_millis(900), move || {
+            let app = weak.upgrade().unwrap();
+            println!("MOBILE ACTUAL {:?}", app.window().size());
+            app.window().request_redraw();
+            snapshot(&app, "mobile-overview");
+            app.set_selected_page("devices".into());
+            let weak = app.as_weak();
+            slint::Timer::single_shot(std::time::Duration::from_millis(500), move || {
+                let app = weak.upgrade().unwrap();
+                snapshot(&app, "mobile-devices");
+                app.set_selected_page("clipboard".into());
+                let weak = app.as_weak();
+                slint::Timer::single_shot(std::time::Duration::from_millis(500), move || {
+                    let app = weak.upgrade().unwrap();
+                    snapshot(&app, "mobile-clipboard");
+                    app.set_selected_page("settings".into());
+                    let weak = app.as_weak();
+                    slint::Timer::single_shot(std::time::Duration::from_millis(500), move || {
+                        snapshot(&weak.upgrade().unwrap(), "mobile-settings");
+                        slint::quit_event_loop().unwrap();
+                    });
+                });
+            });
+        });
+        app.run()?;
+        return Ok(());
+    }
     if std::env::var_os("SYNTRA_SMOKE_ABOUT").is_some() {
         app.set_selected_page("about".into());
     }

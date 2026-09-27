@@ -54,7 +54,9 @@ const LEGACY_DIR_NAME: &str = "lan-mouse";
 
 #[cfg(target_os = "android")]
 fn default_path() -> Result<PathBuf, VarError> {
-    Err(VarError::NotPresent)
+    std::env::var_os(syntra_api::paths::ENV_CONFIG_DIR)
+        .map(PathBuf::from)
+        .ok_or(VarError::NotPresent)
 }
 
 /// Per-user configuration directory, migrating pre-rebrand state on first use.

@@ -4,6 +4,7 @@ import { ClientItem } from "client-row.slint";
 import { Avatar } from "avatar.slint";
 
 export component PeerMap inherits Rectangle {
+    in property <bool> mobile;
     in property <[ClientItem]> clients;
     in property <int> zone-depth: 1;
     in property <string> local-name;
@@ -11,12 +12,12 @@ export component PeerMap inherits Rectangle {
     in property <bool> has-local-image;
     callback move-peer(string, int);
     // Keep the diagram readable at a glance while leaving room for names.
-    private property <length> avatar-size: 56px;
-    private property <length> header-height: 28px;
+    private property <length> avatar-size: root.mobile ? 32px : 56px;
+    private property <length> header-height: root.mobile ? 20px : 28px;
     private property <length> row-height: root.avatar-size + Theme.body-size * 1.5 + 3 * Theme.small-spacing;
     private property <length> avatar-top: root.header-height + Theme.small-spacing;
     private property <length> local-content-height: root.avatar-size + Theme.small-spacing + Theme.body-size * 1.5;
-    private property <length> lane: max(128px, max(1, root.zone-depth) * root.row-height + root.header-height + Theme.small-spacing);
+    private property <length> lane: root.mobile ? max(root.width / 3, max(1, root.zone-depth) * root.row-height + root.header-height + Theme.small-spacing) : max(128px, max(1, root.zone-depth) * root.row-height + root.header-height + Theme.small-spacing);
     height: 3 * root.lane + 2 * Theme.small-spacing;
     vertical-stretch: 0;
     for zone in [0, 1, 2, 3]: Rectangle {

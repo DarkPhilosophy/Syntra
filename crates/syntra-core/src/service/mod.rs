@@ -1,3 +1,5 @@
+#[cfg(target_os = "android")]
+use crate::android_clipboard as arboard;
 use crate::{
     adapter_manager::{
         AdapterId as ProcessAdapterId, AdapterPaths, AdapterProcessManager, ManagerCommand,
@@ -430,6 +432,8 @@ impl Service {
                 },
                 _ = profile_tick.tick() => {
                     self.retry_profiles();
+                    #[cfg(target_os = "android")]
+                    self.clipboard.read_once();
                     let actions = self.manual_transfers.tick(std::time::Instant::now());
                     self.execute_manual_actions(actions);
                     self.refresh_manual_routes();

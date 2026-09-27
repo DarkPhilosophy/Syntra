@@ -6,6 +6,7 @@ import { Translations } from "../localization.slint";
 import { ScrollView, LineEdit } from "std-widgets.slint";
 
 export component ClipboardPage inherits Rectangle {
+    in property <bool> mobile;
     in property <bool> text-enabled;
     in property <bool> image-enabled;
     in property <bool> files-enabled;
@@ -24,7 +25,7 @@ export component ClipboardPage inherits Rectangle {
     background: Theme.background;
 
     ScrollView {
-        mouse-drag-pan-enabled: Theme.touch-input-active;
+        mouse-drag-pan-enabled: Theme.touch-input-active || !Theme.desktop-platform;
         VerticalLayout {
             // Fit the page to the window: without this the content takes its
             // preferred width and runs off the right edge on narrow screens.
@@ -32,11 +33,11 @@ export component ClipboardPage inherits Rectangle {
             padding: Theme.content-gap;
             spacing: Theme.spacing;
             alignment: start;
-            Text { text: Translations.tr("navigation-clipboard"); color: Theme.text; font-size: Theme.title-size; vertical-stretch: 0; }
-            Text { text: Translations.tr("clipboard-description"); color: Theme.muted-text; font-size: Theme.body-size; wrap: word-wrap; vertical-stretch: 0; }
-            SettingRow { title: Translations.tr("clipboard-text"); description: Translations.tr("clipboard-text-description"); enabled: root.text-enabled; toggled(value) => { root.text-toggled(value); } }
-            SettingRow { title: Translations.tr("clipboard-images"); description: Translations.tr("clipboard-images-description"); enabled: root.image-enabled; toggled(value) => { root.image-toggled(value); } }
-            SettingRow { title: Translations.tr("clipboard-files"); description: root.files-supported ? Translations.tr("clipboard-files-description") : Translations.tr("clipboard-unavailable"); enabled: root.files-enabled; interactive: root.files-supported; toggled(value) => { root.files-toggled(value); } }
+            if !root.mobile: Text { text: Translations.tr("navigation-clipboard"); color: Theme.text; font-size: Theme.title-size; vertical-stretch: 0; }
+            if !root.mobile: Text { text: Translations.tr("clipboard-description"); color: Theme.muted-text; font-size: Theme.body-size; wrap: word-wrap; vertical-stretch: 0; }
+            SettingRow { title: Translations.tr("clipboard-text"); description: root.mobile ? "" : Translations.tr("clipboard-text-description"); enabled: root.text-enabled; toggled(value) => { root.text-toggled(value); } }
+            SettingRow { title: Translations.tr("clipboard-images"); description: root.mobile ? "" : Translations.tr("clipboard-images-description"); enabled: root.image-enabled; toggled(value) => { root.image-toggled(value); } }
+            SettingRow { title: Translations.tr("clipboard-files"); description: root.mobile && root.files-supported ? "" : root.files-supported ? Translations.tr("clipboard-files-description") : Translations.tr("clipboard-unavailable"); enabled: root.files-enabled; interactive: root.files-supported; toggled(value) => { root.files-toggled(value); } }
 
             // Flatpak sandbox grants only exist on Linux desktops.
             if Theme.desktop-platform: VerticalLayout {

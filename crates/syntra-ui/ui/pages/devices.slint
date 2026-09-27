@@ -10,6 +10,7 @@ import { DiscoveredPeerItem } from "../app-state.slint";
 import { Avatar } from "../components/avatar.slint";
 
 export component DevicesPage inherits Rectangle {
+    in property <bool> mobile;
     in property <[ClientItem]> clients: [];
     in property <int> peer-zone-depth: 1;
     in property <[DiscoveredPeerItem]> discovered-peers;
@@ -66,7 +67,7 @@ export component DevicesPage inherits Rectangle {
 
     background: Theme.background;
     ScrollView {
-        mouse-drag-pan-enabled: Theme.touch-input-active;
+        mouse-drag-pan-enabled: Theme.touch-input-active || !Theme.desktop-platform;
     VerticalLayout {
         // Fit the page to the window: without this the content takes its
         // preferred width and runs off the right edge on narrow screens.
@@ -75,7 +76,7 @@ export component DevicesPage inherits Rectangle {
         spacing: Theme.spacing;
         alignment: start;
         HorizontalLayout {
-            Text { text: root.title; color: Theme.text; font-size: Theme.title-size; horizontal-stretch: 1; vertical-alignment: center; }
+            if !root.mobile: Text { text: root.title; color: Theme.text; font-size: Theme.title-size; horizontal-stretch: 1; vertical-alignment: center; }
             AppButton { text: root.add-label; clicked => { root.add-client(); } }
         }
         Rectangle {
@@ -106,6 +107,7 @@ export component DevicesPage inherits Rectangle {
         }
         Text { text: Translations.tr("device-presentation-note"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; vertical-stretch: 0; }
         PeerMap {
+            mobile: root.mobile;
             clients: root.clients;
             zone-depth: root.peer-zone-depth;
             local-name: root.local-name;

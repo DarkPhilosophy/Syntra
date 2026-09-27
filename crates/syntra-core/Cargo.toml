@@ -23,7 +23,6 @@ syntra-plugin-api.workspace = true
 syntra-proto.workspace = true
 syntra-store.workspace = true
 
-arboard = { version = "3.6.1", features = ["wayland-data-control"] }
 base64.workspace = true
 bincode.workspace = true
 clap.workspace = true
@@ -66,6 +65,12 @@ webrtc-util = "0.11.0"
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
+[target.'cfg(not(target_os = "android"))'.dependencies]
+arboard = { version = "3.6.1", features = ["wayland-data-control"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21.1"
+ndk-context = "0.1.1"
 
 [features]
 default = []

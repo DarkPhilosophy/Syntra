@@ -16,7 +16,7 @@ import { AuthorizationPage } from "pages/authorization.slint";
 import { WelcomeOverlay } from "components/welcome.slint";
 import { AboutPage } from "pages/about.slint";
 import { NavItem, NavSection } from "components/navigation.slint";
-import { MobileTopBar, MobileBottomNav, MobileMoreSheet } from "components/mobile-nav.slint";
+import { MobileTopBar, MobileBottomNav } from "components/mobile-nav.slint";
 import { Palette, ScrollView } from "std-widgets.slint";
 import { Avatar, AvatarRenderer } from "components/avatar.slint";
 import { IncomingFileDialog } from "components/incoming-file-dialog.slint";
@@ -77,7 +77,7 @@ export component AppWindow inherits Window {
     // its right, so the two never overlap.
     // Phones get their own shell: no sidebar or window controls, a page
     // header, thumb-reachable tabs, and nothing under the system bars.
-    property <bool> mobile: self.width < 600px;
+    property <bool> mobile: !Theme.desktop-platform || self.width < 600px;
     private property <Edges> safe: root.safe-area-insets;
     private property <string> mobile-title:
         selected-page == "overview" ? Translations.tr("navigation-overview")
@@ -91,7 +91,12 @@ export component AppWindow inherits Window {
         : selected-page == "plugins" ? Translations.tr("navigation-plugins")
         : selected-page == "diagnostics" ? Translations.tr("navigation-diagnostics")
         : Translations.tr("navigation-about");
-    private property <bool> more-open: false;
+    private property <bool> settings-child: selected-page == "history" || selected-page == "authorization" || selected-page == "input" || selected-page == "diagnostics" || selected-page == "about" || selected-page == "plugins";
+    private property <int> tab-index: selected-page == "overview" ? 0 : selected-page == "devices" ? 1 : selected-page == "clipboard" ? 2 : selected-page == "transfers" ? 3 : 4;
+    function go-tab(index: int) {
+        let id = index == 0 ? "overview" : index == 1 ? "devices" : index == 2 ? "clipboard" : index == 3 ? "transfers" : "settings";
+        root.navigate(id); root.selected-page = id;
+    }
     Rectangle {
     visible: root.launch-ready;
     x: root.mobile ? root.safe.left : 0;
@@ -100,7 +105,7 @@ export component AppWindow inherits Window {
     height: root.height - (root.mobile ? root.safe.top + root.safe.bottom : 0);
     VerticalLayout {
     spacing: 0;
-    if root.mobile: MobileTopBar { title: root.mobile-title; }
+    if root.mobile: MobileTopBar { title: root.mobile-title; can-go-back: root.settings-child; back-label: Translations.tr("action-back"); back => { root.go-tab(4); } }
     HorizontalLayout {
         vertical-stretch: 1;
         spacing: 0;
@@ -120,7 +125,7 @@ export component AppWindow inherits Window {
                     vertical-stretch: 1;
                     clip: true;
                     ScrollView {
-                        mouse-drag-pan-enabled: Theme.touch-input-active;
+                        mouse-drag-pan-enabled: Theme.touch-input-active || !Theme.desktop-platform;
                         x: 0;
                         y: 0;
                         width: parent.width;
@@ -213,6 +218,16 @@ export component AppWindow inherits Window {
             Rectangle {
                 vertical-stretch: 1;
                 background: Theme.background;
+                SwipeGestureHandler {
+                    enabled: root.mobile;
+                    handle-swipe-left: root.tab-index < 4 && !root.settings-child && selected-page != "devices";
+                    handle-swipe-right: root.tab-index > 0 && !root.settings-child && selected-page != "devices";
+                    handle-swipe-up: false;
+                    handle-swipe-down: false;
+                    swiped => {
+                        if self.current-position.x < self.pressed-position.x - self.width / 4 { root.go-tab(root.tab-index + 1); }
+                        else if self.current-position.x > self.pressed-position.x + self.width / 4 { root.go-tab(root.tab-index - 1); }
+                    }
                 if selected-page == "history": HistoryPage {
                     records: AppState.history-records;
                     query: AppState.history-query;
@@ -281,6 +296,7 @@ export component AppWindow inherits Window {
                     enable-emulation => { AppState.enable-emulation(); }
                 }
                 if selected-page == "clipboard": ClipboardPage {
+                    mobile: root.mobile;
                     text-enabled: AppState.clipboard-text-enabled;
                     image-enabled: AppState.clipboard-image-enabled;
                     files-enabled: AppState.clipboard-files-enabled;
@@ -298,6 +314,7 @@ export component AppWindow inherits Window {
                     files-toggled(value) => { AppState.set-clipboard-files(value); }
                 }
                 if selected-page == "devices": DevicesPage {
+                    mobile: root.mobile;
                     clients: AppState.clients;
                     peer-zone-depth: AppState.peer-zone-depth;
                     discovered-peers: AppState.discovered-peers;
@@ -325,7 +342,7 @@ export component AppWindow inherits Window {
                 if selected-page == "transfers": VerticalLayout {
                     spacing: Theme.spacing;
                     if AppState.manual-offer-visible: ScrollView {
-                        mouse-drag-pan-enabled: Theme.touch-input-active;
+                        mouse-drag-pan-enabled: Theme.touch-input-active || !Theme.desktop-platform;
                         height: min(400px, parent.height * 0.55);
                         vertical-stretch: 0;
                         VerticalLayout {
@@ -409,6 +426,8 @@ export component AppWindow inherits Window {
                     refresh => { AppState.refresh-plugins(); }
                 }
                 if selected-page == "settings": SettingsPage {
+                    mobile: root.mobile;
+                    navigate(id) => { root.selected-page = id; root.navigate(id); }
                     file-receive-known: AppState.file-receive-known;
                     file-receive-busy: AppState.file-receive-busy;
                     file-receive-picker-busy: AppState.file-receive-picker-busy;
@@ -479,42 +498,22 @@ export component AppWindow inherits Window {
                     approve-connection(key) => { AppState.authorize-key(key, key); }
                     remove-authorized-key(key) => { AppState.remove-authorized-key(key); }
                 }
+                }
             }
         }
     }
     if root.mobile: MobileBottomNav {
-        more-label: Translations.tr("navigation-more");
-        selected: root.selected-page;
-        more-active: root.more-open || (root.selected-page != "overview" && root.selected-page != "devices"
-            && root.selected-page != "clipboard" && root.selected-page != "transfers");
-        activate(id) => { root.more-open = false; root.selected-page = id; root.navigate(id); }
-        open-more => { root.more-open = !root.more-open; }
+        selected: root.settings-child ? "settings" : root.selected-page;
+        activate(id) => { root.selected-page = id; root.navigate(id); }
         tabs: [
             { id: "overview", icon: @image-url("assets/navigation/overview.svg"), label: Translations.tr("navigation-overview") },
             { id: "devices", icon: @image-url("assets/navigation/devices.svg"), label: Translations.tr("navigation-devices") },
             { id: "clipboard", icon: @image-url("assets/navigation/clipboard.svg"), label: Translations.tr("navigation-clipboard") },
             { id: "transfers", icon: @image-url("assets/navigation/transfers.svg"), label: Translations.tr("navigation-transfers") },
-        ];
-    }
-    }
-    }
-    if root.mobile: MobileMoreSheet {
-        x: root.safe.left;
-        y: root.safe.top;
-        width: root.width - root.safe.left - root.safe.right;
-        height: root.height - root.safe.top - root.safe.bottom - 64px;
-        open <=> root.more-open;
-        selected: root.selected-page;
-        activate(id) => { root.selected-page = id; root.navigate(id); }
-        entries: [
-            { id: "history", icon: @image-url("assets/navigation/history.svg"), label: Translations.tr("history-title") },
-            { id: "authorization", icon: @image-url("assets/navigation/authorization.svg"), label: Translations.tr("navigation-authorization") },
-            { id: "input", icon: @image-url("assets/navigation/input.svg"), label: Translations.tr("navigation-input") },
             { id: "settings", icon: @image-url("assets/navigation/settings.svg"), label: Translations.tr("navigation-settings") },
-            { id: "plugins", icon: @image-url("assets/navigation/plugins.svg"), label: Translations.tr("navigation-plugins") },
-            { id: "diagnostics", icon: @image-url("assets/navigation/diagnostics.svg"), label: Translations.tr("navigation-diagnostics") },
-            { id: "about", icon: @image-url("assets/navigation/about.svg"), label: Translations.tr("navigation-about") },
         ];
+    }
+    }
     }
     WelcomeOverlay {
         x: 0;

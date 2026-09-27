@@ -85,7 +85,7 @@ export component HistoryPage inherits Rectangle {
         }
         if root.records.length == 0 && !root.busy: Text { text: Translations.tr("history-empty"); color: Theme.muted-text; font-size: Theme.body-size; wrap: word-wrap; vertical-stretch: 0; }
         history-list := ListView {
-            mouse-drag-pan-enabled: Theme.touch-input-active;
+            mouse-drag-pan-enabled: Theme.touch-input-active || !Theme.desktop-platform;
             // Virtualised: only the rows on screen are built. A plain layout
             // instantiated every record, including its decoded thumbnail,
             // which is what made opening History stutter.

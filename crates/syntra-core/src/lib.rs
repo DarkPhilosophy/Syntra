@@ -30,6 +30,8 @@
 const INPUT_INITIALIZATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 mod adapter_manager;
+#[cfg(target_os = "android")]
+mod android_clipboard;
 mod capture;
 pub mod capture_test;
 pub mod client;

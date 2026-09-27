@@ -411,3 +411,7 @@ about-disclaimer = Declinarea răspunderii
 about-warranty = Syntra este software liber, oferit „ca atare”, fără nicio garanție, în limitele permise de lege. Autorii nu răspund pentru daune, pierderi de date sau utilizări abuzive rezultate din folosirea lui. Folosește-l doar pe dispozitive pe care le deții sau pe care ai dreptul să le controlezi.
 navigation-more = Mai mult
 overview-mobile-unsupported = Pe acest telefon rulează doar interfața Syntra. Partajarea inputului, a clipboard-ului și a fișierelor cu calculatoarele tale nu este încă disponibilă pe Android.
+
+settings-section-pages = Pagini
+settings-section-general = General
+action-back = Înapoi

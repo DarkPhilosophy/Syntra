@@ -411,3 +411,7 @@ about-disclaimer = Haftungsausschluss
 about-warranty = Syntra ist freie Software und wird ohne jegliche Gewährleistung bereitgestellt, soweit gesetzlich zulässig. Die Autoren haften nicht für Schäden, Datenverlust oder Missbrauch durch die Nutzung. Verwende es nur auf Geräten, die dir gehören oder die du bedienen darfst.
 navigation-more = Mehr
 overview-mobile-unsupported = Auf diesem Telefon läuft nur die Syntra-Oberfläche. Eingabe, Zwischenablage und Dateien mit deinen Computern zu teilen ist unter Android noch nicht verfügbar.
+
+settings-section-pages = Seiten
+settings-section-general = Allgemein
+action-back = Zurück

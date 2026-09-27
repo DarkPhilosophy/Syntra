@@ -1,3 +1,5 @@
+#[cfg(target_os = "android")]
+use crate::android_clipboard as arboard;
 use arboard::ImageData;
 use std::{
     borrow::Cow,

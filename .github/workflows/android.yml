@@ -40,7 +40,12 @@ jobs:
           packages: platform-tools
 
       - name: Install Android SDK and NDK
-        run: sdkmanager "platform-tools" "platforms;android-${ANDROID_API_LEVEL}" "build-tools;35.0.0" "ndk;${ANDROID_NDK_VERSION}"
+        run: |
+          # Install into the same root the build reads from; the Slint
+          # Android backend looks for android.jar under $ANDROID_HOME/platforms.
+          yes | sdkmanager --sdk_root="$ANDROID_HOME" --licenses > /dev/null
+          sdkmanager --sdk_root="$ANDROID_HOME" "platform-tools" "platforms;android-${ANDROID_API_LEVEL}" "build-tools;35.0.0" "ndk;${ANDROID_NDK_VERSION}"
+          ls "$ANDROID_HOME/platforms"
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -69,7 +74,8 @@ jobs:
 
       - name: Build debug APK
         run: |
-          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/$ANDROID_NDK_VERSION"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION"
           gradle --no-daemon assembleDebug
         working-directory: crates/syntra-ui/android
 

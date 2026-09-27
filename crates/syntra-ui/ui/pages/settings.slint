@@ -8,6 +8,8 @@ import { UpdateControls } from "../components/update-controls.slint";
 import { FileReceiveSettingsControls } from "../components/file-receive-settings.slint";
 
 export component SettingsPage inherits Rectangle {
+    in property <bool> mobile;
+    callback navigate(string);
     in property <string> locale;
     in property <[string]> locale-options;
     in property <bool> language-import-supported;
@@ -73,8 +75,105 @@ export component SettingsPage inherits Rectangle {
     private property <[string]> palette-ids: ["army", "forest", "ocean", "slate", "sand", "graphite", "aubergine", "copper", "rose", "ice"];
     background: Theme.background;
 
-    ScrollView {
-        mouse-drag-pan-enabled: Theme.touch-input-active;
+    if root.mobile: ScrollView {
+        mouse-drag-pan-enabled: true;
+        VerticalLayout {
+            width: root.width;
+            padding: Theme.spacing;
+            spacing: Theme.small-spacing;
+            alignment: start;
+            Text { text: Translations.tr("settings-section-pages"); color: Theme.muted-text; font-size: Theme.caption-size; vertical-stretch: 0; }
+            for entry in [
+                { id: "history", icon: @image-url("../assets/navigation/history.svg"), label: Translations.tr("history-title") },
+                { id: "authorization", icon: @image-url("../assets/navigation/authorization.svg"), label: Translations.tr("navigation-authorization") },
+                { id: "input", icon: @image-url("../assets/navigation/input.svg"), label: Translations.tr("navigation-input") },
+                { id: "diagnostics", icon: @image-url("../assets/navigation/diagnostics.svg"), label: Translations.tr("navigation-diagnostics") },
+                { id: "about", icon: @image-url("../assets/navigation/about.svg"), label: Translations.tr("navigation-about") },
+            ]: Rectangle {
+                height: 50px; background: Theme.surface; border-radius: Theme.small-radius;
+                accessible-role: button; accessible-label: entry.label; accessible-action-default => { root.navigate(entry.id); }
+                HorizontalLayout { padding-left: Theme.spacing; padding-right: Theme.spacing; spacing: Theme.spacing;
+                    Image { source: entry.icon; colorize: Theme.accent; width: 22px; height: 22px; vertical-alignment: center; }
+                    Text { text: entry.label; color: Theme.text; font-size: Theme.body-size; vertical-alignment: center; horizontal-stretch: 1; }
+                    Text { text: "›"; color: Theme.muted-text; font-size: 24px; vertical-alignment: center; }
+                }
+                TouchArea { clicked => { root.navigate(entry.id); } }
+            }
+            if Theme.desktop-platform: Rectangle { height: 50px; background: Theme.surface; border-radius: Theme.small-radius;
+                HorizontalLayout { padding-left: Theme.spacing; padding-right: Theme.spacing; spacing: Theme.spacing;
+                    Image { source: @image-url("../assets/navigation/plugins.svg"); colorize: Theme.accent; width: 22px; height: 22px; vertical-alignment: center; }
+                    Text { text: Translations.tr("navigation-plugins"); color: Theme.text; font-size: Theme.body-size; vertical-alignment: center; horizontal-stretch: 1; }
+                    Text { text: "›"; color: Theme.muted-text; font-size: 24px; vertical-alignment: center; }
+                }
+                TouchArea { clicked => { root.navigate("plugins"); } }
+            }
+            Text { text: Translations.tr("manual-transfer-settings-title"); color: Theme.muted-text; font-size: Theme.caption-size; vertical-stretch: 0; }
+            Rectangle { height: 52px; background: Theme.surface; border-radius: Theme.small-radius;
+                HorizontalLayout { padding: Theme.spacing; spacing: Theme.spacing;
+                    Text { text: Translations.tr("manual-transfer-auto-accept"); color: Theme.text; font-size: Theme.body-size; vertical-alignment: center; horizontal-stretch: 1; }
+                    AppSwitch { checked: root.file-auto-accept; enabled: root.file-receive-known && !root.file-receive-busy; a11y-label: Translations.tr("manual-transfer-auto-accept"); toggled(value) => { root.file-auto-accept = value; root.file-receive-dirty = true; root.save-file-receive-settings(); } }
+                }
+            }
+            Rectangle { height: 92px; background: Theme.surface; border-radius: Theme.small-radius;
+                VerticalLayout { padding: Theme.small-spacing; spacing: Theme.small-spacing;
+                    Text { text: Translations.tr("manual-transfer-save-folder"); color: Theme.text; font-size: Theme.body-size; vertical-stretch: 0; }
+                    HorizontalLayout { spacing: Theme.small-spacing;
+                        LineEdit { text <=> root.download-directory; horizontal-stretch: 1; enabled: root.file-receive-known && !root.file-receive-busy && !root.file-receive-picker-busy; edited(value) => { root.file-receive-dirty = true; } accepted => { root.save-file-receive-settings(); } }
+                        AppButton { text: Translations.tr("manual-transfer-browse"); enabled: root.file-receive-known && !root.file-receive-busy && !root.file-receive-picker-busy; clicked => { root.choose-download-directory(); } }
+                    }
+                }
+            }
+            if root.file-receive-error != "": Text { text: root.file-receive-error; color: Theme.danger; font-size: Theme.caption-size; wrap: word-wrap; vertical-stretch: 0; }
+            if !root.file-receive-known && root.file-receive-error == "": Text { text: Translations.tr("manual-transfer-service-offline"); color: Theme.warning; font-size: Theme.caption-size; vertical-stretch: 0; }
+            if root.file-receive-dirty: AppButton { text: Translations.tr("manual-transfer-unsaved"); enabled: root.file-receive-known && !root.file-receive-busy && root.download-directory != ""; clicked => { root.save-file-receive-settings(); } }
+            Text { text: Translations.tr("settings-section-general"); color: Theme.muted-text; font-size: Theme.caption-size; vertical-stretch: 0; }
+            Rectangle { height: 52px; background: Theme.surface; border-radius: Theme.small-radius;
+                HorizontalLayout { padding: Theme.spacing; spacing: Theme.spacing;
+                    Text { text: Translations.tr("settings-suppress-popups"); color: Theme.text; font-size: Theme.body-size; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                    AppSwitch { checked: root.suppress-popups; a11y-label: Translations.tr("settings-suppress-popups"); toggled(value) => { root.change-suppress-popups(value); } }
+                }
+            }
+            Rectangle { height: 52px; background: Theme.surface; border-radius: Theme.small-radius;
+                HorizontalLayout { padding: Theme.spacing; spacing: Theme.spacing;
+                    Text { text: Translations.tr("settings-base-mode"); color: Theme.text; font-size: Theme.body-size; vertical-alignment: center; horizontal-stretch: 1; }
+                    AppSwitch { checked: root.base-mode == "black"; a11y-label: Translations.tr("settings-base-mode"); toggled(dark) => { root.change-base-mode(dark ? "black" : "white"); } }
+                }
+            }
+            Rectangle { height: 52px; background: Theme.surface; border-radius: Theme.small-radius;
+                HorizontalLayout { padding: Theme.spacing; spacing: Theme.spacing;
+                    Text { text: Translations.tr("settings-reduced-motion"); color: Theme.text; font-size: Theme.body-size; vertical-alignment: center; horizontal-stretch: 1; }
+                    AppSwitch { checked: root.reduced-motion; a11y-label: Translations.tr("settings-reduced-motion-label"); toggled(value) => { root.change-reduced-motion(value); } }
+                }
+            }
+            Rectangle { height: 52px; background: Theme.surface; border-radius: Theme.small-radius;
+                HorizontalLayout { padding: Theme.spacing; spacing: Theme.spacing;
+                    Text { text: Translations.tr("settings-locale"); color: Theme.text; font-size: Theme.body-size; vertical-alignment: center; horizontal-stretch: 1; }
+                    ComboBox { model: root.locale-options; current-value: root.locale; selected(value) => { root.locale-changed(value); } }
+                }
+            }
+            Rectangle { height: 52px; background: Theme.surface; border-radius: Theme.small-radius;
+                HorizontalLayout { padding: Theme.spacing; spacing: Theme.spacing;
+                    Text { text: Translations.tr("settings-palette"); color: Theme.text; font-size: Theme.body-size; vertical-alignment: center; horizontal-stretch: 1; }
+                    ComboBox { model: [Translations.tr("palette-army"), Translations.tr("palette-forest"), Translations.tr("palette-ocean"), Translations.tr("palette-slate"), Translations.tr("palette-sand"), Translations.tr("palette-graphite"), Translations.tr("palette-aubergine"), Translations.tr("palette-copper"), Translations.tr("palette-rose"), Translations.tr("palette-ice")]; current-value: Translations.tr("palette-" + root.palette); selected(value) => { root.change-palette(root.palette-ids[self.current-index]); } }
+                }
+            }
+            Rectangle { height: 52px; background: Theme.surface; border-radius: Theme.small-radius;
+                HorizontalLayout { padding: Theme.spacing; spacing: Theme.spacing;
+                    Text { text: Translations.tr("settings-density"); color: Theme.text; font-size: Theme.body-size; vertical-alignment: center; horizontal-stretch: 1; }
+                    ComboBox { model: [Translations.tr("settings-comfortable"), Translations.tr("settings-compact")]; current-index: root.density == "compact" ? 1 : 0; selected(value) => { root.change-density(self.current-index == 1 ? "compact" : "comfortable"); } }
+                }
+            }
+            Rectangle { height: 52px; background: Theme.surface; border-radius: Theme.small-radius;
+                HorizontalLayout { padding: Theme.spacing; spacing: Theme.spacing;
+                    Text { text: Translations.tr("settings-listen-port"); color: Theme.text; font-size: Theme.body-size; vertical-alignment: center; horizontal-stretch: 1; }
+                    LineEdit { width: 90px; text <=> root.draft-port; input-type: number; changed has-focus => { if !self.has-focus { root.commit-port(); } } accepted => { root.commit-port(); } }
+                }
+            }
+            if root.status-message != "": Text { text: root.status-message; color: Theme.muted-text; font-size: Theme.body-size; wrap: word-wrap; vertical-stretch: 0; }
+        }
+    }
+    if !root.mobile: ScrollView {
+        mouse-drag-pan-enabled: Theme.touch-input-active || !Theme.desktop-platform;
         VerticalLayout {
             // Fit the page to the window: without this the content takes its
             // preferred width and runs off the right edge on narrow screens.

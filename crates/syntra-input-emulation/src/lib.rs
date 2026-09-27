@@ -121,7 +121,7 @@ impl InputEmulation {
             #[cfg(windows)]
             Backend::Windows => Box::new(windows::WindowsEmulation::new()?),
             #[cfg(target_os = "macos")]
-            Backend::MacOs => Box::new(macos::MacOSEmulation::new().await?),
+            Backend::MacOs => Box::new(macos::MacOSEmulation::new()?),
             Backend::Dummy => Box::new(dummy::DummyEmulation::new()),
         };
         let clipboard_rx = emulation.take_clipboard_receiver();
