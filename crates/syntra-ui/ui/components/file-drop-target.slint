@@ -67,4 +67,7 @@ export component FileDropTarget inherits Rectangle {
         mouse-cursor: self.enabled ? pointer : default;
         clicked => { root.choose(root.peer.fingerprint); }
     }
+    Tooltip {
+        text: @markdown("\{root.peer.name}\n\{Translations.tr(!root.peer.connected ? "manual-transfer-connect-peer" : root.picker-busy ? "manual-transfer-choosing" : "manual-transfer-picker-hint")}");
+    }
 }

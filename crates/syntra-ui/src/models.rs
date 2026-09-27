@@ -423,6 +423,9 @@ impl AppViewState {
             }
             FrontendEvent::LogSpec(spec) => self.diagnostics.log_spec = spec,
             FrontendEvent::Plugins(plugins) => self.plugins = plugins,
+            // Full content is delivered directly to the requesting presentation;
+            // do not retain original image payloads in the paginated list.
+            FrontendEvent::HistoryContentResult { .. } => {}
         }
     }
 }

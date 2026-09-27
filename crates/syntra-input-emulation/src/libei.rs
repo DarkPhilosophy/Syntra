@@ -168,7 +168,7 @@ async fn export_flatpak_file_uris(mut contents: Vec<(String, Vec<u8>)>) -> Vec<(
     }
 
     let uri_list = exported.join("\r\n") + "\r\n";
-    let gnome = format!("{operation}\n{}\n", exported.join("\n"));
+    let gnome = format!("{operation}\n{}", exported.join("\n"));
     for (mime, data) in &mut contents {
         match mime.as_str() {
             "text/uri-list" => *data = uri_list.as_bytes().to_vec(),
@@ -208,20 +208,6 @@ fn write_token(token: &str) -> io::Result<()> {
     }
     fs::write(token_path, token)
 }
-/// Removes a stored token the portal refused.
-///
-/// Leaving it in place would make every future start attempt fail the same
-/// way, so a rejected token is deleted rather than retried forever.
-fn discard_token() {
-    let Some(path) = get_token_file_path() else {
-        return;
-    };
-    match fs::remove_file(&path) {
-        Ok(()) => log::debug!("discarded unusable RemoteDesktop token"),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => log::debug!("failed to discard unusable RemoteDesktop token: {error}"),
-    }
-}
 
 async fn get_ei_fd() -> Result<
     (
@@ -232,48 +218,49 @@ async fn get_ei_fd() -> Result<
     ),
     ashpd::Error,
 > {
-    let remote_desktop = RemoteDesktop::new().await?;
+    // Do not reuse ashpd's process-global connection after a compositor crash.
+    // Dropping a cancelled attempt disconnects its sessions and pending dialogs.
+    let connection = ashpd::zbus::Connection::session().await?;
+    let remote_desktop = RemoteDesktop::with_connection(connection).await?;
 
-    // A stored grant may have been revoked, or may belong to a portal
-    // session that no longer exists. One retry without it prompts the user
-    // instead of leaving emulation broken until the daemon restarts.
-    let mut restore_token = read_token();
-    let (session, started, clipboard, clipboard_requested) = loop {
-        let had_token = restore_token.is_some();
+    // The portal handles expired grants by prompting normally. Transport errors
+    // must not discard a stored grant or trigger another permission dialog.
+    let restore_token = read_token();
+    log::debug!("creating session ...");
+    let session = remote_desktop.create_session(Default::default()).await?;
 
-        log::debug!("creating session ...");
-        let session = remote_desktop.create_session(Default::default()).await?;
+    log::debug!("selecting devices ...");
+    let options = SelectDevicesOptions::default()
+        .set_devices(DeviceType::Keyboard | DeviceType::Pointer)
+        .set_persist_mode(PersistMode::ExplicitlyRevoked)
+        .set_restore_token(restore_token.as_deref());
+    remote_desktop.select_devices(&session, options).await?;
 
-        log::debug!("selecting devices ...");
-        let options = SelectDevicesOptions::default()
-            .set_devices(DeviceType::Keyboard | DeviceType::Pointer)
-            .set_persist_mode(PersistMode::ExplicitlyRevoked)
-            .set_restore_token(restore_token.as_deref());
-        remote_desktop.select_devices(&session, options).await?;
-
-        let clipboard = Clipboard::new().await.ok();
-        let clipboard_requested = match clipboard.as_ref() {
-            Some(clipboard) => clipboard
-                .request(&session, RequestClipboardOptions::default())
-                .await
-                .is_ok(),
-            None => false,
-        };
-
-        log::info!("requesting permission for input emulation");
-        match remote_desktop
-            .start(&session, None, Default::default())
-            .await
-        {
-            Ok(response) => break (session, response, clipboard, clipboard_requested),
-            Err(error) if had_token => {
-                log::info!("stored input permission was rejected, asking again: {error}");
-                discard_token();
-                restore_token = None;
-            }
-            Err(error) => return Err(error),
+    let clipboard = match Clipboard::with_connection(remote_desktop.connection().clone()).await {
+        Ok(clipboard) => Some(clipboard),
+        Err(error) => {
+            log::warn!("clipboard portal unavailable: {error}");
+            None
         }
     };
+    let clipboard_requested = match clipboard.as_ref() {
+        Some(clipboard) => match clipboard
+            .request(&session, RequestClipboardOptions::default())
+            .await
+        {
+            Ok(()) => true,
+            Err(error) => {
+                log::warn!("clipboard portal access request failed: {error}");
+                false
+            }
+        },
+        None => false,
+    };
+
+    log::info!("requesting permission for input emulation");
+    let started = remote_desktop
+        .start(&session, None, Default::default())
+        .await?;
     let start_response = started.response()?;
     if let Some(token_str) = start_response.restore_token() {
         if let Err(error) = write_token(token_str) {
@@ -298,6 +285,13 @@ impl LibeiEmulation {
     pub(crate) async fn new() -> Result<Self, LibeiEmulationCreationError> {
         let (_remote_desktop, session, eifd, clipboard) = get_ei_fd().await?;
         let session = Arc::new(session);
+        // Finish fallible/awaiting setup before spawning tasks that retain the session.
+        let stream = UnixStream::from(eifd);
+        stream.set_nonblocking(true)?;
+        let context = ei::Context::new(stream)?;
+        let (conn, events) = context
+            .handshake_tokio("io.syntra.Syntra", ContextType::Sender)
+            .await?;
         let (clipboard_tx, clipboard_rx) = mpsc::channel(8);
         let (clipboard_command_tx, mut clipboard_command_rx) = mpsc::channel::<ClipboardCommand>(8);
         let clipboard_task = match clipboard {
@@ -617,12 +611,6 @@ impl LibeiEmulation {
             }
             None => None,
         };
-        let stream = UnixStream::from(eifd);
-        stream.set_nonblocking(true)?;
-        let context = ei::Context::new(stream)?;
-        let (conn, events) = context
-            .handshake_tokio("io.syntra.Syntra", ContextType::Sender)
-            .await?;
         let devices = Devices::default();
         let libei_error = Arc::new(AtomicBool::default());
         let error = Arc::new(Mutex::new(None));
@@ -645,7 +633,7 @@ impl LibeiEmulation {
             libei_error,
             _remote_desktop,
             session,
-            clipboard_rx: Some(clipboard_rx),
+            clipboard_rx: clipboard_task.as_ref().map(|_| clipboard_rx),
             clipboard_command_tx: clipboard_task.as_ref().map(|_| clipboard_command_tx),
             clipboard_task,
         })

@@ -48,6 +48,7 @@ export component ServiceControls inherits Rectangle {
                     accessible-label: Translations.tr("service-install-location-choose");
                     choose-icon := Image { source: @image-url("../assets/navigation/folder.svg"); colorize: Theme.text; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; image-fit: contain; }
                     choose-touch := TouchArea { enabled: !root.busy; clicked => { root.choose-destination(); } }
+                    Tooltip { text: @markdown("\{Translations.tr("service-install-location-choose")}"); }
                 }
                 if root.destination-customised : Rectangle {
                     width: Theme.control-height;
@@ -59,6 +60,7 @@ export component ServiceControls inherits Rectangle {
                     accessible-label: Translations.tr("service-install-location-reset");
                     reset-icon := Image { source: @image-url("../assets/navigation/reset.svg"); colorize: Theme.muted-text; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; image-fit: contain; }
                     reset-touch := TouchArea { enabled: !root.busy; clicked => { root.reset-destination(); } }
+                    Tooltip { text: @markdown("\{Translations.tr("service-install-location-reset")}"); }
                 }
             }
             Text { text: Translations.tr("service-install-location-hint"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }

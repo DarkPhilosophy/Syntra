@@ -23,6 +23,9 @@ const START_TIMEOUT: Duration = Duration::from_secs(5);
 /// Interval between connection attempts while waiting.
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
+/// How long an owned daemon gets to release input before it is killed.
+const STOP_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Why a daemon could not be started or stopped.
 #[derive(Debug, Error)]
 pub enum DaemonControlError {
@@ -91,13 +94,23 @@ pub fn start() -> Result<(), DaemonControlError> {
     }
     let executable = executable().ok_or(DaemonControlError::NotFound)?;
     log::info!("starting service: {}", executable.display());
-    // stderr is captured so a daemon that dies immediately can say why.
-    // Reporting only "did not become reachable" leaves the user with nothing
-    // to act on, when the daemon usually knows exactly what went wrong.
+    // Drain stderr for the entire child lifetime, including after readiness.
+    // Otherwise startup can fill the pipe, or returning here closes its reader.
     let mut child = Command::new(&executable)
         .stderr(std::process::Stdio::piped())
         .spawn()?;
-    let stderr = child.stderr.take();
+    let stderr = child.stderr.take().expect("piped stderr");
+    let (failure_tx, failure_rx) = std::sync::mpsc::sync_channel(1);
+    if let Err(error) = std::thread::Builder::new()
+        .name("syntra-daemon-stderr".into())
+        .spawn(move || {
+            let detail = read_failure(stderr);
+            let _ = failure_tx.send(detail);
+        })
+    {
+        terminate(&mut child);
+        return Err(error.into());
+    }
 
     // Report readiness rather than optimism: the interface must not claim the
     // service is up before it can be reached.
@@ -112,7 +125,8 @@ pub fn start() -> Result<(), DaemonControlError> {
         if let Ok(Some(status)) = child.try_wait() {
             return Err(DaemonControlError::Exited {
                 status: status.to_string(),
-                detail: read_failure(stderr),
+                // A descendant may inherit stderr: never wait indefinitely for EOF.
+                detail: failure_rx.recv_timeout(POLL_INTERVAL).unwrap_or_default(),
             });
         }
         std::thread::sleep(POLL_INTERVAL);
@@ -129,13 +143,27 @@ pub fn start() -> Result<(), DaemonControlError> {
 ///
 /// The last error line is preferred over the whole log, which is mostly
 /// start-up noise that would bury the reason.
-fn read_failure(stderr: Option<std::process::ChildStderr>) -> String {
-    use std::io::Read;
-    let Some(mut stderr) = stderr else {
-        return String::new();
-    };
-    let mut output = String::new();
-    let _ = stderr.read_to_string(&mut output);
+fn read_failure(mut stderr: impl std::io::Read) -> String {
+    // Keep only a bounded tail while continuing to drain arbitrarily long logs.
+    const TAIL_BYTES: usize = 16 * 1024;
+    let mut tail = std::collections::VecDeque::with_capacity(TAIL_BYTES);
+    let mut chunk = [0; 4096];
+    loop {
+        match stderr.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(count) => {
+                let excess = (tail.len() + count).saturating_sub(TAIL_BYTES);
+                tail.drain(..excess);
+                tail.extend(&chunk[..count]);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => {
+                log::warn!("could not read daemon stderr: {error}");
+                break;
+            }
+        }
+    }
+    let output = String::from_utf8_lossy(tail.make_contiguous());
     output
         .lines()
         .rev()
@@ -266,5 +294,55 @@ fn terminate(child: &mut Child) {
     }
     #[cfg(not(unix))]
     let _ = child.kill();
+    // A wedged daemon must not freeze the dashboard on exit: allow the
+    // service's own shutdown timeouts to run, then fall back to a hard kill.
+    let deadline = std::time::Instant::now() + STOP_TIMEOUT;
+    while std::time::Instant::now() < deadline {
+        if !matches!(child.try_wait(), Ok(None)) {
+            return;
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    log::warn!("daemon {} did not stop in time; killing it", child.id());
+    let _ = child.kill();
     let _ = child.wait();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_failure;
+
+    #[test]
+    fn startup_diagnostics_keep_a_bounded_lossy_tail() {
+        let mut output = vec![b'x'; 128 * 1024];
+        output.extend_from_slice(b"\nERROR: cannot start\ninvalid UTF-8: \xff\n");
+        assert_eq!(read_failure(output.as_slice()), "ERROR: cannot start");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stderr_is_drained_beyond_pipe_capacity() {
+        use std::process::{Command, Stdio};
+        use std::time::Duration;
+
+        let mut child = Command::new("sh")
+            .args(["-c", "i=0; while [ \"$i\" -lt 8192 ]; do printf 'daemon startup diagnostics padding\\n' >&2; i=$((i+1)); done; printf 'ERROR: startup failed\\n' >&2"])
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stderr = child.stderr.take().unwrap();
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let reader = std::thread::spawn(move || {
+            let _ = tx.send(read_failure(stderr));
+        });
+        let result = rx.recv_timeout(Duration::from_secs(5));
+        // Reap even on failure so a regression cannot leave a blocked child.
+        if result.is_err() {
+            let _ = child.kill();
+        }
+        let status = child.wait().unwrap();
+        reader.join().unwrap();
+        assert!(status.success());
+        assert_eq!(result.unwrap(), "ERROR: startup failed");
+    }
 }

@@ -17,11 +17,21 @@ import { WelcomeOverlay } from "components/welcome.slint";
 import { Palette, ScrollView } from "std-widgets.slint";
 import { Avatar, AvatarRenderer } from "components/avatar.slint";
 import { IncomingFileDialog } from "components/incoming-file-dialog.slint";
+import { AppButton } from "components/controls.slint";
 export { AvatarRenderer }
 
 export component AppWindow inherits Window {
     init => {
         Palette.color-scheme = Theme.base-mode == "white" ? ColorScheme.light : ColorScheme.dark;
+    }
+    clipboard-text := TextInput { width: 0px; height: 0px; read-only: true; }
+    callback history-copy-text(string);
+    history-copy-text(value) => {
+        clipboard-text.text = value;
+        clipboard-text.select-all();
+        clipboard-text.copy();
+        clipboard-text.clear-selection();
+        clipboard-text.text = "";
     }
     title: Translations.tr("app-title");
     icon: @image-url("assets/shell/syntra.svg");
@@ -78,6 +88,7 @@ export component AppWindow inherits Window {
                     vertical-stretch: 1;
                     clip: true;
                     ScrollView {
+                        mouse-drag-pan-enabled: Theme.touch-input-active;
                         x: 0;
                         y: 0;
                         width: parent.width;
@@ -107,6 +118,7 @@ export component AppWindow inherits Window {
                         Image { source: item.icon; colorize: selected-page == item.id ? Theme.accent : Theme.muted-text; width: 28px; height: 28px; x: 12px; y: (parent.height - self.height) / 2; image-fit: contain; }
                         Text { text: item.label; visible: sidebar-expanded; color: selected-page == item.id ? Theme.text : Theme.muted-text; font-size: Theme.body-size; x: 52px; width: max(0px, parent.width - self.x - 8px); vertical-alignment: center; overflow: elide; }
                         nav-touch := TouchArea { clicked => { selected-page = item.id; root.navigate(item.id); } }
+                        Tooltip { text: @markdown("\{item.label}"); }
                     }
                 }
                 }
@@ -122,6 +134,7 @@ export component AppWindow inherits Window {
                         vertical-alignment: center; overflow: elide;
                     }
                     TouchArea { clicked => { root.selected-page = "devices"; root.navigate("devices"); } }
+                    Tooltip { text: @markdown("\{root.local-device-name}\n\{Translations.tr("navigation-devices")}"); }
                 }
             }
         }
@@ -151,6 +164,11 @@ export component AppWindow inherits Window {
                     connected: AppState.connected;
                     error-message: AppState.history-error;
                     operation-status: AppState.history-status;
+                    detail-busy: AppState.history-detail-busy;
+                    detail-error: AppState.history-detail-error;
+                    image-visible <=> AppState.history-detail-visible;
+                    full-image: AppState.history-detail-image;
+                    open(origin, sequence, copy) => { AppState.history-open(origin, sequence, copy); }
                     search(query) => { AppState.history-search(query); }
                     refresh => { AppState.history-refresh(); }
                     pin(origin, sequence, pinned) => { AppState.history-pin(origin, sequence, pinned); }
@@ -243,7 +261,56 @@ export component AppWindow inherits Window {
                     update-fixed-ips(h, v) => { AppState.update-fixed-ips(h, v); }
                     authorize(key) => { AppState.authorize-key(key, key); }
                 }
-                if selected-page == "transfers": TransfersPage {
+                if selected-page == "transfers": VerticalLayout {
+                    spacing: Theme.spacing;
+                    if AppState.manual-offer-visible: ScrollView {
+                        mouse-drag-pan-enabled: Theme.touch-input-active;
+                        height: min(400px, parent.height * 0.55);
+                        vertical-stretch: 0;
+                        VerticalLayout {
+                            spacing: Theme.spacing;
+                            for pending in AppState.pending-files: VerticalLayout {
+                                if pending.peer == AppState.manual-offer-peer && pending.id == AppState.manual-offer-id: IncomingFileDialog {
+                                    inline: true;
+                                    height: self.content-height;
+                                    peer-name: AppState.manual-offer-peer-name;
+                                    peer-avatar: AppState.manual-offer-peer-image;
+                                    has-peer-avatar: AppState.manual-offer-has-peer-image;
+                                    file-name: AppState.manual-offer-file-name;
+                                    size-label: AppState.manual-offer-size;
+                                    destination-directory <=> AppState.manual-offer-directory;
+                                    error-message: AppState.manual-offer-error;
+                                    busy: AppState.manual-offer-busy;
+                                    picker-busy: AppState.manual-offer-picker-busy;
+                                    connected: AppState.connected;
+                                    queued-count: AppState.manual-offer-count;
+                                    choose-directory => { AppState.choose-incoming-directory(); }
+                                    accept => { AppState.manual-offer-overwrite = false; AppState.accept-incoming-file(); }
+                                    overwrite => { AppState.manual-offer-overwrite = true; AppState.accept-incoming-file(); }
+                                    decline => { AppState.decline-incoming-file(); }
+                                }
+                                if pending.peer != AppState.manual-offer-peer || pending.id != AppState.manual-offer-id: Rectangle {
+                                    height: summary.preferred-height;
+                                    background: Theme.surface;
+                                    border-radius: Theme.corner-radius;
+                                    summary := VerticalLayout {
+                                        padding: Theme.spacing;
+                                        spacing: Theme.small-spacing;
+                                        Text { text: pending.file-name + " · " + pending.size-label + " · " + pending.peer-name; color: Theme.text; wrap: word-wrap; }
+                                        Text { text: pending.directory; color: Theme.muted-text; wrap: word-wrap; }
+                                        if pending.error != "": Text { text: pending.error; color: Theme.danger; wrap: word-wrap; }
+                                        HorizontalLayout {
+                                            AppButton { text: Translations.tr("manual-transfer-browse"); enabled: !AppState.manual-offer-busy && !AppState.manual-offer-picker-busy; clicked => { AppState.select-incoming-file(pending.peer, pending.id); } }
+                                            Rectangle { horizontal-stretch: 1; }
+                                            AppButton { text: Translations.tr("manual-transfer-decline"); danger: true; enabled: !AppState.manual-offer-busy; clicked => { AppState.select-incoming-file(pending.peer, pending.id); AppState.decline-incoming-file(); } }
+                                            AppButton { text: Translations.tr("manual-transfer-accept"); background: Theme.success.with-alpha(0.2); border-color: Theme.success; enabled: !AppState.manual-offer-busy; clicked => { AppState.select-incoming-file(pending.peer, pending.id); AppState.manual-offer-overwrite = false; AppState.accept-incoming-file(); } }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    TransfersPage {
                     active-transfers: AppState.active-transfers;
                     completed-transfers: AppState.completed-transfers;
                     cancelled-transfers: AppState.cancelled-transfers;
@@ -262,17 +329,11 @@ export component AppWindow inherits Window {
                     cancel-transfer(t, f) => { AppState.cancel-transfer(t); }
                     retry => { AppState.synchronize(); }
                 }
+                }
                 if selected-page == "diagnostics": DiagnosticsPage {
                     entries: AppState.diagnostics;
-                    message-columns: AppState.diagnostics-message-columns;
-                    selected-level: AppState.diagnostics-level;
-                    selected-stage: AppState.diagnostics-stage;
-                    selected-direction: AppState.diagnostics-direction;
                     text-filter: AppState.diagnostics-text;
                     paused: AppState.diagnostics-paused;
-                    level-filter-changed(v) => { AppState.diagnostics-level-changed(v); }
-                    stage-filter-changed(v) => { AppState.diagnostics-stage-changed(v); }
-                    direction-filter-changed(v) => { AppState.diagnostics-direction-changed(v); }
                     text-filter-changed(v) => { AppState.diagnostics-text-changed(v); }
                     pause-toggled(v) => { AppState.diagnostics-pause(v); }
                     clear-requested => { AppState.diagnostics-clear(); }
@@ -325,6 +386,8 @@ export component AppWindow inherits Window {
                     palette: AppState.palette;
                     density: AppState.density;
                     reduced-motion: AppState.reduced-motion;
+                    suppress-popups: AppState.suppress-popups;
+                    change-suppress-popups(value) => { AppState.change-suppress-popups(value); }
                     zoom-percent: AppState.zoom-percent;
                     change-zoom(value) => { AppState.change-zoom(value); }
                     locale-changed(v) => { AppState.change-locale(v); }
@@ -338,7 +401,6 @@ export component AppWindow inherits Window {
                     change-reduced-motion(v) => { AppState.change-reduced-motion(v); }
                     port: "\{AppState.listen-port}";
                     port-changed(value) => { AppState.change-port(round(value.to-float())); }
-                    save-requested => { AppState.save-configuration(); }
                 }
                 if selected-page == "authorization": AuthorizationPage {
                     local-fingerprint: AppState.local-fingerprint;
@@ -361,7 +423,7 @@ export component AppWindow inherits Window {
         launch-visible <=> root.launch-visible;
         launch-ready: root.launch-ready;
     }
-    if AppState.manual-offer-visible && !root.launch-visible: IncomingFileDialog {
+    if AppState.manual-offer-visible && !AppState.suppress-popups && root.selected-page != "transfers" && !root.launch-visible: IncomingFileDialog {
         width: parent.width; height: parent.height;
         peer-name: AppState.manual-offer-peer-name;
         peer-avatar: AppState.manual-offer-peer-image;
@@ -375,7 +437,8 @@ export component AppWindow inherits Window {
         connected: AppState.connected;
         queued-count: AppState.manual-offer-count;
         choose-directory => { AppState.choose-incoming-directory(); }
-        accept => { AppState.accept-incoming-file(); }
+        accept => { AppState.manual-offer-overwrite = false; AppState.accept-incoming-file(); }
+        overwrite => { AppState.manual-offer-overwrite = true; AppState.accept-incoming-file(); }
         decline => { AppState.decline-incoming-file(); }
     }
 }

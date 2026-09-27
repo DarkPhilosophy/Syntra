@@ -292,17 +292,7 @@ impl HistoryStore {
 
     /// Returns visible records newest first. Locally dismissed events are excluded.
     pub fn list(&self) -> Result<Vec<HistoryRecord>, HistoryError> {
-        self.query_records(
-            "SELECT e.origin_device_id, e.origin_sequence, e.kind, e.created_at_ms,
-                    e.origin_label, COALESCE(s.pinned, 0), e.text_payload,
-                    e.image_payload, e.media_type, e.image_width, e.image_height, e.files_json
-             FROM history_events e
-             LEFT JOIN history_local_state s USING(origin_device_id, origin_sequence)
-             WHERE COALESCE(s.dismissed, 0) = 0
-             ORDER BY COALESCE(s.pinned, 0) DESC,
-                      e.created_at_ms DESC, e.origin_device_id, e.origin_sequence DESC",
-            None,
-        )
+        self.query_records(LIST_SQL, None)
     }
 
     /// Searches visible text, media type, file metadata, and origin labels.
@@ -310,22 +300,7 @@ impl HistoryStore {
         if query.is_empty() {
             return self.list();
         }
-        let pattern = format!("%{}%", escape_like(query));
-        self.query_records(
-            "SELECT e.origin_device_id, e.origin_sequence, e.kind, e.created_at_ms,
-                    e.origin_label, COALESCE(s.pinned, 0), e.text_payload,
-                    e.image_payload, e.media_type, e.image_width, e.image_height, e.files_json
-             FROM history_events e
-             LEFT JOIN history_local_state s USING(origin_device_id, origin_sequence)
-             WHERE COALESCE(s.dismissed, 0) = 0 AND (
-                    e.origin_label LIKE ?1 ESCAPE '\\' COLLATE NOCASE OR
-                    e.text_payload LIKE ?1 ESCAPE '\\' COLLATE NOCASE OR
-                    e.media_type LIKE ?1 ESCAPE '\\' COLLATE NOCASE OR
-                    e.files_json LIKE ?1 ESCAPE '\\' COLLATE NOCASE)
-             ORDER BY COALESCE(s.pinned, 0) DESC,
-                      e.created_at_ms DESC, e.origin_device_id, e.origin_sequence DESC",
-            Some(&pattern),
-        )
+        self.query_records(SEARCH_SQL, Some(&like_pattern(query)))
     }
 
     /// Changes local pin state. Returns `false` when the event is unknown or dismissed.
@@ -525,22 +500,20 @@ impl HistoryStore {
     }
 
     /// Returns a bounded page of visible events. `limit` is always clamped to 50.
+    ///
+    /// Paged in SQL: rows carry image payloads, so materialising the whole
+    /// history to slice one page made every scroll cost the entire table.
     pub fn page(
         &self,
         query: &str,
         offset: u64,
         limit: usize,
     ) -> Result<(Vec<HistoryRecord>, Option<u64>), HistoryError> {
-        let limit = limit.clamp(1, 50);
-        let all = if query.is_empty() {
-            self.list()?
+        if query.is_empty() {
+            self.query_window(LIST_SQL, None, offset, limit)
         } else {
-            self.search(query)?
-        };
-        let start = usize::try_from(offset).unwrap_or(usize::MAX).min(all.len());
-        let end = start.saturating_add(limit).min(all.len());
-        let next = (end < all.len()).then_some(end as u64);
-        Ok((all.into_iter().skip(start).take(limit).collect(), next))
+            self.query_window(SEARCH_SQL, Some(&like_pattern(query)), offset, limit)
+        }
     }
 
     /// Exports an immutable bounded page for authenticated peer reconciliation.
@@ -553,28 +526,30 @@ impl HistoryStore {
         offset: u64,
         limit: usize,
     ) -> Result<(Vec<ImportedHistoryEvent>, Option<u64>), HistoryError> {
+        let (records, next) = self.query_window(EXPORT_SQL, None, offset, limit)?;
+        Ok((records.iter().map(immutable_event).collect(), next))
+    }
+
+    /// Runs an ordered query for one window, fetching a single extra row to
+    /// learn whether another page exists.
+    fn query_window(
+        &self,
+        sql: &str,
+        pattern: Option<&str>,
+        offset: u64,
+        limit: usize,
+    ) -> Result<(Vec<HistoryRecord>, Option<u64>), HistoryError> {
         let limit = limit.clamp(1, 50);
-        let all = self.query_records(
-            "SELECT e.origin_device_id, e.origin_sequence, e.kind, e.created_at_ms,
-                    e.origin_label, COALESCE(s.pinned, 0), e.text_payload,
-                    e.image_payload, e.media_type, e.image_width, e.image_height, e.files_json
-             FROM history_events e
-             LEFT JOIN history_local_state s USING(origin_device_id, origin_sequence)
-             WHERE COALESCE(s.dismissed, 0) = 0
-             ORDER BY e.created_at_ms DESC, e.origin_device_id, e.origin_sequence DESC",
-            None,
+        let sql_offset = offset.min(i64::MAX as u64);
+        let mut records = self.query_records(
+            &format!("{sql} LIMIT {} OFFSET {sql_offset}", limit + 1),
+            pattern,
         )?;
-        let start = usize::try_from(offset).unwrap_or(usize::MAX).min(all.len());
-        let end = start.saturating_add(limit).min(all.len());
-        let next = (end < all.len()).then_some(end as u64);
-        Ok((
-            all.iter()
-                .skip(start)
-                .take(limit)
-                .map(immutable_event)
-                .collect(),
-            next,
-        ))
+        let next = (records.len() > limit).then(|| {
+            records.truncate(limit);
+            offset.saturating_add(limit as u64)
+        });
+        Ok((records, next))
     }
 
     fn query_records(
@@ -679,6 +654,40 @@ fn local_flags(
         )
         .optional()?
         .unwrap_or((false, false)))
+}
+
+const LIST_SQL: &str = "SELECT e.origin_device_id, e.origin_sequence, e.kind, e.created_at_ms,
+        e.origin_label, COALESCE(s.pinned, 0), e.text_payload,
+        e.image_payload, e.media_type, e.image_width, e.image_height, e.files_json
+ FROM history_events e
+ LEFT JOIN history_local_state s USING(origin_device_id, origin_sequence)
+ WHERE COALESCE(s.dismissed, 0) = 0
+ ORDER BY COALESCE(s.pinned, 0) DESC,
+          e.created_at_ms DESC, e.origin_device_id, e.origin_sequence DESC";
+
+const SEARCH_SQL: &str = "SELECT e.origin_device_id, e.origin_sequence, e.kind, e.created_at_ms,
+        e.origin_label, COALESCE(s.pinned, 0), e.text_payload,
+        e.image_payload, e.media_type, e.image_width, e.image_height, e.files_json
+ FROM history_events e
+ LEFT JOIN history_local_state s USING(origin_device_id, origin_sequence)
+ WHERE COALESCE(s.dismissed, 0) = 0 AND (
+        e.origin_label LIKE ?1 ESCAPE '\\' COLLATE NOCASE OR
+        e.text_payload LIKE ?1 ESCAPE '\\' COLLATE NOCASE OR
+        e.media_type LIKE ?1 ESCAPE '\\' COLLATE NOCASE OR
+        e.files_json LIKE ?1 ESCAPE '\\' COLLATE NOCASE)
+ ORDER BY COALESCE(s.pinned, 0) DESC,
+          e.created_at_ms DESC, e.origin_device_id, e.origin_sequence DESC";
+
+const EXPORT_SQL: &str = "SELECT e.origin_device_id, e.origin_sequence, e.kind, e.created_at_ms,
+        e.origin_label, COALESCE(s.pinned, 0), e.text_payload,
+        e.image_payload, e.media_type, e.image_width, e.image_height, e.files_json
+ FROM history_events e
+ LEFT JOIN history_local_state s USING(origin_device_id, origin_sequence)
+ WHERE COALESCE(s.dismissed, 0) = 0
+ ORDER BY e.created_at_ms DESC, e.origin_device_id, e.origin_sequence DESC";
+
+fn like_pattern(query: &str) -> String {
+    format!("%{}%", escape_like(query))
 }
 
 fn decode_record(row: &rusqlite::Row<'_>) -> Result<HistoryRecord, rusqlite::Error> {
@@ -988,6 +997,43 @@ mod tests {
         assert_eq!(records.len(), 1);
         assert!(records[0].pinned);
         assert_eq!(records[0].content, event.content);
+    }
+
+    /// Pages come from SQL windows; they must tile the full ordered list
+    /// exactly, keep pinned records first, and report the last page.
+    #[test]
+    fn pages_tile_the_ordered_history_without_gaps_or_overlap() {
+        let database = TestDatabase::new("sql-paging");
+        let mut store = HistoryStore::open(&database.0).unwrap();
+        for sequence in 1..=57 {
+            store
+                .merge_imported(imported(
+                    sequence,
+                    HistoryContent::Text(format!("entry {sequence}")),
+                ))
+                .unwrap();
+        }
+        let pinned = imported(3, HistoryContent::Text("entry 3".into()));
+        assert!(store.set_pinned(&pinned.event_id, true).unwrap());
+
+        let full = store.list().unwrap();
+        let (first, next) = store.page("", 0, 50).unwrap();
+        assert_eq!(next, Some(50));
+        let (second, last) = store.page("", 50, 50).unwrap();
+        assert_eq!(last, None);
+        let paged: Vec<_> = first
+            .iter()
+            .chain(&second)
+            .map(|r| r.event_id.clone())
+            .collect();
+        let expected: Vec<_> = full.iter().map(|r| r.event_id.clone()).collect();
+        assert_eq!(paged, expected);
+        assert_eq!(first[0].event_id, pinned.event_id);
+
+        // "entry 5" plus "entry 50" through "entry 57".
+        let (matches, none) = store.page("entry 5", 0, 50).unwrap();
+        assert_eq!(none, None);
+        assert_eq!(matches.len(), 9);
     }
 
     /// Pinning must lift a record to the top of the list, not merely mark it.

@@ -3,6 +3,14 @@
 //! Bridges three parties: the transfer state machine, out-of-process plugins
 //! that expose the files, and the clients that render progress.
 
+/// A clipboard selection scanned off the event loop.
+pub(super) struct ManifestOffer {
+    generation: u64,
+    adapter_id: String,
+    manifest: syntra_plugin_api::CopyManifest,
+    offer: Result<crate::file_transfer::FileOffer, crate::file_transfer::TransferError>,
+}
+
 use super::*;
 
 /// Maps a supervised process onto the plugin identifier the manifest declares.
@@ -132,32 +140,35 @@ impl Service {
                                 .map(|entry| entry.uri.as_str())
                                 .collect::<Vec<_>>()
                                 .join("\r\n");
-                            let mut actions = Vec::new();
-                            for handle in self.client_manager.clipboard_clients() {
-                                self.next_clipboard_transfer =
-                                    self.next_clipboard_transfer.wrapping_add(1).max(1);
-                                let wire_id = self.next_clipboard_transfer;
-                                match crate::file_transfer::FileOffer::from_uri_list(
-                                    wire_id, &uri_text,
-                                ) {
-                                    Ok(offer) => match self.transfers.local_copy_manifest(
-                                        Peer::Capture(handle),
-                                        wire_id,
-                                        adapter_id.clone(),
-                                        manifest.clone(),
-                                        offer,
-                                    ) {
-                                        Ok(mut peer_actions) => actions.append(&mut peer_actions),
-                                        Err(error) => log::warn!(
-                                            "clipboard manifest for {handle} rejected: {error}"
-                                        ),
-                                    },
+                            // Walking a copied directory touches the disk for
+                            // every entry. Doing it here would stall input,
+                            // IPC and heartbeats, so build the offer once on
+                            // the blocking pool and fan it out on completion.
+                            self.manifest_generation = self.manifest_generation.wrapping_add(1);
+                            let generation = self.manifest_generation;
+                            let tx = self.manifest_offer_tx.clone();
+                            tokio::task::spawn_local(async move {
+                                let offer = tokio::task::spawn_blocking(move || {
+                                    crate::file_transfer::FileOffer::from_uri_list(1, &uri_text)
+                                })
+                                .await;
+                                let offer = match offer {
+                                    Ok(result) => result,
                                     Err(error) => {
-                                        log::warn!("clipboard manifest rejected: {error}")
+                                        log::warn!("clipboard manifest scan failed: {error}");
+                                        return;
                                     }
-                                }
-                            }
-                            Ok(actions)
+                                };
+                                let _ = tx
+                                    .send(ManifestOffer {
+                                        generation,
+                                        adapter_id,
+                                        manifest,
+                                        offer,
+                                    })
+                                    .await;
+                            });
+                            Ok(Vec::new())
                         }
                     }
                     AdapterMessage::Hello { .. }
@@ -207,6 +218,40 @@ impl Service {
                 log::warn!("adapter exited: {}", status);
             }
         }
+    }
+
+    /// Offers a scanned clipboard selection to every clipboard peer, unless a
+    /// newer selection replaced it while the scan was running.
+    pub(super) fn handle_manifest_offer(&mut self, result: ManifestOffer) {
+        if result.generation != self.manifest_generation {
+            log::debug!("dropping superseded clipboard manifest scan");
+            return;
+        }
+        let offer = match result.offer {
+            Ok(offer) => offer,
+            Err(error) => {
+                log::warn!("clipboard manifest rejected: {error}");
+                return;
+            }
+        };
+        let mut actions = Vec::new();
+        for handle in self.client_manager.clipboard_clients() {
+            self.next_clipboard_transfer = self.next_clipboard_transfer.wrapping_add(1).max(1);
+            let wire_id = self.next_clipboard_transfer;
+            let mut peer_offer = offer.clone();
+            peer_offer.transfer_id = wire_id;
+            match self.transfers.local_copy_manifest(
+                Peer::Capture(handle),
+                wire_id,
+                result.adapter_id.clone(),
+                result.manifest.clone(),
+                peer_offer,
+            ) {
+                Ok(mut peer_actions) => actions.append(&mut peer_actions),
+                Err(error) => log::warn!("clipboard manifest for {handle} rejected: {error}"),
+            }
+        }
+        self.execute_transfer_actions(actions);
     }
 
     pub(super) fn handle_source_result(&mut self, result: SourceReadResult) {
@@ -397,14 +442,17 @@ impl Service {
                                 };
                             let uri_list = format!("{}\r\n", m.uris.join("\r\n")).into_bytes();
                             let gnome_files =
-                                format!("{operation}\n{}\n", m.uris.join("\n")).into_bytes();
-                            self.emulation.publish_file_clipboard(vec![
-                                (syntra_plugin_api::URI_LIST_MIME.to_string(), uri_list),
-                                (
-                                    syntra_plugin_api::GNOME_COPIED_FILES_MIME.to_string(),
-                                    gnome_files,
-                                ),
-                            ]);
+                                format!("{operation}\n{}", m.uris.join("\n")).into_bytes();
+                            self.emulation.publish_file_clipboard(
+                                vec![
+                                    (syntra_plugin_api::URI_LIST_MIME.to_string(), uri_list),
+                                    (
+                                        syntra_plugin_api::GNOME_COPIED_FILES_MIME.to_string(),
+                                        gnome_files,
+                                    ),
+                                ],
+                                Some(m),
+                            );
                             continue;
                         }
                         AdapterMessage::Released(m) => ManagerCommand::Released(m),

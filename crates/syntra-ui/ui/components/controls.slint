@@ -25,19 +25,19 @@ export component AppButton inherits Rectangle {
     forward-focus: focus-scope;
     function activate() { if (root.enabled) { root.clicked(); } }
     label := Text { x: Theme.control-padding; width: parent.width - 2 * Theme.control-padding; height: parent.height; text: root.text; color: root.primary ? Theme.on-accent : root.danger ? Theme.danger : Theme.text; font-size: Theme.body-size; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
-    if touch-area.has-hover && root.tooltip != "" : Rectangle {
-        x: (parent.width - self.width) / 2; y: parent.height + 6px; width: max(140px, tooltip-text.preferred-width + 16px); height: 26px; z: 100;
-        background: Theme.elevated-surface; border-width: Theme.border-width; border-color: Theme.border; border-radius: Theme.small-radius;
-        tooltip-text := Text { x: 8px; width: parent.width - 16px; height: parent.height; text: root.tooltip; color: Theme.text; font-size: Theme.caption-size; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
-    }
     touch-area := TouchArea { enabled: root.enabled; clicked => { focus-scope.focus(); root.activate(); } }
     focus-scope := FocusScope { x: 0px; width: 0px; enabled: root.enabled; key-pressed(event) => { if (event.text == " " || event.text == "\n") { root.activate(); return accept; } return reject; } }
+    // Observe hover before the TouchArea consumes pointer movement.
+    if root.tooltip != "" : Tooltip {
+        text: @markdown("\{root.tooltip}");
+    }
 }
 
 export component AppSwitch inherits Rectangle {
     in-out property <bool> checked;
     in property <bool> enabled: true;
     in property <string> a11y-label;
+    in property <string> tooltip: a11y-label;
     callback toggled(bool);
     function toggle() { if (root.enabled) { root.toggled(!root.checked); } }
     width: 44px; height: Theme.hit-area; horizontal-stretch: 0; vertical-stretch: 0;
@@ -47,5 +47,6 @@ export component AppSwitch inherits Rectangle {
     }
     touch-area := TouchArea { enabled: root.enabled; clicked => { focus-scope.focus(); root.toggle(); } }
     focus-scope := FocusScope { x: 0px; width: 0px; enabled: root.enabled; key-pressed(event) => { if (event.text == " " || event.text == "\n") { root.toggle(); return accept; } return reject; } }
+    if root.tooltip != "" : Tooltip { text: @markdown("\{root.tooltip}"); }
 
 }

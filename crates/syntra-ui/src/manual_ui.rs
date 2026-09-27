@@ -81,9 +81,40 @@ pub(crate) fn project(app: &AppWindow, view: &AppViewState) {
     global.set_transfer_peers(ModelRc::new(VecModel::from(peers)));
 
     global.set_manual_offer_count(view.pending_file_offers.len().min(i32::MAX as usize) as i32);
+    global.set_pending_files(ModelRc::new(VecModel::from(
+        view.pending_file_offers
+            .iter()
+            .map(|offer| {
+                let (name, _) = device_presentation(app, view, &offer.peer_fingerprint, None);
+                crate::app::IncomingFileItem {
+                    peer: offer.peer_fingerprint.clone().into(),
+                    id: offer.transfer_id.to_string().into(),
+                    peer_name: name,
+                    file_name: offer.file_name.clone().into(),
+                    size_label: format_bytes(offer.size).into(),
+                    directory: offer
+                        .suggested_directory
+                        .to_string_lossy()
+                        .into_owned()
+                        .into(),
+                    error: view
+                        .manual_transfers
+                        .get(&(offer.peer_fingerprint.clone(), offer.transfer_id))
+                        .and_then(|status| status.error.clone())
+                        .unwrap_or_default()
+                        .into(),
+                }
+            })
+            .collect::<Vec<_>>(),
+    )));
     let offer = view
         .pending_file_offers
-        .first()
+        .iter()
+        .find(|offer| {
+            offer.peer_fingerprint == global.get_selected_offer_peer().as_str()
+                && offer.transfer_id.to_string() == global.get_selected_offer_id().as_str()
+        })
+        .or_else(|| view.pending_file_offers.first())
         .filter(|_| view.status.connected);
     global.set_manual_offer_visible(offer.is_some());
     if let Some(offer) = offer {
@@ -235,7 +266,8 @@ mod desktop {
     impl DropTargets {
         fn target(&self, app: &AppWindow, point: slint::LogicalPosition) -> Option<String> {
             if app.get_selected_page() != "transfers"
-                || app.global::<AppState>().get_manual_offer_visible()
+                || (app.global::<AppState>().get_manual_offer_visible()
+                    && !app.global::<AppState>().get_suppress_popups())
                 || !self.viewport.contains(point)
             {
                 return None;
@@ -310,6 +342,17 @@ mod desktop {
         state: Arc<Mutex<AppViewState>>,
     ) -> ManualUiGuard {
         let global = app.global::<AppState>();
+        let weak = app.as_weak();
+        let model = Arc::clone(&state);
+        global.on_select_incoming_file(move |peer, id| {
+            let Some(app) = weak.upgrade() else { return };
+            let global = app.global::<AppState>();
+            global.set_selected_offer_peer(peer);
+            global.set_selected_offer_id(id);
+            if let Ok(view) = model.lock() {
+                super::project(&app, &view);
+            }
+        });
         let targets = Rc::new(RefCell::new(DropTargets::default()));
         let registry = Rc::clone(&targets);
         global.on_register_manual_drop_target(move |peer, x, y, width, height| {
@@ -452,6 +495,7 @@ mod desktop {
                     peer_fingerprint,
                     transfer_id,
                     destination_directory: directory,
+                    overwrite: global.get_manual_offer_overwrite(),
                 },
             );
         });
@@ -518,10 +562,7 @@ mod desktop {
         global.on_choose_download_directory(move || {
             let Some(app) = weak.upgrade() else { return };
             let global = app.global::<AppState>();
-            if global.get_file_receive_picker_busy()
-                || global.get_file_receive_busy()
-                || global.get_manual_offer_visible()
-            {
+            if global.get_file_receive_picker_busy() || global.get_file_receive_busy() {
                 return;
             }
             let directory = global.get_file_receive_directory().to_string();
@@ -554,7 +595,7 @@ mod desktop {
         global.on_save_file_receive_settings(move || {
             let Some(app) = weak.upgrade() else { return };
             let global = app.global::<AppState>();
-            if global.get_file_receive_busy() || global.get_manual_offer_visible() {
+            if global.get_file_receive_busy() {
                 return;
             }
             let directory = PathBuf::from(global.get_file_receive_directory().as_str());
@@ -646,7 +687,12 @@ mod desktop {
                         }
                         FileDropEvent::Error(message) => {
                             app.global::<AppState>().set_manual_drop_supported(false);
-                            error(&app, &state, message);
+                            log::warn!("native file drop unavailable: {message}");
+                            error(
+                                &app,
+                                &state,
+                                tr(&app, "manual-transfer-drop-unavailable").to_string(),
+                            );
                         }
                     }
                 });

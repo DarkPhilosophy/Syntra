@@ -61,6 +61,10 @@ image = { version = "0.25", default-features = false }
 [target.'cfg(target_os = "linux")'.dependencies]
 ksni = { version = "0.3.6", default-features = false, features = ["blocking", "async-io"] }
 x11rb = "0.13"
+wayland-client = "0.31.14"
+wayland-backend = { version = "0.3.15", features = ["client_system"] }
+wayland-protocols = { version = "0.32", features = ["client"] }
+url = "2"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 # Resolves the per-user application directory for the launcher entry.

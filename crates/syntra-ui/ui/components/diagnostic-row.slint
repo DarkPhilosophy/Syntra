@@ -10,34 +10,73 @@ export struct DiagnosticEntry {
 }
 
 export global DiagnosticColumns {
-    out property <length> time-width: Theme.body-size * 19.5;
-    out property <length> level-width: Theme.body-size * 7.5;
-    out property <length> stage-width: Theme.body-size * 12;
-    out property <length> direction-width: Theme.body-size * 9;
-    out property <length> correlation-width: Theme.body-size * 15;
-    out property <length> fixed-width: time-width + level-width + stage-width + direction-width + correlation-width + Theme.small-spacing * 7;
+    in-out property <[float]> fractions: [0.16, 0.07, 0.11, 0.09, 0.13, 0.44];
+    public function resize(index: int, amount: float) {
+        let left = fractions[index];
+        let right = fractions[index + 1];
+        let delta = clamp(amount, 0.035 - left, right - 0.035);
+        fractions[index] = left + delta;
+        fractions[index + 1] = right - delta;
+    }
+}
+
+component DiagnosticCell inherits Rectangle {
+    in property <string> value;
+    in property <color> foreground: Theme.muted-text;
+    in property <bool> resizable;
+    in property <length> row-width;
+    callback resize(float);
+    Text {
+        x: 4px;
+        width: max(0px, parent.width - 8px);
+        height: parent.height;
+        text: root.value;
+        color: root.foreground;
+        font-family: "monospace";
+        font-size: Theme.body-size;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    Tooltip { text: @markdown("\{root.value}"); }
+    if root.resizable: TouchArea {
+        width: 12px;
+        x: parent.width - self.width;
+        mouse-cursor: col-resize;
+        property <length> previous-x;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down { self.previous-x = self.absolute-position.x + self.mouse-x; }
+        }
+        moved => {
+            if self.pressed && root.row-width > 0px {
+                let current = self.absolute-position.x + self.mouse-x;
+                let amount = (current - self.previous-x) / root.row-width;
+                self.previous-x = current;
+                root.resize(amount);
+            }
+        }
+        Rectangle { x: parent.width / 2; width: 1px; height: parent.height; background: parent.has-hover || parent.pressed ? Theme.accent : Theme.border; }
+    }
 }
 
 export component DiagnosticRow inherits Rectangle {
     in property <DiagnosticEntry> entry;
     in property <bool> compact: false;
     in property <bool> header: false;
-    in property <length> message-width;
     height: max(compact || header ? 36px : 44px, Theme.body-size * 2 + Theme.small-spacing);
     vertical-stretch: 0;
     horizontal-stretch: 1;
+    clip: true;
     background: header ? Theme.elevated-surface : entry.level == "error" ? Theme.danger.with-alpha(0.08) : entry.level == "warning" ? Theme.warning.with-alpha(0.06) : transparent;
     Rectangle { y: parent.height - 1px; height: 1px; background: Theme.border; }
     HorizontalLayout {
-        padding-left: Theme.small-spacing;
-        padding-right: Theme.small-spacing;
-        spacing: Theme.small-spacing;
-        alignment: start;
-        Text { width: DiagnosticColumns.time-width; text: entry.timestamp; color: Theme.muted-text; font-family: "monospace"; font-size: Theme.body-size; vertical-alignment: center; }
-        Text { width: DiagnosticColumns.level-width; text: entry.level; color: header ? Theme.muted-text : entry.level == "error" ? Theme.danger : entry.level == "warning" ? Theme.warning : Theme.accent; font-family: "monospace"; font-size: Theme.body-size; vertical-alignment: center; }
-        Text { width: DiagnosticColumns.stage-width; text: entry.stage; color: Theme.muted-text; font-family: "monospace"; font-size: Theme.body-size; vertical-alignment: center; overflow: elide; }
-        Text { width: DiagnosticColumns.direction-width; text: entry.direction; color: Theme.muted-text; font-family: "monospace"; font-size: Theme.body-size; vertical-alignment: center; }
-        Text { width: DiagnosticColumns.correlation-width; text: entry.correlation; color: Theme.muted-text; font-family: "monospace"; font-size: Theme.body-size; vertical-alignment: center; overflow: elide; }
-        Text { width: message-width; text: entry.message; color: header ? Theme.muted-text : Theme.text; font-family: "monospace"; font-size: Theme.body-size; vertical-alignment: center; }
+        spacing: 0px;
+        for value[index] in [root.entry.timestamp, root.entry.level, root.entry.stage, root.entry.direction, root.entry.correlation, root.entry.message]: DiagnosticCell {
+            width: root.width * DiagnosticColumns.fractions[index];
+            value: value;
+            resizable: root.header && index < 5;
+            row-width: root.width;
+            foreground: root.header ? Theme.muted-text : index == 1 ? (root.entry.level == "error" ? Theme.danger : root.entry.level == "warning" ? Theme.warning : Theme.accent) : index == 5 ? Theme.text : Theme.muted-text;
+            resize(amount) => { DiagnosticColumns.resize(index, amount); }
+        }
     }
 }

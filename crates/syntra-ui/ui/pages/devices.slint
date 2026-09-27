@@ -19,7 +19,11 @@ export component DevicesPage inherits Rectangle {
     in property <string> empty-title: Translations.tr("devices-empty");
     in property <string> empty-description: Translations.tr("devices-empty-description");
     in property <string> edit-label: Translations.tr("action-edit");
-    in property <string> save-label: Translations.tr("action-save");
+    local-name-save := Timer {
+        interval: 650ms;
+        running: false;
+        triggered => { self.stop(); root.update-local-name(root.draft-local-name); }
+    }
     in property <string> cancel-label: Translations.tr("action-cancel");
     in property <string> delete-label: Translations.tr("action-delete");
     in property <string> start-label: Translations.tr("action-start");
@@ -61,6 +65,7 @@ export component DevicesPage inherits Rectangle {
 
     background: Theme.background;
     ScrollView {
+        mouse-drag-pan-enabled: Theme.touch-input-active;
     VerticalLayout {
         padding: Theme.content-gap;
         spacing: Theme.spacing;
@@ -81,8 +86,7 @@ export component DevicesPage inherits Rectangle {
                 HorizontalLayout {
                     spacing: Theme.small-spacing;
                     Avatar { source: root.local-image; has-image: root.has-local-image; size: Theme.device-avatar-size; }
-                    LineEdit { horizontal-stretch: 1; text: root.draft-local-name; edited(value) => { root.draft-local-name = value; } accepted => { root.update-local-name(self.text); } }
-                    AppButton { text: root.save-label; clicked => { root.update-local-name(root.draft-local-name); } }
+                    LineEdit { horizontal-stretch: 1; text: root.draft-local-name; edited(value) => { root.draft-local-name = value; local-name-save.start(); local-name-save.restart(); } accepted => { local-name-save.stop(); root.update-local-name(self.text); } }
                 }
                 HorizontalLayout {
                     spacing: Theme.small-spacing;
@@ -123,7 +127,6 @@ export component DevicesPage inherits Rectangle {
             for client in root.clients : ClientRow {
                 client: client;
                 label-edit: root.edit-label;
-                label-save: root.save-label;
                 label-cancel: root.cancel-label;
                 label-delete: root.delete-label;
                 label-start: root.start-label;

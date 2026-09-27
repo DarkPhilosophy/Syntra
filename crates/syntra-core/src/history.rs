@@ -115,3 +115,32 @@ pub(crate) fn store_id(id: HistoryEventId) -> syntra_store::HistoryEventId {
         origin_sequence: id.origin_sequence,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn explicit_history_content_preserves_text_and_original_image() {
+        let directory = tempfile::tempdir().unwrap();
+        let worker = syntra_store::worker::HistoryWorker::start(
+            directory.path().join("history.db"),
+            "test-device".into(),
+            None,
+        )
+        .unwrap();
+        let text = "完整文本 — text beyond the summary ".repeat(300);
+        let text_id = worker
+            .record(HistoryContent::Text(text.clone()))
+            .await
+            .unwrap();
+        assert_eq!(
+            worker.content(text_id).await.unwrap(),
+            Some(HistoryContent::Text(text))
+        );
+        let rgba = vec![127u8; 512 * 512 * 4];
+        let original = image(512, 512, rgba);
+        let image_id = worker.record(original.clone()).await.unwrap();
+        assert_eq!(worker.content(image_id).await.unwrap(), Some(original));
+    }
+}

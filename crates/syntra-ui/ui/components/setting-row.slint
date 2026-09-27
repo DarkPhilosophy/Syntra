@@ -19,6 +19,6 @@ export component SettingRow inherits Rectangle {
             Text { text: root.title; color: Theme.text; font-size: Theme.body-size; wrap: word-wrap; }
             if root.description != "": Text { text: root.description; color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
         }
-        AppSwitch { enabled: root.interactive; checked: root.enabled; a11y-label: root.title; toggled(value) => { root.toggled(value); } }
+        AppSwitch { enabled: root.interactive; checked: root.enabled; a11y-label: root.title; tooltip: root.description != "" ? root.title + "\n" + root.description : root.title; toggled(value) => { root.toggled(value); } }
     }
 }

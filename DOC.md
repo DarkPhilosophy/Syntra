@@ -27,6 +27,12 @@ Do not conflate these boundaries. `syntra-api` is local daemon-to-client IPC; `s
 - [Logging](docs/logging.md) — subsystem filters and diagnostics.
 - [Configuration](docs/configuration.md) — TOML settings, identity and overrides.
 
+## Desktop file drops
+
+The Slint dashboard accepts native Wayland file drops through a data-device adapter on its existing window connection. Drop positions use the same device-card routing as other desktop backends; the receiver still chooses the destination and accepts the transfer. This does not switch the dashboard to XWayland or start an input-capture or portal session.
+
+The adapter negotiates Copy only, accepts local `text/uri-list` entries, and bounds selection reads to 1 MiB and five seconds. It does not read or replace the ordinary clipboard. Unsupported offers can still be sent through the existing file picker.
+
 ## Repository facts
 
 The workspace is Rust 2021, version `0.11.0`, licensed GPL-3.0-or-later and maintained at [github.com/DarkPhilosophy/syntra](https://github.com/DarkPhilosophy/syntra). Linux, macOS, Windows and Android are represented in the workspace; iOS is planned. Build and feature-selection details belong in the canonical README and the relevant guide, not in this signpost.

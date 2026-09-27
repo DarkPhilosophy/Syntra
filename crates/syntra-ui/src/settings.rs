@@ -78,6 +78,7 @@ pub struct PresentationSettings {
     pub zoom_percent: u16,
     pub reduced_motion: bool,
     pub sidebar_open: bool,
+    pub suppress_popups: bool,
     pub local_device: DevicePresentation,
     pub devices: BTreeMap<String, DevicePresentation>,
     pub updates: UpdatePreferences,
@@ -103,6 +104,8 @@ struct PresentationSettingsWire {
     reduced_motion: bool,
     #[serde(default = "default_sidebar")]
     sidebar_open: bool,
+    #[serde(default)]
+    suppress_popups: bool,
     #[serde(default)]
     local_device: DevicePresentation,
     #[serde(default)]
@@ -171,6 +174,7 @@ impl<'de> Deserialize<'de> for PresentationSettings {
             zoom_percent: wire.zoom_percent.clamp(75, 200),
             reduced_motion: wire.reduced_motion,
             sidebar_open: wire.sidebar_open,
+            suppress_popups: wire.suppress_popups,
             local_device: wire.local_device,
             devices: wire.devices,
             updates: wire.updates,
@@ -215,6 +219,7 @@ impl Default for PresentationSettings {
             zoom_percent: default_zoom_percent(),
             reduced_motion: false,
             sidebar_open: true,
+            suppress_popups: false,
             local_device: DevicePresentation::default(),
             devices: BTreeMap::new(),
             updates: UpdatePreferences::default(),

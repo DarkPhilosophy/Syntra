@@ -47,7 +47,11 @@ impl Service {
         &mut self,
         request: Option<Result<FrontendRequest, IpcError>>,
     ) -> bool {
-        let request = match request.expect("frontend listener closed") {
+        let Some(request) = request else {
+            log::error!("frontend listener closed; stopping the service");
+            return true;
+        };
+        let request = match request {
             Ok(r) => r,
             Err(e) => {
                 log::error!("error receiving request: {e}");
@@ -234,6 +238,43 @@ impl Service {
                     }),
                 }
             }
+            FrontendRequest::GetHistoryContent(event_id) => {
+                let result = self
+                    .history
+                    .content(history::store_id(event_id.clone()))
+                    .await;
+                let (text, image, error) = match result {
+                    Ok(Some(syntra_store::HistoryContent::Text(text))) => (Some(text), None, None),
+                    Ok(Some(syntra_store::HistoryContent::Image {
+                        bytes: Some(bytes),
+                        media_type,
+                        width,
+                        height,
+                    })) => (
+                        None,
+                        Some(syntra_api::HistoryImage {
+                            event_id: event_id.clone(),
+                            bytes,
+                            media_type,
+                            width,
+                            height,
+                        }),
+                        None,
+                    ),
+                    Ok(_) => (
+                        None,
+                        None,
+                        Some("History content is no longer available".into()),
+                    ),
+                    Err(error) => (None, None, Some(error)),
+                };
+                self.notify_frontend(FrontendEvent::HistoryContentResult {
+                    event_id,
+                    text,
+                    image,
+                    error,
+                });
+            }
             FrontendRequest::ClearGlobalHistory => {
                 self.start_global_history_clear().await;
             }
@@ -261,16 +302,18 @@ impl Service {
                 peer_fingerprint,
                 transfer_id,
                 destination_directory,
+                overwrite,
             } => {
-                let actions = self
-                    .manual_transfers
-                    .accept(
-                        &peer_fingerprint,
-                        transfer_id,
-                        destination_directory,
-                        std::time::Instant::now(),
-                    )
-                    .await;
+                let now = std::time::Instant::now();
+                let actions = if overwrite {
+                    self.manual_transfers
+                        .overwrite(&peer_fingerprint, transfer_id, destination_directory, now)
+                        .await
+                } else {
+                    self.manual_transfers
+                        .accept(&peer_fingerprint, transfer_id, destination_directory, now)
+                        .await
+                };
                 self.execute_manual_actions(actions);
             }
             FrontendRequest::DeclineFileTransfer {

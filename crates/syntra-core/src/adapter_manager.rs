@@ -53,6 +53,7 @@ impl AdapterPaths {
 pub(crate) enum ManagerCommand {
     RemoteManifest(RemoteManifest),
     RangeResponse(RangeResponse),
+    PublishFileClipboard(syntra_plugin_api::PublishFileClipboard),
     ClipboardData {
         transfer_id: String,
         mime_type: String,
@@ -335,6 +336,15 @@ async fn handle_command(
     events: &mpsc::Sender<ManagerEvent>,
 ) {
     match command {
+        ManagerCommand::PublishFileClipboard(publication) => {
+            send_ready(
+                state,
+                &AdapterId::Gtk,
+                Message::PublishFileClipboard(publication),
+                events,
+            )
+            .await;
+        }
         ManagerCommand::ClipboardData {
             transfer_id,
             mime_type,

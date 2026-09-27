@@ -239,6 +239,10 @@ Peer identity is a certificate fingerprint, not a socket address. Addresses are 
 
 Handles and transfer identifiers have different lifetimes. A deleted `ClientHandle` is never reused (`crates/syntra-api/src/lib.rs:202-203`), while clipboard transfer IDs are seeded from process time and process ID so a restarted daemon does not collide with a live remote offer (`crates/syntra-core/src/service/mod.rs:329-336`). File IDs and request IDs are validated by the peer protocol before chunks are accepted (`crates/syntra-proto/src/lib.rs:134-183`).
 
+Capture reconnect deadlines survive unrelated events: the retry interval is created outside the event-selection loop, so incoming traffic cannot repeatedly restart the timeout (`crates/syntra-core/src/capture.rs`).
+
+Input cleanup attempts every tracked key release and the modifier reset even if an earlier release fails. Disabling emulation input sharing similarly attempts cleanup for every peer before returning the first backend error. These are best-effort cleanup guarantees, not a promise that a failed OS backend accepted the releases; backend errors remain visible (`crates/syntra-input-emulation/src/lib.rs`; `crates/syntra-core/src/emulation.rs`).
+
 | Invariant | Observable consequence | Source |
 |---|---|---|
 | Client events are authoritative | UI state updates after daemon events | `crates/syntra-core/src/service/frontend.rs:1-5` |

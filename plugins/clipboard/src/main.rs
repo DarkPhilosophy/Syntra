@@ -20,7 +20,6 @@ struct ClipboardBackend(gdk::ContentProvider);
 struct ActiveTransfer {
     transfer_id: String,
     backend: ClipboardBackend,
-    reasserted_after_empty: bool,
 }
 
 fn release_transfer(
@@ -94,6 +93,30 @@ fn process_text(text: &str, generation: &AtomicU64) -> Option<CopyManifest> {
         entries,
     })
 }
+
+const MAX_FILE_SELECTION_BYTES: usize = 1024 * 1024;
+
+async fn read_file_selection(stream: &gio::InputStream) -> Result<Vec<u8>, glib::Error> {
+    let mut payload = Vec::new();
+    loop {
+        // A successful stream read may contain only part of the URI list.
+        // Read through EOF, including one extra byte to detect oversize offers.
+        let remaining = MAX_FILE_SELECTION_BYTES + 1 - payload.len();
+        let bytes = stream
+            .read_bytes_future(remaining.min(8192), glib::Priority::DEFAULT)
+            .await?;
+        if bytes.is_empty() {
+            return Ok(payload);
+        }
+        payload.extend_from_slice(&bytes);
+        if payload.len() > MAX_FILE_SELECTION_BYTES {
+            return Err(glib::Error::new(
+                gio::IOErrorEnum::InvalidData,
+                "file clipboard selection exceeds the size limit",
+            ));
+        }
+    }
+}
 /// This plugin's own declaration, the single source of truth about it.
 ///
 /// The daemon reads it from the handshake, or from `--describe` before the
@@ -138,6 +161,13 @@ fn main() {
         }
         return;
     }
+    // A windowless Wayland client receives no clipboard offers: wl_data_device
+    // delivers them only to the keyboard-focused client. Use the XWayland
+    // selection bridge when available, without changing the desktop session.
+    // The parent dashboard may itself require Wayland; its backend override
+    // must not force this windowless helper onto the same backend.
+    // SAFETY: this executable has not initialized GTK or started threads.
+    unsafe { std::env::set_var("GDK_BACKEND", "x11,wayland") };
     if !cfg!(target_os = "linux") || gtk::init().is_err() {
         return;
     }
@@ -160,6 +190,10 @@ fn main() {
         return;
     };
     let clipboard = display.clipboard();
+    eprintln!(
+        "clipboard-trace event=display-ready backend={}",
+        display.type_().name()
+    );
     if let Some(path) = std::env::var_os("SYNTRA_DEBUG_COPY_PATH").map(std::path::PathBuf::from) {
         let clipboard = clipboard.clone();
         glib::timeout_add_local_once(std::time::Duration::from_secs(15), move || {
@@ -183,14 +217,12 @@ fn main() {
         });
     }
     let active_transfer: Rc<Mutex<Option<ActiveTransfer>>> = Rc::new(Mutex::new(None));
-    let suppress_echo = Rc::new(Mutex::new(false));
     let remote_file_clipboard: Rc<Mutex<Option<Vec<u8>>>> = Rc::new(Mutex::new(None));
     let generation = Rc::new(AtomicU64::new(0));
     let generation_for_main = Rc::clone(&generation);
     let queue_for_main = Arc::clone(&incoming);
     let clipboard_for_main = clipboard.clone();
     let active_for_main = Rc::clone(&active_transfer);
-    let suppress_for_main = Rc::clone(&suppress_echo);
     let remote_for_main = Rc::clone(&remote_file_clipboard);
     glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
         let messages = std::mem::take(&mut *queue_for_main.lock());
@@ -209,18 +241,14 @@ fn main() {
                     }
                 }
                 Message::PublishFileClipboard(publication) => {
-                    // `text/uri-list` is CRLF-delimited per RFC 2483, while
-                    // Nautilus' private copied-files format is strictly:
-                    // `copy\n<URI>\n...`. Feeding CRLF to the latter leaves
-                    // the offer visible but disables Paste in Nautilus.
+                    // Nautilus rejects empty URI lines, including a trailing newline.
                     let operation = if matches!(publication.operation, Operation::Move) {
                         "cut"
                     } else {
                         "copy"
                     };
-                    let gnome = format!("{operation}\n{}\n", publication.uris.join("\n"));
+                    let gnome = format!("{operation}\n{}", publication.uris.join("\n"));
                     *remote_for_main.lock() = Some(gnome.as_bytes().to_vec());
-                    *suppress_for_main.lock() = true;
 
                     let files: Vec<gio::File> = publication
                         .uris
@@ -228,12 +256,15 @@ fn main() {
                         .map(|uri| gio::File::for_uri(uri))
                         .collect();
                     let file_list = gdk::FileList::from_array(&files);
-                    // GDK's native FileList provider is the same clipboard
-                    // contract used by GTK file managers. It exports the
-                    // portal file-transfer formats GNOME Files consumes;
-                    // mixing raw MIME providers into the union causes Mutter
-                    // to withdraw the selection after advertising it.
-                    let provider = gdk::ContentProvider::for_value(&file_list.to_value());
+                    // Nautilus needs its Copy/Cut format; retain FileList for
+                    // Dolphin and GDK's URI-list/portal serialization.
+                    let provider = gdk::ContentProvider::new_union(&[
+                        gdk::ContentProvider::for_bytes(
+                            "x-special/gnome-copied-files",
+                            &glib::Bytes::from_owned(gnome.into_bytes()),
+                        ),
+                        gdk::ContentProvider::for_value(&file_list.to_value()),
+                    ]);
                     let backend = match clipboard_for_main.set_content(Some(&provider)) {
                         Ok(()) => Some(ClipboardBackend(provider)),
                         Err(error) => {
@@ -246,6 +277,10 @@ fn main() {
                     };
 
                     if let Some(backend) = backend {
+                        eprintln!(
+                            "clipboard-trace event=file-publication source=gtk outcome=ready entries={}",
+                            publication.uris.len()
+                        );
                         let mut active = active_for_main.lock();
                         if active
                             .as_ref()
@@ -254,7 +289,6 @@ fn main() {
                             if let Some(old) = active.replace(ActiveTransfer {
                                 transfer_id: publication.transfer_id.clone(),
                                 backend,
-                                reasserted_after_empty: false,
                             }) {
                                 emit(&Message::Released(syntra_plugin_api::Released {
                                     transfer_id: old.transfer_id,
@@ -262,7 +296,6 @@ fn main() {
                             }
                         } else {
                             active.as_mut().unwrap().backend = backend;
-                            active.as_mut().unwrap().reasserted_after_empty = false;
                         }
                     }
                 }
@@ -285,96 +318,162 @@ fn main() {
     // whenever the selection owner changes. We only ever READ the offer,
     // never take ownership, so no auxiliary window and no polling.
     let cancel_for_changed = Arc::clone(&cancelled);
-    let suppress_for_changed = Rc::clone(&suppress_echo);
     let remote_for_changed = Rc::clone(&remote_file_clipboard);
     let active_for_changed = Rc::clone(&active_transfer);
     let generation_for_changed = Rc::clone(&generation);
     let last_seen: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+    let selection_epoch = Rc::new(AtomicU64::new(0));
     clipboard.connect_changed(move |clipboard| {
-        if cancel_for_changed.load(Ordering::Acquire) {
+        let epoch = selection_epoch.fetch_add(1, Ordering::Relaxed) + 1;
+        eprintln!(
+            "clipboard-trace event=owner-change source=gtk local={} formats=[{}]",
+            clipboard.is_local(),
+            clipboard.formats().mime_types().join(",")
+        );
+        if cancel_for_changed.load(Ordering::Acquire) || clipboard.is_local() {
             return;
         }
+        // A new owner replaces our offer. Reasserting the previous provider
+        // here steals selections from other applications during negotiation.
+        *active_for_changed.lock() = None;
         let formats = clipboard.formats();
         let names = formats.mime_types();
-        eprintln!("clipboard changed: mimes={names:?}");
-        if std::mem::take(&mut *suppress_for_changed.lock()) {
-            return;
-        }
-        let Some(mime) = ["x-special/gnome-copied-files", "text/uri-list"]
+        let mimes: Vec<_> = ["x-special/gnome-copied-files", "text/uri-list"]
             .into_iter()
-            .find(|mime| names.iter().any(|name| name.as_str() == *mime))
-        else {
-            // GNOME can briefly publish an empty selection while changing
-            // owners. Reassert our live remote offer once after that
-            // transition so Files receives the file MIME metadata.
-            let mut active = active_for_changed.lock();
-            if let Some(current) = active.as_mut() {
-                if !current.reasserted_after_empty {
-                    current.reasserted_after_empty = true;
-                    *suppress_for_changed.lock() = true;
-                    if clipboard.set_content(Some(&current.backend.0)).is_ok() {
-                        return;
-                    }
-                }
-            }
-            *active = None;
+            .filter(|mime| names.iter().any(|name| name.as_str() == *mime))
+            .collect();
+        if mimes.is_empty() {
             *last_seen.lock() = None;
             return;
-        };
+        }
+        let clipboard = clipboard.clone();
         let remote = Rc::clone(&remote_for_changed);
-        let active = Rc::clone(&active_for_changed);
         let generation = Rc::clone(&generation_for_changed);
         let seen = Arc::clone(&last_seen);
-        clipboard.read_async(
-            &[mime],
-            glib::Priority::DEFAULT,
-            None::<&gio::Cancellable>,
-            move |result| {
-                let Ok((stream, _)) = result else {
-                    return;
+        let selection_epoch = Rc::clone(&selection_epoch);
+        glib::MainContext::default().spawn_local(async move {
+            for mime in mimes {
+                let result = match clipboard
+                    .read_future(&[mime], glib::Priority::DEFAULT)
+                    .await
+                {
+                    Ok((stream, _)) => read_file_selection(&stream).await,
+                    Err(error) => Err(error),
                 };
-                stream.read_bytes_async(
-                    1024 * 1024,
-                    glib::Priority::DEFAULT,
-                    None::<&gio::Cancellable>,
-                    move |bytes| {
-                        let Ok(bytes) = bytes else {
-                            return;
-                        };
-                        let payload = bytes.to_vec();
-                        if payload.is_empty() {
-                            return;
-                        }
-                        // Never re-announce content this machine received
-                        // from the peer, and never announce the same
-                        // selection twice.
-                        if remote.lock().as_deref() == Some(payload.as_slice()) {
-                            return;
-                        }
-                        // This is a new local file offer, so the adapter no
-                        // longer owns the remote offer kept alive above.
-                        *active.lock() = None;
-                        let mut seen = seen.lock();
-                        if seen.as_deref() == Some(payload.as_slice()) {
-                            return;
-                        }
-                        *seen = Some(payload.clone());
-                        drop(seen);
-                        if let Some(manifest) =
-                            process_text(&String::from_utf8_lossy(&payload), &generation)
-                        {
-                            eprintln!(
-                                "local file copy detected: transfer={} entries={}",
-                                manifest.transfer_id,
-                                manifest.entries.len()
-                            );
-                            emit(&Message::CopyManifest(manifest));
-                        }
-                    },
+                if selection_epoch.load(Ordering::Relaxed) != epoch {
+                    return;
+                }
+                let payload = match result {
+                    Ok(payload) => payload,
+                    Err(error) => {
+                        eprintln!("file clipboard read failed: mime={mime}: {error}");
+                        continue;
+                    }
+                };
+                if remote.lock().as_deref() == Some(payload.as_slice())
+                    || seen.lock().as_deref() == Some(payload.as_slice())
+                {
+                    return;
+                }
+                let Ok(text) = std::str::from_utf8(&payload) else {
+                    eprintln!("file clipboard rejected: mime={mime}: invalid UTF-8");
+                    continue;
+                };
+                let Some(manifest) = process_text(text, &generation) else {
+                    eprintln!("file clipboard rejected: mime={mime}: invalid or unavailable files");
+                    continue;
+                };
+                // Failed or partial reads must remain retryable.
+                *seen.lock() = Some(payload);
+                eprintln!(
+                    "local file copy detected: transfer={} entries={}",
+                    manifest.transfer_id,
+                    manifest.entries.len()
                 );
-            },
-        );
+                emit(&Message::CopyManifest(manifest));
+                return;
+            }
+        });
     });
 
     loop_.run();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::os::unix::net::UnixStream;
+
+    #[test]
+    fn file_manager_formats_preserve_empty_files_and_escaped_names() {
+        let (file, stream) = gio::File::new_tmp(Some("syntra-clipboard #XXXXXX")).unwrap();
+        let uri = file.uri();
+        let generation = AtomicU64::new(0);
+        for selection in [format!("copy\n{uri}\n"), format!("{uri}\r\n")] {
+            let manifest = process_text(&selection, &generation).unwrap();
+            assert_eq!(manifest.entries.len(), 1);
+            assert_eq!(manifest.entries[0].uri, uri.as_str());
+            assert!(matches!(manifest.entries[0].kind, EntryKind::File));
+            assert_eq!(manifest.entries[0].size, Some(0));
+        }
+        stream.close(None::<&gio::Cancellable>).unwrap();
+        file.delete(None::<&gio::Cancellable>).unwrap();
+    }
+
+    #[test]
+    fn fragmented_file_selection_is_read_through_eof() {
+        let (reader, mut writer) = UnixStream::pair().unwrap();
+        let payload = b"copy\nfile:///tmp/first%20file\nfile:///tmp/second\n";
+        writer.write_all(&payload[..12]).unwrap();
+        let (continue_tx, continue_rx) = std::sync::mpsc::channel();
+        let producer = std::thread::spawn(move || {
+            continue_rx.recv().unwrap();
+            writer.write_all(&payload[12..]).unwrap();
+        });
+        let context = glib::MainContext::new();
+        context
+            .with_thread_default(|| {
+                context.block_on(async {
+                    // SAFETY: the stream takes exclusive ownership of this socket.
+                    let stream: gio::InputStream =
+                        unsafe { gio::UnixInputStream::take_fd(reader) }.upcast();
+                    let wake = glib::timeout_source_new(
+                        std::time::Duration::from_millis(20),
+                        None,
+                        glib::Priority::DEFAULT,
+                        move || {
+                            continue_tx.send(()).unwrap();
+                            glib::ControlFlow::Break
+                        },
+                    );
+                    wake.attach(Some(&context));
+                    assert_eq!(read_file_selection(&stream).await.unwrap(), payload);
+                });
+            })
+            .unwrap();
+        producer.join().unwrap();
+    }
+
+    #[test]
+    fn file_selection_limit_rejects_truncation() {
+        let context = glib::MainContext::new();
+        context
+            .with_thread_default(|| {
+                context.block_on(async {
+                    let bytes = glib::Bytes::from_owned(vec![b'a'; MAX_FILE_SELECTION_BYTES]);
+                    let stream = gio::MemoryInputStream::from_bytes(&bytes).upcast();
+                    assert_eq!(read_file_selection(&stream).await.unwrap(), bytes.as_ref());
+                    let bytes = glib::Bytes::from_owned(vec![b'a'; MAX_FILE_SELECTION_BYTES + 1]);
+                    let stream = gio::MemoryInputStream::from_bytes(&bytes).upcast();
+                    assert!(
+                        read_file_selection(&stream)
+                            .await
+                            .unwrap_err()
+                            .matches(gio::IOErrorEnum::InvalidData)
+                    );
+                });
+            })
+            .unwrap();
+    }
 }

@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     defaults:
       run:
-        working-directory: syntra-ui
+        working-directory: crates/syntra-ui
     steps:
       - uses: actions/checkout@v4
 
@@ -49,9 +49,9 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            syntra-ui/target
-            syntra-ui/android/.gradle
-          key: android-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', 'syntra-ui/Cargo.toml', 'syntra-ui/android/**/*.gradle') }}
+            target
+            crates/syntra-ui/android/.gradle
+          key: android-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', 'crates/syntra-ui/Cargo.toml', 'crates/syntra-ui/android/**/*.gradle') }}
           restore-keys: android-${{ runner.os }}-
 
       - name: Install cargo-ndk
@@ -67,11 +67,11 @@ jobs:
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/$ANDROID_NDK_VERSION"
           gradle --no-daemon assembleDebug
-        working-directory: syntra-ui/android
+        working-directory: crates/syntra-ui/android
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: syntra-android-debug
-          path: syntra-ui/android/app/build/outputs/apk/debug/*.apk
+          path: crates/syntra-ui/android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error

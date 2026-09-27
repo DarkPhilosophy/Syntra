@@ -16,6 +16,10 @@ The logger owns a bounded synchronous queue of 1,024 entries. Producers use `try
 
 A thread named `syntra-log` drains the queue. It acquires the stderr lock for each write, not for the thread lifetime, because other components can write stderr directly (`crates/syntra-log/src/logger.rs:99-123`). The mirror send is non-blocking and failures are ignored, so no dashboard is required for daemon operation (`crates/syntra-log/src/logger.rs:104-141`).
 
+If stderr becomes unavailable, the writer disables that sink but continues draining records into the Unix diagnostics mirror. Losing the launcher's pipe must not stop the independent mirror.
+
+When the dashboard launches a daemon child, a dedicated reader drains its stderr throughout the child's lifetime, including after readiness. It retains only a bounded tail for startup failure messages; this is not a persistent log archive. Installed services keep their service manager's logging arrangement.
+
 Before process termination the daemon calls `log::logger().flush()` (`crates/syntra-daemon/src/main.rs:41-51`). Flush enqueues a barrier and waits for the writer to acknowledge after flushing stderr (`crates/syntra-log/src/logger.rs:69-79,124-133`). Without this rule, a fatal error could be formatted successfully but remain in the queue while the process exits, losing the message that explains the exit.
 
 ## The nine subsystems

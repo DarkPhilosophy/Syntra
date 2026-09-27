@@ -108,13 +108,16 @@ impl Service {
                 }
                 match &content {
                     ClipboardContent::Text(text) if self.clipboard_settings.text => {
-                        self.emulation.publish_file_clipboard(vec![
-                            (
-                                "text/plain;charset=utf-8".to_string(),
-                                text.as_bytes().to_vec(),
-                            ),
-                            ("text/plain".to_string(), text.as_bytes().to_vec()),
-                        ]);
+                        self.emulation.publish_file_clipboard(
+                            vec![
+                                (
+                                    "text/plain;charset=utf-8".to_string(),
+                                    text.as_bytes().to_vec(),
+                                ),
+                                ("text/plain".to_string(), text.as_bytes().to_vec()),
+                            ],
+                            None,
+                        );
                     }
                     _ => self.clipboard.write(content),
                 }
@@ -175,6 +178,17 @@ impl Service {
             EmulationEvent::FileClipboard { mime_type, value } => {
                 self.native_file_selection = true;
                 self.handle_native_file_clipboard(mime_type, value);
+            }
+            EmulationEvent::FileClipboardFallback(publication) => {
+                if let Some(manager) = self.adapter_manager.as_ref() {
+                    if let Err(error) =
+                        manager.try_send(ManagerCommand::PublishFileClipboard(publication))
+                    {
+                        log::warn!("file clipboard adapter publication failed: {error}");
+                    }
+                } else {
+                    log::warn!("file clipboard publication failed: clipboard adapter unavailable");
+                }
             }
             EmulationEvent::ClipboardProtocol { addr, event } => {
                 self.handle_peer_protocol(Peer::Emulation(addr), event)

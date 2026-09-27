@@ -26,6 +26,9 @@
 //! [`syntra_api::FrontendEvent`] and applies [`syntra_api::FrontendRequest`],
 //! and any number of clients may attach, detach and reattach at will.
 
+// Includes time for an interactive portal grant, but never leaves Retry stuck forever.
+const INPUT_INITIALIZATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
 mod adapter_manager;
 mod capture;
 pub mod capture_test;

@@ -59,6 +59,7 @@ tokio = { workspace = true, features = [
 ] }
 tokio-util = { version = "0.7", features = ["codec"] }
 toml.workspace = true
+tempfile = "3.25"
 toml_edit = { version = "0.22", features = ["serde"] }
 webrtc-dtls = { version = "0.12.0", features = ["pem"] }
 webrtc-util = "0.11.0"
@@ -75,3 +76,6 @@ libei_emulation = ["syntra-input-event/libei", "syntra-input-emulation/libei"]
 wlroots_emulation = ["syntra-input-emulation/wlroots"]
 x11_emulation = ["syntra-input-emulation/x11"]
 rdp_emulation = ["syntra-input-emulation/remote_desktop_portal"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

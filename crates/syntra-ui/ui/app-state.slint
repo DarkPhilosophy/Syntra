@@ -1,3 +1,4 @@
+import { IncomingFileItem } from "components/incoming-file-dialog.slint";
 import { ClientItem } from "components/client-row.slint";
 import { TransferItem } from "pages/transfer-row.slint";
 import { DiagnosticEntry } from "components/diagnostic-row.slint";
@@ -27,6 +28,14 @@ export global AppState {
     in-out property <bool> history-has-more;
     callback history-load-more();
     in-out property <string> history-error;
+    callback history-open(string, string, bool);
+    in-out property <string> history-detail-origin;
+    in-out property <string> history-detail-sequence;
+    in-out property <bool> history-detail-copy;
+    in-out property <bool> history-detail-busy;
+    in-out property <string> history-detail-error;
+    in-out property <image> history-detail-image;
+    in-out property <bool> history-detail-visible;
     in-out property <string> history-status;
     callback history-search(string);
     callback history-refresh();
@@ -80,6 +89,10 @@ export global AppState {
     in-out property <bool> file-receive-known;
     in-out property <bool> file-receive-busy;
     in-out property <bool> file-receive-auto-accept;
+    in-out property <[IncomingFileItem]> pending-files;
+    in-out property <string> selected-offer-peer;
+    in-out property <string> selected-offer-id;
+    callback select-incoming-file(string, string);
     in-out property <string> file-receive-directory;
     in-out property <bool> file-receive-dirty;
     in-out property <bool> file-receive-picker-busy;
@@ -87,6 +100,7 @@ export global AppState {
     callback choose-download-directory();
     callback save-file-receive-settings();
     in-out property <bool> manual-offer-visible;
+    in-out property <bool> manual-offer-overwrite;
     in-out property <string> manual-offer-peer;
     in-out property <string> manual-offer-id;
     in-out property <string> manual-offer-peer-name;
@@ -103,15 +117,8 @@ export global AppState {
     callback accept-incoming-file();
     callback decline-incoming-file();
     in-out property <[DiagnosticEntry]> diagnostics;
-    in-out property <int> diagnostics-message-columns: 80;
-    in-out property <string> diagnostics-level: "all";
-    in-out property <string> diagnostics-stage: "all";
-    in-out property <string> diagnostics-direction: "all";
     in-out property <string> diagnostics-text: "";
     in-out property <bool> diagnostics-paused: false;
-    callback diagnostics-level-changed(string);
-    callback diagnostics-stage-changed(string);
-    callback diagnostics-direction-changed(string);
     callback diagnostics-text-changed(string);
     callback diagnostics-pause(bool);
     callback diagnostics-clear();
@@ -178,6 +185,8 @@ export global AppState {
     in-out property <int> zoom-percent: 100;
     callback change-zoom(int);
     in-out property <bool> reduced-motion: false;
+    in-out property <bool> suppress-popups;
+    callback change-suppress-popups(bool);
     callback change-base-mode(string);
     callback change-palette(string);
     callback change-accent(string);
@@ -212,7 +221,6 @@ export global AppState {
     callback change-port(int);
     callback authorize-key(string, string);
     callback remove-authorized-key(string);
-    callback save-configuration();
     callback set-clipboard-text(bool);
     callback set-clipboard-image(bool);
     callback set-clipboard-files(bool);

@@ -352,6 +352,7 @@ impl CaptureTask {
             if let Err(error) = self.do_capture().await {
                 log::warn!("input capture exited: {error}");
             }
+            let mut reconnect = reconnect_timer();
             loop {
                 tokio::select! {
                     request = self.request_rx.recv() => {
@@ -362,38 +363,52 @@ impl CaptureTask {
                     (handle, fingerprint, event) = self.conn.recv() => {
                         self.handle_inactive_event(handle, fingerprint, event)
                     },
-                    _ = tokio::time::sleep(RECONNECT_INTERVAL) => self.reconnect_lost_peers().await,
+                    _ = reconnect.tick() => self.reconnect_lost_peers().await,
                     _ = self.cancellation_token.cancelled() => return,
                 }
             }
         }
     }
 
-    async fn initialize_capture(
+    async fn initialize_capture<F>(
         &mut self,
-        initialization: impl Future<Output = Result<InputCapture, CaptureCreationError>>,
-    ) -> Result<Option<InputCapture>, CaptureCreationError> {
+        mut create: impl FnMut() -> F,
+    ) -> Result<Option<InputCapture>, CaptureCreationError>
+    where
+        F: Future<Output = Result<InputCapture, CaptureCreationError>>,
+    {
         // A portal permission dialog must not block peer transport or clipboard traffic.
-        tokio::pin!(initialization);
+        let initialization = create();
+        let deadline = tokio::time::sleep(crate::INPUT_INITIALIZATION_TIMEOUT);
+        tokio::pin!(initialization, deadline);
+        let mut reconnect = reconnect_timer();
         loop {
             tokio::select! {
                 result = &mut initialization => return result.map(Some),
                 request = self.request_rx.recv() => {
-                    // Reenable while initialization is pending must not open a second dialog.
-                    self.handle_inactive_request(request.expect("channel closed")).await;
+                    if self.handle_inactive_request(request.expect("channel closed")).await {
+                        log::info!("restarting pending input capture initialization");
+                        initialization.set(create());
+                        deadline.as_mut().reset(tokio::time::Instant::now() + crate::INPUT_INITIALIZATION_TIMEOUT);
+                    }
                 }
                 (handle, fingerprint, event) = self.conn.recv() => {
                     self.handle_inactive_event(handle, fingerprint, event)
                 },
-                _ = tokio::time::sleep(RECONNECT_INTERVAL) => self.reconnect_lost_peers().await,
+                _ = &mut deadline => {
+                    log::warn!("input capture initialization timed out; retry when the desktop is ready");
+                    return Ok(None);
+                }
+                _ = reconnect.tick() => self.reconnect_lost_peers().await,
                 _ = self.cancellation_token.cancelled() => return Ok(None),
             }
         }
     }
 
     async fn do_capture(&mut self) -> Result<(), InputCaptureError> {
+        let backend = self.backend;
         let Some(mut capture) = self
-            .initialize_capture(InputCapture::new(self.backend))
+            .initialize_capture(|| InputCapture::new(backend))
             .await?
         else {
             return Ok(());
@@ -462,6 +477,7 @@ impl CaptureTask {
         &mut self,
         capture: &mut InputCapture,
     ) -> Result<(), InputCaptureError> {
+        let mut reconnect = reconnect_timer();
         loop {
             tokio::select! {
                 event = capture.next() => match event {
@@ -508,7 +524,7 @@ impl CaptureTask {
                     }
                     self.sync_captures(capture).await?;
                 },
-                _ = tokio::time::sleep(RECONNECT_INTERVAL) => self.reconnect_lost_peers().await,
+                _ = reconnect.tick() => self.reconnect_lost_peers().await,
                 _ = async {
                     if let Some(deadline) = self.ack_deadline {
                         tokio::time::sleep_until(deadline.into()).await;
@@ -743,60 +759,81 @@ impl CaptureTask {
     async fn release_capture(&mut self, capture: &mut InputCapture) -> Result<(), CaptureError> {
         self.ack_deadline = None;
         self.state = State::WaitingForAck;
-        // If we have an active client, notify them we're leaving
-        if let Some(handle) = self.active_client.take() {
-            // Synthesize key-up events for every key still held in the
-            // capture's pressed_keys set BEFORE sending Leave. Without
-            // this, pressing the release-bind chord (typically all four
-            // modifiers) leaves the peer with phantom held modifiers:
-            // the down events were forwarded while capture was active,
-            // but the matching up events arrive after the local tap
-            // flips to passthrough and never reach the peer. The peer
-            // then runs every subsequent keystroke through those held
-            // mods until its watchdog times out (1+ s) or our Leave
-            // arrives — and Leave can be lost over UDP/DTLS.
-            for key in capture.take_pressed_keys() {
-                let key_up = ProtoEvent::Input(Event::Keyboard(KeyboardEvent::Key {
-                    time: 0,
-                    key: key as u32,
-                    state: 0,
-                }));
-                if let Err(e) = self.conn.send(key_up, handle).await {
-                    log::warn!("failed to send key-up to client {handle}: {e}");
-                }
-            }
-            for button in capture.take_pressed_buttons() {
-                let button_up = ProtoEvent::Input(Event::Pointer(PointerEvent::Button {
-                    time: 0,
-                    button,
-                    state: 0,
-                }));
-                if let Err(e) = self.conn.send(button_up, handle).await {
-                    log::warn!("failed to send button-up to client {handle}: {e}");
-                }
-            }
-            // Reset the modifier mask too. The peer's input-emulation
-            // layer keeps a separate XKB-style modifier state that's
-            // updated by KeyboardEvent::Modifiers, distinct from the
-            // pressed_keys set drained above. Without this, an
-            // already-locked CapsLock would survive the release.
-            let mods_zero = ProtoEvent::Input(Event::Keyboard(KeyboardEvent::Modifiers {
+        let Some(handle) = self.active_client.take() else {
+            return capture.release().await;
+        };
+        // Snapshot what is still held BEFORE releasing: release clears it.
+        // Without synthesized key-ups, pressing the release-bind chord
+        // (typically all four modifiers) leaves the peer with phantom held
+        // modifiers: the down events were forwarded while capture was
+        // active, but the matching up events arrive after the local tap
+        // flips to passthrough and never reach the peer.
+        let keys = capture.take_pressed_keys();
+        let buttons = capture.take_pressed_buttons();
+        // Give the pointer back locally first. Remote cleanup goes over the
+        // network and must never keep the user's own desktop captured.
+        let released = capture.release().await;
+
+        let mut events = Vec::with_capacity(keys.len() + buttons.len() + 2);
+        events.extend(keys.into_iter().map(|key| {
+            ProtoEvent::Input(Event::Keyboard(KeyboardEvent::Key {
+                time: 0,
+                key: key as u32,
+                state: 0,
+            }))
+        }));
+        events.extend(buttons.into_iter().map(|button| {
+            ProtoEvent::Input(Event::Pointer(PointerEvent::Button {
+                time: 0,
+                button,
+                state: 0,
+            }))
+        }));
+        // Reset the modifier mask too: the peer keeps XKB-style modifier
+        // state separate from pressed keys, so a locked CapsLock would
+        // otherwise survive the release.
+        events.push(ProtoEvent::Input(Event::Keyboard(
+            KeyboardEvent::Modifiers {
                 depressed: 0,
                 latched: 0,
                 locked: 0,
                 group: 0,
-            }));
-            if let Err(e) = self.conn.send(mods_zero, handle).await {
-                log::warn!("failed to reset modifiers on client {handle}: {e}");
+            },
+        )));
+        events.push(ProtoEvent::Leave(0));
+        log::info!("sending Leave event to client {handle}");
+        let conn = &self.conn;
+        let cleanup = async {
+            for event in events {
+                if let Err(e) = conn.send(event, handle).await {
+                    log::warn!("failed to send release cleanup to client {handle}: {e}");
+                }
             }
-
-            log::info!("sending Leave event to client {handle}");
-            if let Err(e) = self.conn.send(ProtoEvent::Leave(0), handle).await {
-                log::warn!("failed to send Leave to client {handle}: {e}");
-            }
+        };
+        if tokio::time::timeout(REMOTE_RELEASE_TIMEOUT, cleanup)
+            .await
+            .is_err()
+        {
+            log::warn!(
+                "release cleanup for client {handle} timed out; its watchdog will reset input"
+            );
         }
-        capture.release().await
+        released
     }
+}
+
+/// Upper bound for sending key-ups and `Leave` to a peer on release. The
+/// peer's own heartbeat watchdog covers anything that does not arrive.
+const REMOTE_RELEASE_TIMEOUT: Duration = Duration::from_millis(500);
+
+fn reconnect_timer() -> tokio::time::Interval {
+    // A timer inside select! would restart whenever traffic wins another branch.
+    let mut timer = tokio::time::interval_at(
+        tokio::time::Instant::now() + RECONNECT_INTERVAL,
+        RECONNECT_INTERVAL,
+    );
+    timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    timer
 }
 
 thread_local! {
@@ -855,29 +892,99 @@ mod tests {
     use crate::client::ClientManager;
     use webrtc_dtls::crypto::Certificate;
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn pending_permission_keeps_control_requests_responsive() {
+    fn capture_task() -> (CaptureTask, Sender<CaptureRequest>, Receiver<ICaptureEvent>) {
         let (requests, request_rx) = channel();
-        let (event_tx, _events) = channel();
-        let cancellation_token = CancellationToken::new();
-        let release_bind = Rc::new(RefCell::new(Vec::new()));
-        let mut task = CaptureTask {
+        let (event_tx, events) = channel();
+        let task = CaptureTask {
             active_client: None,
             ack_deadline: None,
             backend: None,
-            cancellation_token: cancellation_token.clone(),
+            cancellation_token: CancellationToken::new(),
             enabled_captures: HashSet::new(),
-            captures: vec![(7, Position::Left, CaptureType::Default)],
+            captures: Vec::new(),
             conn: SyntraConnection::new(
                 Certificate::generate_self_signed(["ignored".to_owned()]).unwrap(),
                 ClientManager::default(),
             ),
             event_tx,
             request_rx,
-            release_bind: Rc::clone(&release_bind),
+            release_bind: Rc::new(RefCell::new(Vec::new())),
             input_sharing: true,
             state: State::default(),
         };
+        (task, requests, events)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn retry_replaces_stalled_capture_and_drops_old_attempt() {
+        let (mut task, requests, _events) = capture_task();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel::<()>();
+        let mut first = Some((started_tx, dropped_tx));
+        let initialization = task.initialize_capture(|| {
+            let first = first.take();
+            async move {
+                if let Some((started, held)) = first {
+                    let _held = held;
+                    started.send(()).unwrap();
+                    std::future::pending().await
+                } else {
+                    InputCapture::new(Some(syntra_input_capture::Backend::Dummy)).await
+                }
+            }
+        });
+        let retry = async {
+            started_rx.await.unwrap();
+            requests.send(CaptureRequest::Reenable).unwrap();
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::join!(initialization, retry)
+        })
+        .await
+        .expect("Retry left capture waiting on the old initialization");
+        let mut capture = result.unwrap().expect("replacement capture unavailable");
+        assert!(dropped_rx.await.is_err(), "old initialization was retained");
+        capture.terminate().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn stalled_capture_times_out_and_can_initialize_again() {
+        let (mut task, _requests, _events) = capture_task();
+        let start = tokio::time::Instant::now();
+        let result = task.initialize_capture(std::future::pending).await.unwrap();
+        assert!(result.is_none());
+        assert_eq!(start.elapsed(), crate::INPUT_INITIALIZATION_TIMEOUT);
+        let mut capture = task
+            .initialize_capture(|| InputCapture::new(Some(syntra_input_capture::Backend::Dummy)))
+            .await
+            .unwrap()
+            .expect("capture stayed stuck after its deadline");
+        capture.terminate().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn reconnect_deadline_survives_other_events() {
+        let mut reconnect = reconnect_timer();
+        tokio::time::timeout(RECONNECT_INTERVAL * 2, async {
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = reconnect.tick() => break,
+                    _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+                }
+            }
+        })
+        .await
+        .expect("traffic postponed the reconnection deadline");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn pending_permission_keeps_control_requests_responsive() {
+        let (mut task, requests, _events) = capture_task();
+        let cancellation_token = task.cancellation_token.clone();
+        let release_bind = Rc::clone(&task.release_bind);
+        task.captures
+            .push((7, Position::Left, CaptureType::Default));
         requests.send(CaptureRequest::Destroy(7)).unwrap();
         requests
             .send(CaptureRequest::SetInputSharing(false))
@@ -887,7 +994,7 @@ mod tests {
                 scancode::Linux::KeyLeftCtrl,
             ]))
             .unwrap();
-        let initialization = task.initialize_capture(std::future::pending());
+        let initialization = task.initialize_capture(std::future::pending);
         let observe = async {
             while release_bind.borrow().is_empty() {
                 tokio::task::yield_now().await;

@@ -11,6 +11,11 @@ export component UpdateControls inherits Rectangle {
     callback configure(string);
     callback automatic-check-changed(bool);
     callback check();
+    repository-save := Timer {
+        interval: 650ms;
+        running: false;
+        triggered => { self.stop(); if !root.busy { root.configure(repository-field.text); } }
+    }
     height: content.preferred-height;
     vertical-stretch: 0;
     background: Theme.surface;
@@ -20,8 +25,7 @@ export component UpdateControls inherits Rectangle {
         spacing: Theme.spacing;
         Text { text: Translations.tr("updates-title"); color: Theme.text; font-size: Theme.body-size; font-weight: 600; }
         Text { text: Translations.tr("updates-description"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
-        repository-field := LineEdit { text: root.repository; placeholder-text: "owner/repository"; enabled: !root.busy; accepted => { root.configure(self.text); } }
-        AppButton { text: Translations.tr("settings-save"); enabled: !root.busy; clicked => { root.configure(repository-field.text); } }
+        repository-field := LineEdit { text: root.repository; placeholder-text: "owner/repository"; enabled: !root.busy; edited(value) => { repository-save.start(); repository-save.restart(); } accepted => { repository-save.stop(); root.configure(self.text); } }
         HorizontalLayout {
             spacing: Theme.small-spacing;
             Text { text: Translations.tr("updates-automatic"); color: Theme.text; font-size: Theme.body-size; horizontal-stretch: 1; wrap: word-wrap; }

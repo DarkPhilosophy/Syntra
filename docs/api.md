@@ -64,11 +64,12 @@ Send exactly one of the following 38 variants. Declaration: `crates/syntra-api/s
 | `QueryHistory` | `{"QueryHistory":{"query":"report","offset":0,"limit":50}}` | Query a bounded history page; limit is clamped to 50. |
 | `SetHistoryPinned` | `{"SetHistoryPinned":{"event_id":{"origin_device_id":"device-a","origin_sequence":9},"pinned":true}}` | Change one record's pin state. |
 | `GetHistoryImage` | `{"GetHistoryImage":{"origin_device_id":"device-a","origin_sequence":9}}` | Fetch complete image bytes for one event. |
+| `GetHistoryContent` | `{"GetHistoryContent":{"origin_device_id":"device-a","origin_sequence":9}}` | Fetch complete retained text or original image after an explicit copy/preview action, without expanding history page snapshots. |
 | `ClearGlobalHistory` | `"ClearGlobalHistory"` | Request coordinated deletion across peers. |
 | `SetInputSharing` | `{"SetInputSharing":true}` | Enable or disable incoming and outgoing input sharing. |
 | `RegenerateIdentity` | `"RegenerateIdentity"` | Generate replacement certificate for the next restart. |
 | `SendFiles` | `{"SendFiles":{"peer_fingerprint":"sha256:abc","paths":["/tmp/a.txt"]}}` | Offer paths to a peer. |
-| `AcceptFileTransfer` | `{"AcceptFileTransfer":{"peer_fingerprint":"sha256:abc","transfer_id":3,"destination_directory":"/tmp/incoming"}}` | Accept an incoming offer into a directory. |
+| `AcceptFileTransfer` | `{"AcceptFileTransfer":{"peer_fingerprint":"sha256:abc","transfer_id":3,"destination_directory":"/tmp/incoming","overwrite":false}}` | Accept into a directory. Explicit `overwrite:true` stages and verifies the new file before atomic replacement; automatic acceptance never authorizes replacement. |
 | `DeclineFileTransfer` | `{"DeclineFileTransfer":{"peer_fingerprint":"sha256:abc","transfer_id":3}}` | Decline an incoming offer. |
 | `CancelManualTransfer` | `{"CancelManualTransfer":{"peer_fingerprint":"sha256:abc","transfer_id":3}}` | Cancel a manual transfer. |
 | `SetFileReceiveSettings` | `{"SetFileReceiveSettings":{"auto_accept":false,"download_directory":"/tmp/incoming"}}` | Replace automatic receive policy. |
@@ -112,6 +113,7 @@ The count includes both unit events (`HistoryChanged`) and payload-bearing event
 | `HistoryImageResult` | `{"HistoryImageResult":{"event_id":{"origin_device_id":"device-a","origin_sequence":9},"image":null,"error":"not an image"}}` | Image fetch result. |
 | `HistoryError` | `{"HistoryError":"history unavailable"}` | History operation failed. |
 | `HistoryClearResult` | `{"HistoryClearResult":{"operation_id":"clear-1","affected":4,"peers_acknowledged":2,"error":null}}` | Coordinated clear terminal result. |
+| `HistoryContentResult` | `{"HistoryContentResult":{"event_id":{"origin_device_id":"device-a","origin_sequence":9},"text":"complete text","image":null,"error":null}}` | Complete retained text or original `HistoryImage`; absent/deleted content carries an error. |
 | `FileReceiveSettingsChanged` | `{"FileReceiveSettingsChanged":[{"auto_accept":false,"download_directory":"/tmp/incoming"},null]}` | Settings changed; optional error explains failure. |
 | `IncomingFileOffer` | `{"IncomingFileOffer":{"peer_fingerprint":"sha256:peer","transfer_id":3,"file_name":"photo.jpg","size":1024,"suggested_directory":"/tmp"}}` | File awaits accept/decline. |
 | `ManualTransferStatus` | `{"ManualTransferStatus":{"peer_fingerprint":"sha256:peer","transfer_id":3,"file_name":"photo.jpg","size":1024,"transferred":512,"direction":"receiving","state":"transferring","destination":"/tmp/photo.jpg","error":null}}` | Manual transfer progress/outcome. |

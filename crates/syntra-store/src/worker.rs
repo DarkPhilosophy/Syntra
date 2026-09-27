@@ -87,6 +87,10 @@ enum Command {
         event_id: HistoryEventId,
         reply: Reply<Option<ImagePayload>>,
     },
+    Content {
+        event_id: HistoryEventId,
+        reply: Reply<Option<HistoryContent>>,
+    },
     Pin {
         event_id: HistoryEventId,
         pinned: bool,
@@ -231,6 +235,14 @@ impl HistoryWorker {
         self.request(|reply| Command::Image { event_id, reply })
             .await
     }
+    /// Loads the complete retained payload only after an explicit user action.
+    pub async fn content(
+        &self,
+        event_id: HistoryEventId,
+    ) -> Result<Option<HistoryContent>, String> {
+        self.request(|reply| Command::Content { event_id, reply })
+            .await
+    }
     pub async fn set_pinned(&self, event_id: HistoryEventId, pinned: bool) -> Result<bool, String> {
         self.request(|reply| Command::Pin {
             event_id,
@@ -369,6 +381,12 @@ fn handle_command(
                     })
                     .transpose()
             }),
+        ),
+        Command::Content { event_id, reply } => respond(
+            reply,
+            store
+                .get(&event_id)
+                .map(|record| record.map(|record| record.content)),
         ),
         Command::Pin {
             event_id,

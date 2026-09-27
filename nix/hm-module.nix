@@ -52,7 +52,10 @@ in {
       };
       Service = {
         Type = "simple";
-        ExecStart = "${cfg.package}/bin/syntra daemon";
+        ExecStart = "${cfg.package}/bin/syntra-daemon";
+        Restart = "on-failure";
+        RestartSec = "5s";
+        KillSignal = "SIGINT";
       };
       Install.WantedBy = [
         (lib.mkIf config.wayland.windowManager.hyprland.systemd.enable "hyprland-session.target")
@@ -64,8 +67,7 @@ in {
       enable = true;
       config = {
         ProgramArguments = [
-          "${cfg.package}/bin/syntra"
-          "daemon"
+          "${cfg.package}/bin/syntra-daemon"
         ];
         KeepAlive = true;
       };

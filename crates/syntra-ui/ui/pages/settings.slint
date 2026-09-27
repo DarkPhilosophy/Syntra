@@ -15,6 +15,8 @@ export component SettingsPage inherits Rectangle {
     in property <string> palette;
     in property <string> density;
     in property <bool> reduced-motion;
+    in property <bool> suppress-popups;
+    callback change-suppress-popups(bool);
     in property <int> zoom-percent: 100;
     in property <bool> service-supported;
     in property <bool> service-busy;
@@ -62,14 +64,24 @@ export component SettingsPage inherits Rectangle {
     in property <bool> desktop-entry-installed;
     callback service-action(string);
     callback port-changed(string);
-    callback save-requested();
+    private property <string> draft-port: root.port;
+    function commit-port() {
+        if root.draft-port != root.port && root.draft-port.to-float() >= 1 && root.draft-port.to-float() <= 65535 {
+            root.port-changed(root.draft-port);
+        }
+    }
     private property <[string]> palette-ids: ["army", "forest", "ocean", "slate", "sand", "graphite", "aubergine", "copper", "rose", "ice"];
     background: Theme.background;
 
     ScrollView {
+        mouse-drag-pan-enabled: Theme.touch-input-active;
         VerticalLayout {
             padding: Theme.content-gap; spacing: Theme.spacing; alignment: start;
             Text { text: Translations.tr("navigation-settings"); color: Theme.text; font-size: Theme.title-size; vertical-stretch: 0; }
+            HorizontalLayout {
+                Text { text: Translations.tr("settings-suppress-popups"); color: Theme.text; font-size: Theme.body-size; horizontal-stretch: 1; wrap: word-wrap; }
+                AppSwitch { checked: root.suppress-popups; a11y-label: Translations.tr("settings-suppress-popups"); toggled(value) => { root.change-suppress-popups(value); } }
+            }
             FileReceiveSettingsControls {
                 known: root.file-receive-known;
                 busy: root.file-receive-busy;
@@ -157,8 +169,11 @@ export component SettingsPage inherits Rectangle {
                 network-content := HorizontalLayout {
                     padding: Theme.spacing; spacing: Theme.spacing;
                     Text { text: Translations.tr("settings-listen-port"); color: Theme.text; font-size: Theme.body-size; horizontal-stretch: 1; vertical-alignment: center; }
-                    LineEdit { width: 100px; text: root.port; accepted => { root.port-changed(self.text); } }
-                    AppButton { text: Translations.tr("settings-save"); clicked => { root.save-requested(); } }
+                    LineEdit {
+                        width: 100px; text <=> root.draft-port; input-type: number;
+                        changed has-focus => { if !self.has-focus { root.commit-port(); } }
+                        accepted => { root.commit-port(); }
+                    }
                 }
             }
             if root.status-message != "": Text { text: root.status-message; color: Theme.muted-text; font-size: Theme.body-size; wrap: word-wrap; vertical-stretch: 0; }

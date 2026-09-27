@@ -28,7 +28,11 @@ pub(crate) struct DesktopPortalEmulation {
 impl DesktopPortalEmulation {
     pub(crate) async fn new() -> Result<DesktopPortalEmulation, XdpEmulationCreationError> {
         log::debug!("connecting to org.freedesktop.portal.RemoteDesktop portal ...");
-        let proxy = RemoteDesktop::new().await?;
+        // Keep cancellation isolated from the capture and clipboard clients.
+        let connection = ashpd::zbus::Connection::session()
+            .await
+            .map_err(ashpd::Error::from)?;
+        let proxy = RemoteDesktop::with_connection(connection).await?;
 
         // retry when user presses the cancel button
         log::debug!("creating session ...");

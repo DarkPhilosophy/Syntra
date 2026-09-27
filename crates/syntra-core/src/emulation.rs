@@ -7,11 +7,14 @@ use local_channel::mpsc::{Receiver, Sender, channel};
 use std::{
     cell::Cell,
     collections::{HashMap, HashSet},
+    future::Future,
     net::SocketAddr,
     rc::Rc,
     time::{Duration, Instant},
 };
-use syntra_input_emulation::{EmulationHandle, InputEmulation, InputEmulationError};
+use syntra_input_emulation::{
+    EmulationCreationError, EmulationHandle, InputEmulation, InputEmulationError,
+};
 use syntra_input_event::{Event, PointerEvent};
 use syntra_proto::{MAX_CLIPBOARD_CHUNK_SIZE, Position, ProtoEvent};
 use syntra_store::MAX_IMAGE_BYTES as MAX_HISTORY_IMAGE_BYTES;
@@ -83,6 +86,8 @@ pub(crate) enum EmulationEvent {
         mime_type: String,
         value: String,
     },
+    /// Native publication failed; the service can use its clipboard adapter.
+    FileClipboardFallback(syntra_plugin_api::PublishFileClipboard),
     NativeClipboard(ClipboardContent),
     /// File-clipboard protocol traffic received from an authenticated listener peer.
     ClipboardProtocol {
@@ -103,7 +108,7 @@ enum EmulationRequest {
     },
     PublishFileClipboard {
         contents: Vec<(String, Vec<u8>)>,
-        reply: oneshot::Sender<Result<(), String>>,
+        fallback: Option<syntra_plugin_api::PublishFileClipboard>,
     },
     Terminate,
 }
@@ -168,23 +173,18 @@ impl Emulation {
             .send(EmulationRequest::SendProto { addr, event })
             .expect("channel closed");
     }
-    pub(crate) fn publish_file_clipboard(&self, contents: Vec<(String, Vec<u8>)>) {
-        let (reply, result) = oneshot::channel();
+    pub(crate) fn publish_file_clipboard(
+        &self,
+        contents: Vec<(String, Vec<u8>)>,
+        fallback: Option<syntra_plugin_api::PublishFileClipboard>,
+    ) {
         if self
             .request_tx
-            .send(EmulationRequest::PublishFileClipboard { contents, reply })
+            .send(EmulationRequest::PublishFileClipboard { contents, fallback })
             .is_err()
         {
             log::warn!("cannot publish file clipboard: emulation task stopped");
-            return;
         }
-        tokio::task::spawn_local(async move {
-            match result.await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => log::warn!("cannot publish file clipboard: {error}"),
-                Err(_) => log::warn!("cannot publish file clipboard: emulation task stopped"),
-            }
-        });
     }
 
     pub(crate) async fn event(&mut self) -> EmulationEvent {
@@ -226,6 +226,40 @@ struct ClipboardTransfer {
     chunks: u32,
     total_len: usize,
     bytes: Vec<u8>,
+    started: Instant,
+}
+
+impl ClipboardTransfer {
+    fn new(kind: ClipboardTransferKind, total_len: usize, chunks: u32) -> Self {
+        Self {
+            kind,
+            next: 0,
+            chunks,
+            total_len,
+            // Grow with received data rather than trusting the declared size:
+            // a start record alone must not reserve up to the protocol maximum.
+            bytes: Vec::with_capacity(total_len.min(CLIPBOARD_INITIAL_CAPACITY)),
+            started: Instant::now(),
+        }
+    }
+}
+
+/// Initial buffer for an inbound clipboard; larger payloads grow as chunks arrive.
+const CLIPBOARD_INITIAL_CAPACITY: usize = 1024 * 1024;
+/// Incomplete inbound clipboards are discarded after this long.
+const CLIPBOARD_TRANSFER_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Starts reassembling a clipboard from `addr`. A clipboard is latest-wins,
+/// so any unfinished earlier transfer from the same peer is superseded; this
+/// bounds reassembly state to one buffer per peer.
+fn start_clipboard_transfer(
+    transfers: &mut HashMap<(SocketAddr, u64), ClipboardTransfer>,
+    addr: SocketAddr,
+    transfer_id: u64,
+    transfer: ClipboardTransfer,
+) {
+    transfers.retain(|(peer, _), _| *peer != addr);
+    transfers.insert((addr, transfer_id), transfer);
 }
 
 impl ListenTask {
@@ -311,27 +345,23 @@ impl ListenTask {
                                 self.event_tx.send(EmulationEvent::PeerHello { addr, commit }).expect("channel closed");
                             }
                             ProtoEvent::ClipboardStart { transfer_id, total_len, chunks } => {
-                                clipboard_transfers.insert(
-                                    (addr, transfer_id),
-                                    ClipboardTransfer {
-                                        kind: ClipboardTransferKind::Text,
-                                        next: 0,
-                                        chunks,
-                                        total_len: total_len as usize,
-                                        bytes: Vec::with_capacity(total_len as usize),
-                                    },
+                                start_clipboard_transfer(
+                                    &mut clipboard_transfers,
+                                    addr,
+                                    transfer_id,
+                                    ClipboardTransfer::new(ClipboardTransferKind::Text, total_len as usize, chunks),
                                 );
                             }
                             ProtoEvent::ClipboardImageStart { transfer_id, width, height, total_len, chunks } => {
-                                clipboard_transfers.insert(
-                                    (addr, transfer_id),
-                                    ClipboardTransfer {
-                                        kind: ClipboardTransferKind::Image { width, height },
-                                        next: 0,
+                                start_clipboard_transfer(
+                                    &mut clipboard_transfers,
+                                    addr,
+                                    transfer_id,
+                                    ClipboardTransfer::new(
+                                        ClipboardTransferKind::Image { width, height },
+                                        total_len as usize,
                                         chunks,
-                                        total_len: total_len as usize,
-                                        bytes: Vec::with_capacity(total_len as usize),
-                                    },
+                                    ),
                                 );
                             }
                             ProtoEvent::ClipboardChunk { transfer_id, index, data } => {
@@ -449,9 +479,13 @@ impl ListenTask {
                     EmulationRequest::SendProto { addr, event } => {
                         self.listener.reply(addr, event).await;
                     }
-                    EmulationRequest::PublishFileClipboard { contents, reply } => {
-                        let result = self.emulation_proxy.publish_file_clipboard(contents).await;
-                        let _ = reply.send(result);
+                    EmulationRequest::PublishFileClipboard { contents, fallback } => {
+                        if let Err(error) = self.emulation_proxy.publish_file_clipboard(contents).await {
+                            log::warn!("native clipboard publication failed: {error}");
+                            if let Some(publication) = fallback {
+                                let _ = self.event_tx.send(EmulationEvent::FileClipboardFallback(publication));
+                            }
+                        }
                     }
                     EmulationRequest::Terminate => break,
                 },
@@ -467,6 +501,8 @@ impl ListenTask {
                             true
                         }
                     });
+                    clipboard_transfers
+                        .retain(|_, transfer| transfer.started.elapsed() < CLIPBOARD_TRANSFER_TIMEOUT);
                 }
             }
         }
@@ -628,12 +664,61 @@ impl EmulationTask {
         }
     }
 
+    async fn initialize_emulation<F>(
+        &mut self,
+        mut create: impl FnMut() -> F,
+    ) -> Result<Option<InputEmulation>, EmulationCreationError>
+    where
+        F: Future<Output = Result<InputEmulation, EmulationCreationError>>,
+    {
+        let initialization = create();
+        let deadline = tokio::time::sleep(crate::INPUT_INITIALIZATION_TIMEOUT);
+        tokio::pin!(initialization, deadline);
+        loop {
+            tokio::select! {
+                result = &mut initialization => return result.map(Some),
+                _ = &mut deadline => {
+                    log::warn!("input emulation initialization timed out; retry when the desktop is ready");
+                    return Ok(None);
+                }
+                request = self.request_rx.recv() => match request.expect("channel closed") {
+                    ProxyRequest::Reenable => {
+                        log::info!("restarting pending input emulation initialization");
+                        initialization.set(create());
+                        deadline.as_mut().reset(tokio::time::Instant::now() + crate::INPUT_INITIALIZATION_TIMEOUT);
+                    }
+                    ProxyRequest::Terminate => {
+                        self.exit_requested.set(true);
+                        return Ok(None);
+                    }
+                    ProxyRequest::SetInputSharing(enabled) => {
+                        self.input_sharing.set(enabled);
+                        if !enabled {
+                            self.handles.clear();
+                            self.pressed_buttons.clear();
+                        }
+                    }
+                    ProxyRequest::Remove(addr) => {
+                        self.handles.remove(&addr);
+                        self.pressed_buttons.remove(&addr);
+                    }
+                    ProxyRequest::Input(..) => {}
+                    ProxyRequest::PublishFileClipboard { reply, .. } => {
+                        let _ = reply.send(Err("emulation not ready".to_string()));
+                    }
+                },
+            }
+        }
+    }
+
     async fn do_emulation(&mut self) -> Result<(), InputEmulationError> {
         log::info!("creating input emulation ...");
-        let mut emulation = tokio::select! {
-            r = InputEmulation::new(self.backend) => r?,
-            // allow termination event while requesting input emulation
-            _ = wait_for_termination(&mut self.request_rx) => return Ok(()),
+        let backend = self.backend;
+        let Some(mut emulation) = self
+            .initialize_emulation(|| InputEmulation::new(backend))
+            .await?
+        else {
+            return Ok(());
         };
 
         // The portal being approved is not enough: only advertise readiness
@@ -718,9 +803,14 @@ impl EmulationTask {
                     ProxyRequest::SetInputSharing(enabled) => {
                         if !enabled {
                             let addrs = self.handles.keys().copied().collect::<Vec<_>>();
+                            let mut release_result = Ok(());
                             for addr in addrs {
-                                self.release_client(emulation, addr).await?;
+                                let result = self.release_client(emulation, addr).await;
+                                if release_result.is_ok() {
+                                    release_result = result;
+                                }
                             }
+                            release_result?;
                         }
                     }
                     ProxyRequest::Terminate => break Ok(()),
@@ -904,6 +994,161 @@ impl Drop for ReadyGuard {
 mod tests {
     use super::decode_native_image;
     use image::{ImageBuffer, ImageEncoder, Rgba};
+
+    fn emulation_task() -> (
+        super::EmulationTask,
+        super::Sender<super::ProxyRequest>,
+        super::Receiver<super::EmulationEvent>,
+    ) {
+        let (requests, request_rx) = super::channel();
+        let (event_tx, events) = super::channel();
+        let task = super::EmulationTask {
+            backend: None,
+            emulation_ready: Default::default(),
+            input_sharing: super::Rc::new(super::Cell::new(true)),
+            exit_requested: Default::default(),
+            request_rx,
+            event_tx,
+            handles: Default::default(),
+            pressed_buttons: Default::default(),
+            next_id: 0,
+        };
+        (task, requests, events)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn retry_replaces_stalled_emulation_and_drops_old_attempt() {
+        let (mut task, requests, _events) = emulation_task();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel::<()>();
+        let mut first = Some((started_tx, dropped_tx));
+        let initialization = task.initialize_emulation(|| {
+            let first = first.take();
+            async move {
+                if let Some((started, held)) = first {
+                    let _held = held;
+                    started.send(()).unwrap();
+                    std::future::pending().await
+                } else {
+                    super::InputEmulation::new(Some(syntra_input_emulation::Backend::Dummy)).await
+                }
+            }
+        });
+        let retry = async {
+            started_rx.await.unwrap();
+            requests.send(super::ProxyRequest::Reenable).unwrap();
+        };
+        let (result, ()) = tokio::time::timeout(super::Duration::from_secs(2), async {
+            tokio::join!(initialization, retry)
+        })
+        .await
+        .expect("Retry left emulation waiting on the old initialization");
+        let mut emulation = result.unwrap().expect("replacement emulation unavailable");
+        assert!(dropped_rx.await.is_err(), "old initialization was retained");
+        emulation.terminate().await;
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn stalled_emulation_times_out_and_can_initialize_again() {
+        let (mut task, _requests, _events) = emulation_task();
+        let start = tokio::time::Instant::now();
+        let result = task
+            .initialize_emulation(std::future::pending)
+            .await
+            .unwrap();
+        assert!(result.is_none());
+        assert_eq!(start.elapsed(), crate::INPUT_INITIALIZATION_TIMEOUT);
+        let mut emulation = task
+            .initialize_emulation(|| {
+                super::InputEmulation::new(Some(syntra_input_emulation::Backend::Dummy))
+            })
+            .await
+            .unwrap()
+            .expect("emulation stayed stuck after its deadline");
+        emulation.terminate().await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn stalled_emulation_keeps_stop_and_clipboard_responsive() {
+        let (mut task, requests, _events) = emulation_task();
+        let addr = "127.0.0.1:1".parse().unwrap();
+        task.handles.insert(addr, 0);
+        task.pressed_buttons.insert(addr, [1].into_iter().collect());
+        let (reply, response) = tokio::sync::oneshot::channel();
+        requests
+            .send(super::ProxyRequest::SetInputSharing(false))
+            .unwrap();
+        requests
+            .send(super::ProxyRequest::PublishFileClipboard {
+                contents: Vec::new(),
+                reply,
+            })
+            .unwrap();
+        let initialization = task.initialize_emulation(std::future::pending);
+        let stop = async {
+            assert!(response.await.unwrap().is_err());
+            requests.send(super::ProxyRequest::Terminate).unwrap();
+        };
+        let (result, ()) = tokio::time::timeout(super::Duration::from_secs(2), async {
+            tokio::join!(initialization, stop)
+        })
+        .await
+        .expect("pending initialization blocked shutdown or clipboard fallback");
+        assert!(result.unwrap().is_none());
+        assert!(task.exit_requested.get());
+        assert!(!task.input_sharing.get());
+        assert!(task.handles.is_empty());
+        assert!(task.pressed_buttons.is_empty());
+        assert!(!task.emulation_ready.get());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn unavailable_native_clipboard_preserves_file_offer_for_adapter() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let listener = super::SyntraListener::new(
+                    0,
+                    webrtc_dtls::crypto::Certificate::generate_self_signed(["test".into()])
+                        .unwrap(),
+                    Default::default(),
+                )
+                .await
+                .unwrap();
+                let mut emulation =
+                    super::Emulation::new(Some(syntra_input_emulation::Backend::Dummy), listener);
+                let publication = syntra_plugin_api::PublishFileClipboard {
+                    transfer_id: "clipboard-fallback".into(),
+                    operation: syntra_plugin_api::Operation::Move,
+                    uris: vec!["file:///tmp/clipboard-test/empty%20file".into()],
+                };
+                emulation.publish_file_clipboard(
+                    vec![(
+                        "text/uri-list".into(),
+                        publication.uris[0].as_bytes().to_vec(),
+                    )],
+                    Some(publication.clone()),
+                );
+                let fallback = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                    loop {
+                        if let super::EmulationEvent::FileClipboardFallback(value) =
+                            emulation.event().await
+                        {
+                            break value;
+                        }
+                    }
+                })
+                .await;
+                emulation.terminate().await;
+                let fallback = fallback.expect("file offer disappeared after native rejection");
+                assert_eq!(fallback.transfer_id, publication.transfer_id);
+                assert_eq!(fallback.uris, publication.uris);
+                assert!(matches!(
+                    fallback.operation,
+                    syntra_plugin_api::Operation::Move
+                ));
+            })
+            .await;
+    }
 
     #[test]
     fn decodes_png_exact_pixels() {

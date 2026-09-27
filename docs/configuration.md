@@ -93,6 +93,19 @@ Each `[[clients]]` entry maps to `ConfigClient` (`config.rs:326-347`).
 For `port`, `capture_backend`, and `emulation_backend`, command-line values override TOML values. Otherwise TOML overrides the code default (`config.rs:502-522`). `--cert-path` similarly overrides TOML and the default certificate path. GUI changes such as selecting a port or file-receive settings are persisted back to TOML through the configuration writer; the writer replaces the serialised file and syncs it (`config.rs:555-568,659-687`).
 
 A frontend-selected port is persisted as a configured value. A client’s default port is omitted when serialised because `4242` is implicit (`config.rs:351-364`). Do not hand-edit generated fields while another process is writing the file.
+Settings controls persist automatically: toggles apply immediately and text/color edits debounce briefly. Invalid values remain visible with their error instead of being silently persisted. Failed file-receive edits retain a retry action.
+
+The presentation preference `suppress_popups` keeps incoming offers in the Transfers page rather than opening an automatic dialog. Every pending offer retains accept/decline controls and a selectable destination. It does not grant consent, auto-accept files, or suppress operating-system permission dialogs. Existing-name collisions remain pending until the user chooses a different directory or explicitly requests replacement.
+
+Sidebar expansion is persisted in presentation settings. Bundled interface locales are English, Romanian, German, and Simplified Chinese (`zh-CN`); the incomplete pseudo-locale is no longer offered.
+
+### Input recovery and operating-system consent
+
+Input backend initialization is bounded to two minutes, including time for an interactive permission dialog. **Retry** cancels a pending attempt and starts a fresh one immediately; peer traffic and control requests remain responsive while initialization is pending. After a timeout the backend remains inactive until Retry, rather than repeatedly opening permission dialogs.
+
+Portal backends use a fresh D-Bus connection for each initialization attempt. RemoteDesktop transport errors preserve the stored permission grant instead of deleting it and requesting consent again. Where supported, RemoteDesktop and InputCapture request permission persistence until explicitly revoked and save the replacement restore token returned by the portal.
+
+Persistence is controlled by the desktop, not by the dashboard. InputCapture version 1 has no restore-token support; version 2 adds it, and the desktop may still require consent if a grant is revoked or cannot be restored. There is no universal “automatically accept system permissions” setting. Updating only the dashboard does not require restarting the daemon. Replacing a running daemon's executable does not activate the update until the daemon is restarted, which creates new portal sessions. After a graphical-session crash, restart from the current desktop environment if its display or authorization references have changed.
 
 ## Command-line arguments
 
@@ -122,7 +135,7 @@ Examples:
 ```sh
 syntra-daemon --port 4242 --capture-backend x11
 syntra-daemon --config /tmp/syntra-test/config.toml --cert-path /tmp/syntra-test/syntra.pem
-syntra daemon
+syntra-daemon
 syntra --background
 ```
 

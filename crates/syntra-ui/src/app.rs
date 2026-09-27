@@ -306,6 +306,61 @@ where
     std::thread::spawn(move || {
         loop {
             while let Ok(event) = source.recv() {
+                if let FrontendEvent::HistoryContentResult {
+                    event_id,
+                    text,
+                    image,
+                    mut error,
+                } = event
+                {
+                    let pixels = image.and_then(|image| {
+                        let decoded = if image.media_type.as_deref() == Some("image/x-rgba8") {
+                            image
+                                .width
+                                .zip(image.height)
+                                .and_then(|(w, h)| image::RgbaImage::from_raw(w, h, image.bytes))
+                                .ok_or_else(|| "Invalid history image dimensions".to_string())
+                        } else {
+                            image::load_from_memory(&image.bytes)
+                                .map(|image| image.into_rgba8())
+                                .map_err(|e| e.to_string())
+                        };
+                        match decoded {
+                            Ok(image) => Some(
+                                slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                                    image.as_raw(),
+                                    image.width(),
+                                    image.height(),
+                                ),
+                            ),
+                            Err(failure) => {
+                                error = Some(failure);
+                                None
+                            }
+                        }
+                    });
+                    let _ = event_window.upgrade_in_event_loop(move |app| {
+                        let global = app.global::<AppState>();
+                        if global.get_history_detail_origin().as_str() != event_id.origin_device_id
+                            || global.get_history_detail_sequence().as_str()
+                                != event_id.origin_sequence.to_string()
+                        {
+                            return;
+                        }
+                        global.set_history_detail_busy(false);
+                        global.set_history_detail_error(error.unwrap_or_default().into());
+                        if let Some(text) = text {
+                            if global.get_history_detail_copy() {
+                                app.invoke_history_copy_text(text.into());
+                            }
+                        }
+                        if let Some(pixels) = pixels {
+                            global.set_history_detail_image(slint::Image::from_rgba8(pixels));
+                            global.set_history_detail_visible(true);
+                        }
+                    });
+                    continue;
+                }
                 let received_history_page = matches!(&event, FrontendEvent::HistoryPage(_));
                 let incoming_offer = matches!(&event, FrontendEvent::IncomingFileOffer(_));
                 let settings_reply =
@@ -326,9 +381,7 @@ where
                     view.reduce(event);
                     view.reduce_transport(TransportLifecycleEvent::Resynchronized);
                     let refresh = view.next_history_refresh();
-                    let settings_saved = settings_reply
-                        && settings_were_pending
-                        && view.file_receive_error.is_none();
+                    let settings_saved = settings_reply && settings_were_pending;
                     (view.clone(), refresh, settings_saved)
                 };
                 if let Some(request) = refresh {
@@ -385,7 +438,10 @@ where
                     {
                         global.set_manual_offer_busy(false);
                     }
-                    if incoming_offer && global.get_manual_offer_visible() {
+                    if incoming_offer
+                        && global.get_manual_offer_visible()
+                        && !global.get_suppress_popups()
+                    {
                         let _ = app.show();
                     }
                 });
@@ -754,6 +810,8 @@ fn hex_color(value: &str) -> Color {
     Color::from_rgb_u8(113, 131, 85)
 }
 fn apply_appearance(app: &AppWindow, settings: &PresentationSettings) {
+    app.global::<AppState>()
+        .set_suppress_popups(settings.suppress_popups);
     let theme = app.global::<Theme>();
     let dark = matches!(settings.mode, crate::settings::BaseMode::Black);
     let (
@@ -1127,16 +1185,6 @@ fn project_live_diagnostics(
     });
     DIAGNOSTIC_CURSOR.with(|cursor| cursor.set((appended, revision)));
 
-    // Approximate the width from byte length rather than scanning every
-    // character of every message; the value only sizes a scroll area.
-    let message_columns = rows
-        .iter()
-        .map(|entry| entry.message.len())
-        .max()
-        .unwrap_or(80)
-        // One pathological line must not widen the table for every row.
-        .clamp(80, 400) as i32;
-    global.set_diagnostics_message_columns(message_columns);
     global.set_diagnostics_paused(store.filter.paused);
     global.set_diagnostics_error(
         store
@@ -1369,6 +1417,7 @@ fn project_history(app: &AppWindow, state: &AppViewState) {
                         .global::<Translations>()
                         .invoke_translate(kind.into(), app.global::<Translations>().get_revision()),
                     preview_text: preview.into(),
+                    is_text: record.kind == syntra_api::HistoryKind::Text,
                     has_thumbnail: thumbnail.is_some(),
                     thumbnail: thumbnail.unwrap_or_default(),
                     pinned: record.pinned,
@@ -1774,6 +1823,32 @@ fn bind_app_state_callbacks(
 ) {
     let global = app.global::<AppState>();
     let weak = app.as_weak();
+    {
+        let weak = weak.clone();
+        let tx = tx.clone();
+        let state = Arc::clone(&state);
+        global.on_history_open(move |origin, sequence, copy| {
+            let Some(app) = weak.upgrade() else { return };
+            let Ok(origin_sequence) = sequence.parse::<u64>() else {
+                return;
+            };
+            let global = app.global::<AppState>();
+            global.set_history_detail_origin(origin.clone());
+            global.set_history_detail_sequence(sequence);
+            global.set_history_detail_copy(copy);
+            global.set_history_detail_busy(true);
+            global.set_history_detail_error("".into());
+            send_request(
+                &tx,
+                &weak,
+                &state,
+                FrontendRequest::GetHistoryContent(syntra_api::HistoryEventId {
+                    origin_device_id: origin.to_string(),
+                    origin_sequence,
+                }),
+            );
+        });
+    }
     {
         let weak = weak.clone();
         let state = Arc::clone(&state);
@@ -2361,6 +2436,13 @@ fn bind_app_state_callbacks(
         }
     );
     appearance_callback!(
+        on_change_suppress_popups,
+        |saved: &mut PresentationSettings, value: bool| {
+            saved.suppress_popups = value;
+            Ok::<(), String>(())
+        }
+    );
+    appearance_callback!(
         on_change_accent,
         |saved: &mut PresentationSettings, value: SharedString| {
             let value = value.trim();
@@ -2575,29 +2657,6 @@ fn bind_app_state_callbacks(
             )
         });
     }
-    {
-        let tx = tx.clone();
-        let weak = weak.clone();
-        let state = Arc::clone(&state);
-        let settings = Arc::clone(&settings);
-        global.on_save_configuration(move || {
-            let result = settings
-                .lock()
-                .map_err(|_| "settings lock poisoned".to_string())
-                .and_then(|value| {
-                    save_presentation_settings(&value).map_err(|error| error.to_string())
-                });
-            if let Err(error) = result {
-                show_error(
-                    &weak,
-                    &state,
-                    format!("Unable to save preferences: {error}"),
-                );
-                return;
-            }
-            dispatch(UiIntent::SaveConfiguration, &tx, &weak, &state);
-        });
-    }
     bind_bool(
         &global,
         tx.clone(),
@@ -2632,51 +2691,6 @@ fn bind_app_state_callbacks(
         });
     }
 
-    {
-        let store = Arc::clone(&diagnostics);
-        let weak = weak.clone();
-        global.on_diagnostics_level_changed(move |value| {
-            if let Ok(mut store) = store.lock() {
-                store.filter.level = value.to_string();
-                // A different filter selects different records, so the view
-                // must rebuild rather than append.
-                store.invalidate();
-            }
-            if let Some(app) = weak.upgrade() {
-                project_live_diagnostics(&app, &store);
-            }
-        });
-    }
-    {
-        let store = Arc::clone(&diagnostics);
-        let weak = weak.clone();
-        global.on_diagnostics_stage_changed(move |value| {
-            if let Ok(mut store) = store.lock() {
-                store.filter.stage = value.to_string();
-                // A different filter selects different records, so the view
-                // must rebuild rather than append.
-                store.invalidate();
-            }
-            if let Some(app) = weak.upgrade() {
-                project_live_diagnostics(&app, &store);
-            }
-        });
-    }
-    {
-        let store = Arc::clone(&diagnostics);
-        let weak = weak.clone();
-        global.on_diagnostics_direction_changed(move |value| {
-            if let Ok(mut store) = store.lock() {
-                store.filter.direction = value.to_string();
-                // A different filter selects different records, so the view
-                // must rebuild rather than append.
-                store.invalidate();
-            }
-            if let Some(app) = weak.upgrade() {
-                project_live_diagnostics(&app, &store);
-            }
-        });
-    }
     {
         let store = Arc::clone(&diagnostics);
         let weak = weak.clone();
@@ -2965,9 +2979,14 @@ fn bind_window_callbacks(
                 .map_err(|_| "settings lock poisoned".to_string())
                 .and_then(|mut value| {
                     let expanded = !app.get_sidebar_expanded();
-                    app.set_sidebar_expanded(expanded);
+                    let previous = value.sidebar_open;
                     value.sidebar_open = expanded;
-                    save_presentation_settings(&value).map_err(|error| error.to_string())
+                    if let Err(error) = save_presentation_settings(&value) {
+                        value.sidebar_open = previous;
+                        return Err(error.to_string());
+                    }
+                    app.set_sidebar_expanded(expanded);
+                    Ok(())
                 });
             if let Err(error) = result {
                 show_error(
@@ -3151,6 +3170,11 @@ fn bind_window_callbacks(
             let weak = app.as_weak();
             move || {
                 if let Some(app) = weak.upgrade() {
+                    if app.global::<Theme>().get_touch_input_active()
+                        && crate::file_drop::begin_touch_window_drag(&app)
+                    {
+                        return;
+                    }
                     native_window(&app, |window| {
                         if let Err(error) = window.drag_window() {
                             log::warn!("could not begin window drag: {error}");

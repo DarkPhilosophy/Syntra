@@ -17,7 +17,7 @@ const MAX_CATALOG_BYTES: u64 = 1024 * 1024;
 const EN_US: &str = include_str!("../locales/en-US.ftl");
 const RO_RO: &str = include_str!("../locales/ro-RO.ftl");
 const DE_DE: &str = include_str!("../locales/de-DE.ftl");
-const EN_XA: &str = include_str!("../locales/en-XA.ftl");
+const ZH_CN: &str = include_str!("../locales/zh-CN.ftl");
 
 type Bundle = ConcurrentFluentBundle<FluentResource>;
 
@@ -26,7 +26,7 @@ pub fn embedded_resources() -> BTreeMap<&'static str, &'static str> {
         ("en-US", EN_US),
         ("ro-RO", RO_RO),
         ("de-DE", DE_DE),
-        ("en-XA", EN_XA),
+        ("zh-CN", ZH_CN),
     ]
     .into_iter()
     .collect()
@@ -261,6 +261,7 @@ impl Localizer {
         let embedded_base = match base {
             "de" => "de-DE",
             "ro" => "ro-RO",
+            "zh" => "zh-CN",
             _ => "en-US",
         };
         if !candidates
@@ -390,7 +391,7 @@ mod tests {
         );
     }
     #[test]
-    fn fallback_and_pseudo() {
+    fn regional_and_missing_locale_fallbacks() {
         assert_eq!(
             Localizer::new("de-AT")
                 .unwrap()
@@ -406,13 +407,6 @@ mod tests {
         assert_eq!(
             Localizer::new("fr").unwrap().format("missing", None),
             "missing"
-        );
-        assert!(
-            Localizer::new("en-XA")
-                .unwrap()
-                .format("navigation-settings", None)
-                .len()
-                > 8
         );
     }
     #[test]

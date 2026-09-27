@@ -20,8 +20,8 @@
 }:
 let
   cargoToml = fromTOML (builtins.readFile ../Cargo.toml);
-  pname = cargoToml.package.name;
-  version = cargoToml.package.version;
+  pname = "syntra";
+  version = cargoToml.workspace.package.version;
 in
 rustPlatform.buildRustPackage {
   inherit pname;
@@ -58,10 +58,12 @@ rustPlatform.buildRustPackage {
   cargoLock.lockFile = ../Cargo.lock;
   cargoBuildFlags = [
     "-p"
-    "syntra"
+    "syntra-app"
+    "-p"
+    "syntra-daemon"
   ] ++ lib.optionals stdenv.isLinux [
     "-p"
-    "syntra-plugin-gtk-clipboard"
+    "syntra-plugin-clipboard"
     "-p"
     "syntra-plugin-fuse"
   ];
@@ -70,9 +72,10 @@ rustPlatform.buildRustPackage {
   RUST_BACKTRACE = "full";
   postInstall = ''
     ${lib.optionalString stdenv.isLinux ''
-      test -x $out/bin/syntra-plugin-gtk-clipboard
+      test -x $out/bin/syntra-plugin-clipboard
       test -x $out/bin/syntra-plugin-fuse
     ''}
+    test -x $out/bin/syntra-daemon
     install -Dm444 *.desktop -t $out/share/applications
     install -Dm444 crates/syntra-ui/ui/assets/shell/syntra.svg $out/share/icons/hicolor/scalable/apps/syntra.svg
   '';

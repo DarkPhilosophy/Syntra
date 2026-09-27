@@ -168,7 +168,7 @@ mod imp {
         fs::create_dir_all(parent)?;
         let escaped_binary = escape_exec_start_path(&binary)?;
         let contents = format!(
-            "[Unit]\nDescription=Syntra background service\nAfter=graphical-session.target\nBindsTo=graphical-session.target\n\n[Service]\nExecStart={escaped_binary}\nRestart=on-failure\nKillSignal=SIGINT\nTimeoutStopSec=15\n\n[Install]\nWantedBy=graphical-session.target\n"
+            "[Unit]\nDescription=Syntra background service\nAfter=graphical-session.target xdg-desktop-portal.service\nBindsTo=graphical-session.target\nStartLimitIntervalSec=500\nStartLimitBurst=5\n\n[Service]\nExecStart={escaped_binary}\nRestart=on-failure\nRestartSec=5s\nKillSignal=SIGINT\nTimeoutStopSec=15\n\n[Install]\nWantedBy=graphical-session.target\n"
         );
         write_unit_atomically(&unit_path, contents.as_bytes())?;
         run_manager_action("daemon-reload")

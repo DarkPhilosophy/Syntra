@@ -121,12 +121,19 @@ pub struct Service {
     next_clipboard_transfer: u64,
     next_trigger_handle: u64,
     adapter_manager: Option<AdapterProcessManager>,
-    adapter_events: mpsc::Receiver<ManagerEvent>,
+    /// `None` when no adapter supervisor runs, or after it exited: a closed
+    /// receiver is always ready and would otherwise spin the event loop.
+    adapter_events: Option<mpsc::Receiver<ManagerEvent>>,
     transfers: TransferState<Peer>,
     manual_transfers: ManualTransfers<Peer>,
     file_receive_settings: syntra_api::FileReceiveSettings,
     source_result_tx: mpsc::Sender<SourceReadResult>,
     source_results: mpsc::Receiver<SourceReadResult>,
+    /// Clipboard selections scanned on the blocking pool.
+    manifest_offer_tx: mpsc::Sender<transfers::ManifestOffer>,
+    manifest_offers: mpsc::Receiver<transfers::ManifestOffer>,
+    /// Latest clipboard selection; older scans that finish late are dropped.
+    manifest_generation: u64,
     /// UI transfer ids that actually moved bytes and therefore exist in the UI
     announced_transfers: HashSet<syntra_api::ClipboardTransferId>,
     /// Last progress snapshot used for accurate terminal status.
@@ -264,15 +271,15 @@ impl Service {
         let (adapter_manager, adapter_events) = match adapter_paths {
             Ok(paths) => {
                 let (manager, events) = AdapterProcessManager::start(paths);
-                (Some(manager), events)
+                (Some(manager), Some(events))
             }
             Err(error) => {
                 log::warn!("file transfer plugins unavailable: {error}");
-                let (_tx, events) = mpsc::channel(1);
-                (None, events)
+                (None, None)
             }
         };
         let (source_result_tx, source_results) = mpsc::channel(SOURCE_RESULT_CAPACITY);
+        let (manifest_offer_tx, manifest_offers) = mpsc::channel(SOURCE_RESULT_CAPACITY);
 
         // create dns resolver
         let resolver = DnsResolver::new()?;
@@ -347,6 +354,9 @@ impl Service {
             native_file_selection: false,
             source_result_tx,
             source_results,
+            manifest_offer_tx,
+            manifest_offers,
+            manifest_generation: 0,
             last_file_clipboard: None,
             announced_transfers: HashSet::new(),
             manual_transfers: ManualTransfers::new(),
@@ -403,6 +413,7 @@ impl Service {
         let mut profile_tick = tokio::time::interval(Duration::from_secs(1));
         profile_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut history_changes = self.history.subscribe_changes();
+        let mut shutdown = ShutdownSignal::new()?;
         loop {
             let clear_deadline = self
                 .history_clear
@@ -432,14 +443,23 @@ impl Service {
                 _ = self.frontend_event_pending.notified() => self.handle_frontend_pending().await,
                 event = self.emulation.event() => self.handle_emulation_event(event).await,
                 event = self.capture.event() => self.handle_capture_event(event).await,
-                event = self.adapter_events.recv() => {
-                    if let Some(event) = event {
-                        self.handle_adapter_event(event).await;
+                event = recv_optional(&mut self.adapter_events), if self.adapter_events.is_some() => {
+                    match event {
+                        Some(event) => self.handle_adapter_event(event).await,
+                        None => {
+                            log::warn!("file adapter supervisor stopped");
+                            self.adapter_events = None;
+                        }
                     }
                 },
                 result = self.source_results.recv() => {
                     if let Some(result) = result {
                         self.handle_source_result(result);
+                    }
+                },
+                offer = self.manifest_offers.recv() => {
+                    if let Some(offer) = offer {
+                        self.handle_manifest_offer(offer);
                     }
                 },
                 result = self.clipboard.next_read(), if self.legacy_clipboard => match result {
@@ -497,7 +517,7 @@ impl Service {
                     }
                 },
                 _ = self.config.changed() => self.handle_config_change(),
-                r = signal::ctrl_c() => break r.expect("failed to wait for CTRL+C"),
+                r = shutdown.requested() => break r.expect("failed to wait for a shutdown signal"),
             }
         }
 
@@ -517,6 +537,44 @@ impl Service {
         }
 
         Ok(())
+    }
+}
+
+/// Receives from an optional channel; callers disable the branch while `None`.
+async fn recv_optional<T>(receiver: &mut Option<mpsc::Receiver<T>>) -> Option<T> {
+    match receiver {
+        Some(receiver) => receiver.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// SIGINT and, on Unix, SIGTERM both request an orderly shutdown so held
+/// keys and grabbed devices are released however the process is stopped.
+struct ShutdownSignal {
+    #[cfg(unix)]
+    terminate: signal::unix::Signal,
+}
+
+impl ShutdownSignal {
+    fn new() -> io::Result<Self> {
+        Ok(Self {
+            #[cfg(unix)]
+            terminate: signal::unix::signal(signal::unix::SignalKind::terminate())?,
+        })
+    }
+
+    async fn requested(&mut self) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            tokio::select! {
+                result = signal::ctrl_c() => result,
+                _ = self.terminate.recv() => Ok(()),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            signal::ctrl_c().await
+        }
     }
 }
 

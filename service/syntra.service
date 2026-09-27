@@ -1,13 +1,20 @@
 [Unit]
-Description=Syntra
-# Syntra needs an active graphical session
-After=graphical-session.target
+Description=Syntra background service
+# Syntra needs an active graphical session and, for libei/portal backends,
+# the desktop portal.
+After=graphical-session.target xdg-desktop-portal.service
 # make sure the service terminates with the graphical session
 BindsTo=graphical-session.target
+StartLimitIntervalSec=500
+StartLimitBurst=5
 
 [Service]
-ExecStart=/usr/bin/syntra daemon
+ExecStart=/usr/bin/syntra-daemon
 Restart=on-failure
+RestartSec=5s
+# SIGINT and SIGTERM both release held keys before exit.
+KillSignal=SIGINT
+TimeoutStopSec=15
 
 [Install]
 WantedBy=graphical-session.target

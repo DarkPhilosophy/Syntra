@@ -11,6 +11,9 @@ use slint::{ComponentHandle, LogicalPosition, Timer, TimerMode};
 
 use crate::app::AppWindow;
 
+#[cfg(target_os = "linux")]
+mod wayland;
+
 const HOVER_POLL_INTERVAL: Duration = Duration::from_millis(75);
 const MAX_HOVER_POLLS: u16 = 1_200;
 
@@ -70,18 +73,12 @@ fn configure_backend_once() -> BackendConfiguration {
     {
         use winit::platform::x11::EventLoopBuilderExtX11;
 
-        // Under Wayland the compositor delivers drops natively. Forcing the
-        // event loop onto X11 there would route the whole UI through
-        // XWayland, and fail outright when XWayland is unavailable or its
-        // authority cookie is stale.
-        // winit 0.30 exposes file-drop event variants, but its Wayland backend
-        // does not bind the data-device protocol, so those events never arrive.
-        // Keep the dashboard on Wayland rather than forcing the whole UI through
-        // XWayland, and tell users how to transfer a file instead.
+        // Keep the native Wayland window. Its data-device adapter below fills
+        // the protocol gap in winit 0.30 without changing input or clipboard.
         if std::env::var_os("WAYLAND_DISPLAY").is_some_and(|value| !value.is_empty()) {
-            return BackendConfiguration::Skipped(
-                "native file drop is unavailable on Wayland: winit 0.30 does not implement the Wayland data-device protocol; use your file manager's Copy action instead".into(),
-            );
+            return select_winit_backend(winit::event_loop::EventLoop::<
+                slint::winit_030::SlintEvent,
+            >::with_user_event());
         }
 
         let display_is_usable = std::env::var_os("DISPLAY").is_some_and(|value| !value.is_empty());
@@ -130,7 +127,13 @@ pub fn supported(app: &AppWindow) -> bool {
         return false;
     }
     app.window()
-        .with_winit_window(|window| PositionSource::new(window).is_ok())
+        .with_winit_window(|window| {
+            #[cfg(target_os = "linux")]
+            if wayland::is_wayland(window) {
+                return true;
+            }
+            PositionSource::new(window).is_ok()
+        })
         .unwrap_or(false)
 }
 
@@ -143,6 +146,8 @@ pub struct FileDropGuard {
     hovering: Rc<Cell<bool>>,
     callback: DropCallback,
     hover_timer: Rc<Timer>,
+    #[cfg(target_os = "linux")]
+    _wayland: Option<wayland::NativeDrop>,
 }
 
 impl Drop for FileDropGuard {
@@ -161,12 +166,62 @@ impl Drop for FileDropGuard {
 /// delivered. This is the sole Winit filter installed by the application;
 /// callers must not install a second filter because Slint's API replaces the
 /// previous one rather than chaining it.
+pub(crate) fn begin_touch_window_drag(app: &AppWindow) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        wayland::begin_touch_drag(app)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = app;
+        false
+    }
+}
+
+fn observe_input_mode(app: &slint::Weak<AppWindow>, event: &winit::event::WindowEvent) {
+    let touch = match event {
+        winit::event::WindowEvent::Touch(_) => true,
+        winit::event::WindowEvent::MouseInput { .. } => false,
+        _ => return,
+    };
+    if let Some(app) = app.upgrade() {
+        app.global::<crate::app::Theme>()
+            .set_touch_input_active(touch);
+    }
+}
+
 pub fn install(app: &AppWindow, callback: impl FnMut(FileDropEvent) + 'static) -> FileDropGuard {
     let active = Rc::new(Cell::new(true));
     let hovering = Rc::new(Cell::new(false));
     let polls_remaining = Rc::new(Cell::new(0));
     let callback: DropCallback = Rc::new(RefCell::new(Box::new(callback)));
     let hover_timer = Rc::new(Timer::default());
+    #[cfg(target_os = "linux")]
+    if app
+        .window()
+        .with_winit_window(wayland::is_wayland)
+        .unwrap_or(false)
+    {
+        let weak = app.as_weak();
+        app.window().on_winit_window_event(move |_, event| {
+            observe_input_mode(&weak, event);
+            EventResult::Propagate
+        });
+        let native = match wayland::NativeDrop::new(app, Rc::clone(&callback)) {
+            Ok(native) => Some(native),
+            Err(error) => {
+                callback.borrow_mut()(FileDropEvent::Error(error));
+                None
+            }
+        };
+        return FileDropGuard {
+            active,
+            hovering,
+            callback,
+            hover_timer,
+            _wayland: native,
+        };
+    }
     let source = app.window().with_winit_window(PositionSource::new);
 
     let source = match source {
@@ -197,8 +252,10 @@ pub fn install(app: &AppWindow, callback: impl FnMut(FileDropEvent) + 'static) -
         let timer_for_events = Rc::clone(&hover_timer);
         let scale_factor = Rc::new(Cell::new(f64::from(app.window().scale_factor())));
         let scale_for_events = Rc::clone(&scale_factor);
+        let weak = app.as_weak();
 
         app.window().on_winit_window_event(move |window, event| {
+            observe_input_mode(&weak, event);
             if !active_for_events.get() {
                 return EventResult::Propagate;
             }
@@ -282,6 +339,8 @@ pub fn install(app: &AppWindow, callback: impl FnMut(FileDropEvent) + 'static) -
         hovering,
         callback,
         hover_timer,
+        #[cfg(target_os = "linux")]
+        _wayland: None,
     }
 }
 
@@ -311,16 +370,7 @@ impl PositionSource {
                 .map_err(|_| "X11 window identifier does not fit in 32 bits".to_string())?,
             RawWindowHandle::Xcb(handle) => handle.window.get(),
             RawWindowHandle::Wayland(_) => {
-                // Not a defect here: winit 0.30 declares DroppedFile and
-                // HoveredFile but its Wayland backend binds no data device,
-                // so no drop ever arrives. Say what to do instead rather
-                // than reporting a bare failure.
-                return Err(
-                    "Dragging files onto the window is not supported on Wayland. \
-                     Copy the files in your file manager instead, and they will \
-                     be offered to the selected device."
-                        .into(),
-                );
+                return Err("Wayland drops use the native data-device adapter".into());
             }
             other => {
                 return Err(format!(

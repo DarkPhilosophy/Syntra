@@ -215,11 +215,6 @@ pub fn install_binaries_from_to(
         source: error,
     })?;
 
-    if source == target {
-        // Already in place; treat as installed rather than copying onto self.
-        return status();
-    }
-
     let mut installed = Vec::new();
     for name in [APPLICATION_EXECUTABLE, DAEMON_EXECUTABLE] {
         let from = source.join(name);
@@ -259,17 +254,24 @@ fn copy_into(from: &Path, target: &Path) -> Result<PathBuf, InstallError> {
         .file_name()
         .ok_or_else(|| InstallError::MissingBinary(from.display().to_string()))?;
     let to = target.join(name);
-    // Remove first: overwriting a file that is currently executing fails with
-    // ETXTBSY on some systems, whereas unlinking always works and leaves
-    // running processes holding the old inode.
-    let _ = fs::remove_file(&to);
-    fs::copy(from, &to).map_err(|error| InstallError::Copy {
+    let copy_error = |source| InstallError::Copy {
         path: to.display().to_string(),
-        source: error,
-    })?;
-    if from.extension().is_none_or(|extension| extension != "json") {
-        set_executable(&to)?;
+        source,
+    };
+    let source_path = fs::canonicalize(from).map_err(copy_error)?;
+    if fs::canonicalize(&to).is_ok_and(|path| path == source_path) {
+        return Ok(to);
     }
+    // Stage beside the destination so replacement is atomic and failures leave
+    // the existing executable intact, including when it is currently running.
+    let staged = tempfile::NamedTempFile::new_in(target).map_err(copy_error)?;
+    fs::copy(from, staged.path()).map_err(copy_error)?;
+    if from.extension().is_none_or(|extension| extension != "json") {
+        set_executable(staged.path())?;
+    }
+    staged
+        .persist(&to)
+        .map_err(|error| copy_error(error.error))?;
     Ok(to)
 }
 
@@ -327,6 +329,59 @@ fn set_executable(_path: &Path) -> Result<(), InstallError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn installing_through_directory_alias_preserves_binaries() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("bin");
+        let alias = root.path().join("alias");
+        fs::create_dir(&source).unwrap();
+        std::os::unix::fs::symlink(&source, &alias).unwrap();
+        for name in [APPLICATION_EXECUTABLE, DAEMON_EXECUTABLE] {
+            fs::write(source.join(name), name).unwrap();
+        }
+        let installed = install_binaries_from_to(&source, &alias).unwrap();
+        assert_eq!(installed.application, alias.join(APPLICATION_EXECUTABLE));
+        for name in [APPLICATION_EXECUTABLE, DAEMON_EXECUTABLE] {
+            assert_eq!(fs::read(source.join(name)).unwrap(), name.as_bytes());
+        }
+    }
+
+    #[test]
+    fn failed_copy_preserves_existing_executable() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("target");
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join(APPLICATION_EXECUTABLE), b"previous").unwrap();
+        let missing = root.path().join(APPLICATION_EXECUTABLE);
+        assert!(copy_into(&missing, &target).is_err());
+        assert_eq!(
+            fs::read(target.join(APPLICATION_EXECUTABLE)).unwrap(),
+            b"previous"
+        );
+    }
+
+    #[test]
+    fn replacement_preserves_source_and_installs_executable() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("target");
+        fs::create_dir(&target).unwrap();
+        let source = root.path().join(APPLICATION_EXECUTABLE);
+        fs::write(&source, b"new").unwrap();
+        fs::write(target.join(APPLICATION_EXECUTABLE), b"old").unwrap();
+        let installed = copy_into(&source, &target).unwrap();
+        assert_eq!(fs::read(&source).unwrap(), b"new");
+        assert_eq!(fs::read(&installed).unwrap(), b"new");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(installed).unwrap().permissions().mode() & 0o755,
+                0o755
+            );
+        }
+    }
 
     /// The override exists so a user who keeps binaries outside the default
     /// location is not forced into it.

@@ -117,7 +117,16 @@ impl Clipboard {
 }
 
 fn read_clipboard() -> Result<ClipboardContent, arboard::Error> {
-    arboard::Clipboard::new().and_then(|mut clipboard| match clipboard.get_text() {
+    let mut clipboard = arboard::Clipboard::new()?;
+    // File managers also offer text containing the selected paths. Leave
+    // those selections to the file-transfer adapter instead of publishing
+    // their text representation over its file offer.
+    match clipboard.get().file_list() {
+        Ok(_) => return Err(arboard::Error::ContentNotAvailable),
+        Err(arboard::Error::ContentNotAvailable) => {}
+        Err(error) => return Err(error),
+    }
+    match clipboard.get_text() {
         Ok(text) => Ok(ClipboardContent::Text(text)),
         Err(arboard::Error::ContentNotAvailable) => {
             let image = clipboard.get_image()?;
@@ -132,7 +141,7 @@ fn read_clipboard() -> Result<ClipboardContent, arboard::Error> {
             })
         }
         Err(error) => Err(error),
-    })
+    }
 }
 
 fn spawn_read_worker(

@@ -123,7 +123,7 @@ impl ReleaseSignal {
     /// Marks the pointer released and wakes whoever is waiting.
     fn complete(&self) {
         self.set_capturing(false);
-        self.completed.notify_one();
+        self.completed.notify_waiters();
     }
 
     /// Asks the session to release and waits for it, up to `timeout`.
@@ -135,10 +135,13 @@ impl ReleaseSignal {
     /// Returns `false` if the session did not acknowledge in time.
     async fn release(&self, timeout: std::time::Duration) -> bool {
         let completed = self.completed.notified();
+        tokio::pin!(completed);
+        completed.as_mut().enable();
         if !self.is_capturing() {
             return true;
         }
-        self.requested.notify_waiters();
+        // Keep a permit if the session is still publishing its Begin event.
+        self.requested.notify_one();
         tokio::time::timeout(timeout, completed).await.is_ok()
     }
 }
@@ -297,16 +300,17 @@ async fn create_session(
             return Ok((session, capabilities, false));
         }
     };
-    let clipboard_requested = match Clipboard::new().await {
-        Ok(clipboard) => clipboard
-            .request(&session, RequestClipboardOptions::default())
-            .await
-            .is_ok(),
-        Err(error) => {
-            log::warn!("clipboard portal unavailable: {error}");
-            false
-        }
-    };
+    let clipboard_requested =
+        match Clipboard::with_connection(syntra_input_capture.connection().clone()).await {
+            Ok(clipboard) => clipboard
+                .request(&session, RequestClipboardOptions::default())
+                .await
+                .is_ok(),
+            Err(error) => {
+                log::warn!("clipboard portal unavailable: {error}");
+                false
+            }
+        };
     let options = StartOptions::default()
         .set_capabilities(
             Capabilities::Keyboard | Capabilities::Pointer | Capabilities::Touchscreen,
@@ -346,8 +350,8 @@ async fn connect_to_eis(
 }
 
 async fn libei_event_handler(
-    mut ei_event_stream: EiConvertEventStream,
-    context: ei::Context,
+    ei_event_stream: &mut EiConvertEventStream,
+    context: &ei::Context,
     event_tx: Sender<(Position, CaptureEvent)>,
     release_session: Arc<Notify>,
     current_pos: Rc<Cell<Option<Position>>>,
@@ -359,15 +363,20 @@ async fn libei_event_handler(
             .ok_or(CaptureError::EndOfStream)??;
         log::trace!("from ei: {ei_event:?}");
         let client = current_pos.get();
-        handle_ei_event(ei_event, client, &context, &event_tx, &release_session).await?;
+        handle_ei_event(ei_event, client, context, &event_tx, &release_session).await?;
     }
 }
 
 impl LibeiInputCapture {
     pub async fn new() -> std::result::Result<Self, LibeiCaptureCreationError> {
-        let syntra_input_capture = Box::pin(InputCapture::new().await?);
+        // A cancelled initialization must disconnect its portal client, closing
+        // pending dialogs/sessions without disturbing the other input backend.
+        let connection = ashpd::zbus::Connection::session()
+            .await
+            .map_err(ashpd::Error::from)?;
+        let syntra_input_capture = Box::pin(InputCapture::with_connection(connection).await?);
         let input_capture_ptr = syntra_input_capture.as_ref().get_ref() as *const InputCapture;
-        let first_session = Some(create_session(unsafe { &*input_capture_ptr }).await?);
+        let first_session = create_session(unsafe { &*input_capture_ptr }).await?;
 
         let (event_tx, event_rx) = mpsc::channel(1);
         let (notify_capture, notify_rx) = mpsc::channel(1);
@@ -403,97 +412,81 @@ async fn do_capture(
     syntra_input_capture: *const InputCapture,
     mut capture_event: Receiver<LibeiNotifyEvent>,
     release: ReleaseSignal,
-    session: Option<(Session<InputCapture>, BitFlags<Capabilities>, bool)>,
+    session: (Session<InputCapture>, BitFlags<Capabilities>, bool),
     event_tx: Sender<(Position, CaptureEvent)>,
     cancellation_token: CancellationToken,
 ) -> Result<(), CaptureError> {
-    let mut session = session.map(|s| (s.0, s.2));
-
-    /* safety: libei_task does not outlive Self */
-    let syntra_input_capture = unsafe { &*syntra_input_capture };
-    let mut active_clients: Vec<Position> = vec![];
-    let mut next_barrier_id = NonZeroU32::new(1).expect("id must be non-zero");
-
-    let mut zones_changed = syntra_input_capture.receive_zones_changed().await?;
-
-    loop {
-        let cancel_session = CancellationToken::new();
-        let cancel_update = CancellationToken::new();
-        let mut capture_event_occured: Option<LibeiNotifyEvent> = None;
-        let mut zones_have_changed = false;
-
-        let handle_session_update_request = async {
-            tokio::select! {
-                _ = cancellation_token.cancelled() => {
-                    log::debug!("cancelled")
-                },
-                _ = cancel_update.cancelled() => {
-                    log::debug!("update task cancelled");
-                },
-                _ = zones_changed.next() => {
-                    log::debug!("zones changed!");
-                    zones_have_changed = true
-                },
-                e = capture_event.recv() => if let Some(e) = e {
-                    log::debug!("capture event: {e:?}");
-                    capture_event_occured.replace(e);
-                },
-            }
-            log::debug!("=> cancelling session");
-            cancel_session.cancel();
-        };
-
-        if !active_clients.is_empty() {
-            let (mut session, clipboard_enabled) = match session.take() {
-                Some(s) => s,
-                None => {
-                    let created = create_session(syntra_input_capture).await?;
-                    (created.0, created.2)
+    let (mut session, _, clipboard_enabled) = session;
+    // SAFETY: the backend retains the pinned portal until this task is joined.
+    let portal = unsafe { &*syntra_input_capture };
+    let result = async {
+        // A peer/barrier change is not a new permission request. Keep the
+        // portal session and EIS transport until this local backend terminates.
+        let (context, _connection, mut events) = connect_to_eis(portal, &session).await?;
+        let mut active_clients = Vec::new();
+        let mut next_barrier_id = NonZeroU32::new(1).expect("id must be non-zero");
+        let mut zones_changed = portal.receive_zones_changed().await?;
+        loop {
+            let cancel_session = CancellationToken::new();
+            let cancel_update = CancellationToken::new();
+            let mut update = None;
+            let mut update_stream_closed = false;
+            let wait_for_update = async {
+                tokio::select! {
+                    _ = cancellation_token.cancelled() => {},
+                    _ = cancel_update.cancelled() => {},
+                    event = zones_changed.next() => { update_stream_closed = event.is_none(); },
+                    event = capture_event.recv() => { update_stream_closed = event.is_none(); update = event; },
                 }
+                cancel_session.cancel();
             };
-
-            let capture_session = do_capture_session(
-                PortalSession {
-                    portal: syntra_input_capture,
-                    session: &mut session,
-                    clipboard_enabled,
-                },
-                &event_tx,
-                &active_clients,
-                &mut next_barrier_id,
-                &release,
-                (cancel_session.clone(), cancel_update.clone()),
-            );
-
-            let (capture_result, ()) = tokio::join!(capture_session, handle_session_update_request);
-            log::debug!("capture session + session_update task done!");
-
-            log::debug!("disabling input capture");
-            if let Err(e) = syntra_input_capture
-                .disable(&session, Default::default())
-                .await
-            {
-                log::warn!("syntra_input_capture.disable(&session) {e}");
+            if active_clients.is_empty() {
+                wait_for_update.await;
+            } else {
+                let capture = do_capture_session(
+                    PortalSession {
+                        portal,
+                        session: &mut session,
+                        clipboard_enabled,
+                        context: &context,
+                        events: &mut events,
+                    },
+                    &event_tx,
+                    &active_clients,
+                    &mut next_barrier_id,
+                    &release,
+                    (cancel_session.clone(), cancel_update.clone()),
+                );
+                let (result, ()) = tokio::join!(capture, wait_for_update);
+                let disabled = portal.disable(&session, Default::default()).await;
+                result?;
+                disabled?;
             }
-            if let Err(e) = session.close().await {
-                log::warn!("session.close(): {e}");
+            while let Some(event) = update.take() {
+                match event {
+                    LibeiNotifyEvent::Create(position) => {
+                        if !active_clients.contains(&position) {
+                            active_clients.push(position);
+                        }
+                    }
+                    LibeiNotifyEvent::Destroy(position) => {
+                        active_clients.retain(|p| *p != position)
+                    }
+                }
+                update = capture_event.try_recv().ok();
             }
-            capture_result?;
-        } else {
-            handle_session_update_request.await;
-        }
-
-        if let Some(event) = capture_event_occured.take() {
-            match event {
-                LibeiNotifyEvent::Create(p) => active_clients.push(p),
-                LibeiNotifyEvent::Destroy(p) => active_clients.retain(|&pos| pos != p),
+            if update_stream_closed { return Err(CaptureError::EndOfStream); }
+            if cancellation_token.is_cancelled() {
+                break Ok(());
             }
-        }
-
-        if cancellation_token.is_cancelled() {
-            break Ok(());
         }
     }
+    .await;
+    release.complete();
+    if let Err(error) = session.close().await {
+        log::warn!("could not close input capture session: {error}");
+    }
+    result
 }
 
 const FILE_CLIPBOARD_MIME_TYPES: [&str; 2] = ["x-special/gnome-copied-files", "text/uri-list"];
@@ -536,6 +529,8 @@ struct PortalSession<'a> {
     session: &'a mut Session<InputCapture>,
     /// Whether this session also observes the clipboard.
     clipboard_enabled: bool,
+    context: &'a ei::Context,
+    events: &'a mut EiConvertEventStream,
 }
 
 async fn do_capture_session(
@@ -550,13 +545,12 @@ async fn do_capture_session(
         portal: syntra_input_capture,
         session,
         clipboard_enabled,
+        context,
+        events: ei_event_stream,
     } = portal_session;
     let (cancel_session, cancel_update) = cancel;
     // current client
     let current_pos = Rc::new(Cell::new(None));
-
-    // connect to eis server
-    let (context, _conn, ei_event_stream) = connect_to_eis(syntra_input_capture, session).await?;
 
     // set barriers
     let (barriers, pos_for_barrier_id) = update_barriers(
@@ -567,6 +561,9 @@ async fn do_capture_session(
     )
     .await?;
 
+    // Subscribe before enabling: the compositor may activate immediately.
+    let mut activated = syntra_input_capture.receive_activated().await?;
+    let mut deactivated = syntra_input_capture.receive_deactivated().await?;
     log::debug!("enabling session");
     syntra_input_capture
         .enable(session, Default::default())
@@ -593,15 +590,15 @@ async fn do_capture_session(
             ) => {
                 log::debug!("libei exited: {r:?} cancelling session task");
                 cancel_session_clone.cancel();
+                r
             }
-            _ = cancel_ei_handler_clone.cancelled() => {},
+            _ = cancel_ei_handler_clone.cancelled() => Ok(()),
         }
-        Ok::<(), CaptureError>(())
     };
 
     let capture_session_task = async {
-        // receiver for activation tokens
-        let mut activated = syntra_input_capture.receive_activated().await?;
+        let _stop_ei = cancel_ei_handler.clone().drop_guard();
+        let _stop_updates = cancel_update.clone().drop_guard();
         let clipboard = if clipboard_enabled {
             Some(Clipboard::new().await?)
         } else {
@@ -633,10 +630,10 @@ async fn do_capture_session(
                     let pos = match pos_for_barrier_id.get(&barrier_id) {
                         Some(id) => *id,
                         None => {
-                            log::warn!("INVALID BARRIER ID: Id {barrier_id} does not exist!");
-                            let id = find_corresponding_client(&barriers, activated.cursor_position().expect("no cursor position reported by compositor"));
-                            let pos = *pos_for_barrier_id.get(&id).expect("invalid barrier id");
-                            pos
+                            // A signal for a retired barrier can remain queued
+                            // across an update. Never release a different activation.
+                            log::debug!("ignoring activation for retired barrier {barrier_id}");
+                            continue;
                         },
                     };
                     current_pos.replace(Some(pos));
@@ -645,8 +642,17 @@ async fn do_capture_session(
                     // client entered => send event
                     event_tx.send((pos, CaptureEvent::Begin)).await.expect("no channel");
 
+                    let mut compositor_released = false;
                     loop {
                         tokio::select! {
+                            event = deactivated.next() => {
+                                let Some(event) = event else { return Err(CaptureError::ActivationClosed) };
+                                if event.session_handle() == activated.session_handle()
+                                    && event.activation_id() == activated.activation_id() {
+                                    compositor_released = true;
+                                    break;
+                                }
+                            },
                             _ = release.requested() => {
                                 log::debug!("release session requested");
                                 break;
@@ -694,8 +700,29 @@ async fn do_capture_session(
                         }
                     }
 
-                    let release_result =
-                        release_capture(syntra_input_capture, session, activated, pos).await;
+                    let release_result = if compositor_released {
+                        Ok(())
+                    } else {
+                        let result = release_capture(syntra_input_capture, session, &activated, pos).await;
+                        if let Err(error) = result {
+                            // Release can race a compositor-initiated deactivation.
+                            // Only an authoritative signal for this activation can
+                            // turn the failed request into successful cleanup.
+                            let confirmation = tokio::time::timeout(std::time::Duration::from_millis(250), async {
+                                while let Some(event) = deactivated.next().await {
+                                    if event.session_handle() == activated.session_handle()
+                                        && event.activation_id() == activated.activation_id() {
+                                        return true;
+                                    }
+                                }
+                                false
+                            }).await;
+                            if matches!(confirmation, Ok(true)) { Ok(()) } else { Err(error) }
+                        } else {
+                            Ok(())
+                        }
+                    };
+                    current_pos.replace(None);
                     release.complete();
                     release_result?;
 
@@ -742,7 +769,7 @@ async fn do_capture_session(
 async fn release_capture(
     syntra_input_capture: &InputCapture,
     session: &Session<InputCapture>,
-    activated: Activated,
+    activated: &Activated,
     current_pos: Position,
 ) -> Result<(), CaptureError> {
     if let Some(activation_id) = activated.activation_id() {
@@ -913,5 +940,37 @@ impl Stream for LibeiInputCapture {
             },
             Poll::Pending => self.event_rx.poll_recv(cx).map(|e| e.map(Result::Ok)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ReleaseSignal;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn release_request_survives_begin_delivery_before_session_waits() {
+        let signal = ReleaseSignal::default();
+        signal.set_capturing(true);
+        let release = signal.release(Duration::from_secs(1));
+        tokio::pin!(release);
+        tokio::select! {
+            biased;
+            _ = &mut release => panic!("release completed without an acknowledgement"),
+            _ = tokio::task::yield_now() => {}
+        }
+        tokio::time::timeout(Duration::from_millis(100), signal.requested())
+            .await
+            .expect("release request was lost before the session subscribed");
+        signal.complete();
+        assert!(release.await);
+    }
+
+    #[tokio::test]
+    async fn previous_completion_cannot_acknowledge_a_new_capture() {
+        let signal = ReleaseSignal::default();
+        signal.complete();
+        signal.set_capturing(true);
+        assert!(!signal.release(Duration::from_millis(10)).await);
     }
 }

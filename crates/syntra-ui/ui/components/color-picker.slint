@@ -12,6 +12,13 @@ export component ColorPicker inherits Rectangle {
     private property <float> saturation: 1;
     private property <float> brightness: 1;
     private property <color> draft: hsv(hue, saturation, brightness);
+    private property <bool> expanded: false;
+    function schedule-save() { save-timer.start(); save-timer.restart(); }
+    save-timer := Timer {
+        interval: 300ms;
+        running: false;
+        triggered => { self.stop(); root.selected(root.draft); }
+    }
     height: picker-content.preferred-height;
     vertical-stretch: 0;
     background: transparent;
@@ -25,21 +32,11 @@ export component ColorPicker inherits Rectangle {
                 root.hue = root.value.to-hsv().hue;
                 root.saturation = root.value.to-hsv().saturation;
                 root.brightness = root.value.to-hsv().value;
-                picker-popup.show();
+                root.expanded = !root.expanded;
             } }
-            AppButton { text: Translations.tr("settings-titlebar-default"); clicked => { root.reset(); picker-popup.close(); } }
+            AppButton { text: Translations.tr("settings-titlebar-default"); clicked => { save-timer.stop(); root.reset(); root.expanded = false; } }
         }
-    }
-    picker-popup := PopupWindow {
-        y: root.height;
-        width: 360px;
-        Rectangle {
-            background: Theme.surface;
-            border-color: Theme.border;
-            border-width: Theme.border-width;
-            border-radius: Theme.corner-radius;
-        }
-        VerticalLayout {
+    if root.expanded: VerticalLayout {
             padding: Theme.spacing;
             spacing: Theme.small-spacing;
             Text { text: root.label; color: Theme.text; font-size: Theme.body-size; font-weight: 600; }
@@ -53,22 +50,22 @@ export component ColorPicker inherits Rectangle {
                     function update-color() {
                         root.saturation = min(1, max(0, self.mouse-x / self.width));
                         root.brightness = 1 - min(1, max(0, self.mouse-y / self.height));
+                        root.schedule-save();
                     }
                     changed pressed => { if self.pressed { self.update-color(); } }
                     moved => { if self.pressed { self.update-color(); } }
                 }
             }
             Text { text: Translations.tr("color-hue"); color: Theme.muted-text; font-size: Theme.caption-size; vertical-stretch: 0; }
-            Slider { minimum: 0; maximum: 360; value: root.hue; changed(value) => { root.hue = value; } }
+            Slider { minimum: 0; maximum: 360; value: root.hue; changed(value) => { root.hue = value; root.schedule-save(); } }
             Text { text: Translations.tr("color-saturation"); color: Theme.muted-text; font-size: Theme.caption-size; vertical-stretch: 0; }
-            Slider { minimum: 0; maximum: 1; value: root.saturation; changed(value) => { root.saturation = value; } }
+            Slider { minimum: 0; maximum: 1; value: root.saturation; changed(value) => { root.saturation = value; root.schedule-save(); } }
             Text { text: Translations.tr("color-brightness"); color: Theme.muted-text; font-size: Theme.caption-size; vertical-stretch: 0; }
-            Slider { minimum: 0; maximum: 1; value: root.brightness; changed(value) => { root.brightness = value; } }
+            Slider { minimum: 0; maximum: 1; value: root.brightness; changed(value) => { root.brightness = value; root.schedule-save(); } }
             HorizontalLayout {
                 alignment: start; spacing: Theme.small-spacing;
                 Rectangle { width: Theme.control-height; height: Theme.control-height; background: root.draft; border-radius: Theme.small-radius; }
-                AppButton { text: Translations.tr("action-save"); primary: true; clicked => { root.selected(root.draft); picker-popup.close(); } }
-                AppButton { text: Translations.tr("action-cancel"); clicked => { picker-popup.close(); } }
+                AppButton { text: Translations.tr("action-close"); clicked => { root.expanded = false; } }
             }
         }
     }

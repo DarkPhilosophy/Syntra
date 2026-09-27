@@ -20,6 +20,14 @@ The daemon therefore remains useful when plugins are absent, malformed, incompat
 
 Only **file clipboard** integration needs plugins. The bundled GTK clipboard plugin observes desktop file selections and publishes URI-list data. The bundled FUSE plugin exposes a peer’s offered files as a local-looking folder. A plugin advertising `text/uri-list` is not evidence that it owns ordinary text or image clipboard traffic.
 
+File selections take precedence over their plain-text path representation in the legacy reader. The GTK helper reads file-selection streams through EOF, rejects oversized payloads rather than truncating them, and only remembers successfully parsed selections. It accepts both GNOME copied-files and standard URI-list offers (including those from Dolphin); it does not reclaim the clipboard when another application becomes its owner.
+
+The windowless GTK helper prefers the X11 clipboard backend, including the XWayland selection bridge inside a Wayland desktop. This does not switch the user's desktop or input backend to X11. A regular Wayland clipboard client only receives selection offers while it has keyboard focus, so a helper without a window cannot observe global file copies through that backend. The helper sets its own backend preference independently of an inherited dashboard `GDK_BACKEND` override; without the XWayland bridge, global observation requires working native portal integration.
+
+For received files, the daemon first tries native clipboard publication. If that attempt fails, it forwards the original file offer to the GTK helper instead of dropping it. This fallback preserves the transfer identifier, operation, and URI list. The helper reports selection-owner changes, read errors, and successful file publication through its stderr diagnostics; logging these events does not include file paths or payload contents.
+
+The GTK publication includes both a native GDK file list and `x-special/gnome-copied-files`. The latter carries `copy` or `cut` followed by newline-separated URIs, with no trailing newline: Nautilus rejects empty URI lines. The file-list representation remains available for Dolphin and GDK's URI-list/portal consumers.
+
 ## 2. Architecture and ownership
 
 ```mermaid

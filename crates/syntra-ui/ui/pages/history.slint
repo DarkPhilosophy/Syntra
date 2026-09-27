@@ -13,6 +13,7 @@ export struct HistoryItem {
     has-source-image: bool,
     kind-label: string,
     preview-text: string,
+    is-text: bool,
     thumbnail: image,
     has-thumbnail: bool,
     pinned: bool,
@@ -27,6 +28,12 @@ export component HistoryPage inherits Rectangle {
     in property <bool> has-more;
     in property <string> error-message;
     in property <string> operation-status;
+    in property <bool> detail-busy;
+    in property <string> detail-error;
+    in-out property <bool> image-visible;
+    in property <image> full-image;
+    callback open(string, string, bool);
+    private property <string> preview-tooltip: Translations.tr("history-preview-image");
     private property <bool> confirm-clear: false;
     private property <bool> loading-more: false;
     private property <bool> load-more-failed: false;
@@ -68,8 +75,17 @@ export component HistoryPage inherits Rectangle {
         if root.operation-status != "": Text { text: root.operation-status; color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; vertical-stretch: 0; }
         if !root.connected: Text { text: Translations.tr("history-disconnected"); color: Theme.warning; font-size: Theme.caption-size; wrap: word-wrap; vertical-stretch: 0; }
         if root.busy && !root.loading-more: Text { text: Translations.tr("history-loading"); color: Theme.muted-text; font-size: Theme.caption-size; vertical-stretch: 0; }
+        if root.detail-busy: Text { text: Translations.tr("history-loading"); color: Theme.muted-text; font-size: Theme.caption-size; }
+        if root.detail-error != "": Text { text: root.detail-error; color: Theme.danger; wrap: word-wrap; }
+        if root.image-visible: VerticalLayout {
+            height: max(240px, root.height * 0.6);
+            vertical-stretch: 0;
+            Image { source: root.full-image; image-fit: contain; vertical-stretch: 1; }
+            AppButton { text: Translations.tr("action-close"); clicked => { root.image-visible = false; } }
+        }
         if root.records.length == 0 && !root.busy: Text { text: Translations.tr("history-empty"); color: Theme.muted-text; font-size: Theme.body-size; wrap: word-wrap; vertical-stretch: 0; }
         history-list := ListView {
+            mouse-drag-pan-enabled: Theme.touch-input-active;
             // Virtualised: only the rows on screen are built. A plain layout
             // instantiated every record, including its decoded thumbnail,
             // which is what made opening History stutter.
@@ -109,8 +125,24 @@ export component HistoryPage inherits Rectangle {
                             AppButton { text: Translations.tr(record.pinned ? "history-unpin" : "history-pin"); enabled: root.connected && !root.busy; clicked => { root.pin(record.origin, record.sequence, !record.pinned); } }
                         }
                         Text { text: record.kind-label + " · " + record.timestamp; color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
-                        if record.has-thumbnail: Image { source: record.thumbnail; height: Theme.history-thumbnail-height; image-fit: contain; }
-                        if record.preview-text != "": Text { text: record.preview-text; color: Theme.text; font-size: Theme.body-size; wrap: word-wrap; overflow: elide; max-height: Theme.body-size * 5; }
+                        if record.has-thumbnail: Rectangle {
+                            height: Theme.history-thumbnail-height;
+                            Image { source: record.thumbnail; width: parent.width; height: parent.height; image-fit: contain; }
+                            TouchArea { mouse-cursor: pointer; clicked => { root.open(record.origin, record.sequence, false); } }
+                            Tooltip { text: @markdown("\{root.preview-tooltip}"); }
+                        }
+                        if record.preview-text != "": TextInput {
+                            text: record.preview-text;
+                            read-only: true;
+                            color: Theme.text;
+                            font-size: Theme.body-size;
+                            wrap: word-wrap;
+                            height: min(self.preferred-height, Theme.body-size * 8);
+                        }
+                        if record.is-text: HorizontalLayout {
+                            Rectangle { horizontal-stretch: 1; }
+                            AppButton { text: Translations.tr("history-copy"); enabled: root.connected && !root.detail-busy; clicked => { root.open(record.origin, record.sequence, true); } }
+                        }
                     }
                 }
             }

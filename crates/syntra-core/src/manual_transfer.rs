@@ -48,6 +48,7 @@ struct Record<P> {
     offer: Option<FileOffer>,
     outgoing: Option<OutgoingFile>,
     incoming: Option<IncomingTransfer>,
+    replacement: Option<(tempfile::TempDir, PathBuf)>,
     last_activity: Instant,
     last_notification: Instant,
     approval_deadline: Instant,
@@ -160,6 +161,7 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
                 offer: Some(offer),
                 outgoing: None,
                 incoming: None,
+                replacement: None,
                 last_activity: now,
                 last_notification: now,
                 approval_deadline: now + APPROVAL_TIMEOUT,
@@ -312,6 +314,7 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
             offer: None,
             outgoing: None,
             incoming: None,
+            replacement: None,
             last_activity: now,
             last_notification: now,
             approval_deadline: now + APPROVAL_TIMEOUT,
@@ -364,6 +367,61 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
         actions
     }
 
+    pub(crate) async fn overwrite(
+        &mut self,
+        fingerprint: &str,
+        transfer_id: u64,
+        directory: PathBuf,
+        now: Instant,
+    ) -> Vec<ManualAction<P>> {
+        let key = (fingerprint.to_owned(), transfer_id);
+        let Some(mut record) = self.records.remove(&key) else {
+            return Vec::new();
+        };
+        if record.direction != ClipboardTransferDirection::Receiving
+            || record.state != ManualTransferState::AwaitingAcceptance
+        {
+            self.store(record);
+            return Vec::new();
+        }
+        let target = directory.join(&record.name);
+        let staging = if directory.is_absolute() {
+            tempfile::Builder::new()
+                .prefix(".syntra-receive-")
+                .tempdir_in(&directory)
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "destination must be an absolute directory",
+            ))
+        };
+        let actions = match staging {
+            Ok(staging) => {
+                let mut actions =
+                    Self::prepare_receiver(&mut record, staging.path().to_path_buf(), now, false)
+                        .await;
+                if record.state == ManualTransferState::Transferring {
+                    record.destination = Some(directory.clone());
+                    record.replacement = Some((staging, target));
+                    for action in &mut actions {
+                        if let ManualAction::Notify(FrontendEvent::ManualTransferStatus(status)) =
+                            action
+                        {
+                            status.destination = Some(directory.clone());
+                        }
+                    }
+                }
+                actions
+            }
+            Err(error) => {
+                record.error = Some(error.to_string());
+                vec![Self::notify(&record)]
+            }
+        };
+        self.store(record);
+        actions
+    }
+
     async fn prepare_receiver(
         record: &mut Record<P>,
         directory: PathBuf,
@@ -395,7 +453,7 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
             let mut incoming = IncomingTransfer::new(
                 record.id,
                 vec![entry],
-                directory,
+                directory.clone(),
                 // The user explicitly accepted this transfer, so no cap applies.
                 None,
             )
@@ -424,6 +482,28 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
             }
             Err(error) => {
                 let message = local_receive_error(&error);
+                if automatic
+                    && matches!(&error, TransferError::Io(error) if error.kind() == std::io::ErrorKind::AlreadyExists)
+                    && tokio::fs::symlink_metadata(directory.join(&record.name))
+                        .await
+                        .is_ok()
+                {
+                    record.error = Some(message);
+                    record.destination = Some(directory.clone());
+                    return vec![
+                        Self::send(
+                            record,
+                            ProtoEvent::ManualFileDecision {
+                                transfer_id: record.id,
+                                decision: ManualDecision::Pending,
+                            },
+                        ),
+                        Self::notify(record),
+                        ManualAction::Notify(FrontendEvent::IncomingFileOffer(
+                            Self::offer_snapshot(record),
+                        )),
+                    ];
+                }
                 if automatic {
                     Self::terminal(record, ManualTransferState::Failed, Some(message), now);
                     record.final_result = Some((false, Some(REMOTE_PREPARATION_ERROR.into())));
@@ -693,6 +773,11 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
             .and_then(|()| incoming.finish());
         if let Err(error) = result {
             return Self::fail(record, local_receive_error(&error), true, now);
+        }
+        if let Some((staging, target)) = record.replacement.as_ref() {
+            if let Err(error) = tokio::fs::rename(staging.path().join(&record.name), target).await {
+                return Self::fail(record, error.to_string(), true, now);
+            }
         }
         Self::terminal(record, ManualTransferState::Completed, None, now);
         record.final_result = Some((true, None));
@@ -1020,6 +1105,7 @@ impl<P: Clone + Eq + Hash + Debug> ManualTransfers<P> {
         record.outgoing = None;
         record.offer = None;
         record.incoming = None;
+        record.replacement = None;
         record.retry_event = match record.state {
             ManualTransferState::Declined => Some(ProtoEvent::ManualFileDecision {
                 transfer_id: record.id,
@@ -1370,6 +1456,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn automatic_collision_requires_explicit_atomic_replacement() {
+        let directory = temp_dir("overwrite");
+        let target = directory.join("same.bin");
+        let now = Instant::now();
+        let settings = FileReceiveSettings {
+            auto_accept: true,
+            download_directory: directory.clone(),
+        };
+        let mut receiver = ManualTransfers::<u8>::new();
+        for (id, valid_digest) in [(1, false), (2, true)] {
+            fs::write(&target, b"original").unwrap();
+            let actions = receiver
+                .handle_protocol(
+                    1,
+                    "sender".into(),
+                    ProtoEvent::ManualFileOffer {
+                        transfer_id: id,
+                        file_name: "same.bin".into(),
+                        size: 5,
+                    },
+                    &settings,
+                    now,
+                )
+                .await;
+            assert!(actions.iter().any(|action| matches!(
+                action,
+                ManualAction::Notify(FrontendEvent::IncomingFileOffer(_))
+            )));
+            assert_eq!(receiver.pending_offers().len(), 1);
+            assert_eq!(fs::read(&target).unwrap(), b"original");
+            receiver
+                .overwrite("sender", id, directory.clone(), now)
+                .await;
+            receiver
+                .handle_protocol(
+                    1,
+                    "sender".into(),
+                    ProtoEvent::ManualFileChunk {
+                        transfer_id: id,
+                        offset: 0,
+                        data: b"hello".to_vec(),
+                    },
+                    &settings,
+                    now,
+                )
+                .await;
+            assert_eq!(fs::read(&target).unwrap(), b"original");
+            let digest = if valid_digest {
+                Sha256::digest(b"hello").into()
+            } else {
+                [0; 32]
+            };
+            receiver
+                .handle_protocol(
+                    1,
+                    "sender".into(),
+                    ProtoEvent::ManualFileComplete {
+                        transfer_id: id,
+                        sha256: digest,
+                    },
+                    &settings,
+                    now,
+                )
+                .await;
+            assert_eq!(
+                fs::read(&target).unwrap(),
+                if valid_digest {
+                    b"hello".as_slice()
+                } else {
+                    b"original".as_slice()
+                }
+            );
+        }
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
     async fn duplicate_request_resends_identical_bytes() {
         let directory = temp_dir("request-retry");
         let source = directory.join("source.bin");
@@ -1642,9 +1805,11 @@ mod tests {
     #[tokio::test]
     async fn autoaccept_preparation_failures_are_retained_bounded_and_replayed() {
         let directory = temp_dir("autoaccept-failure");
+        let blocked_directory = directory.join("not-a-directory");
+        fs::write(&blocked_directory, b"keep").unwrap();
         let auto_settings = FileReceiveSettings {
             auto_accept: true,
-            download_directory: directory.clone(),
+            download_directory: blocked_directory,
         };
         let mut receiver = ManualTransfers::<u8>::new();
         let now = Instant::now();

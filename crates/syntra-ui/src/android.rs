@@ -345,6 +345,14 @@ impl AndroidHostController {
                     "Manual file transfers are unavailable on this platform".into(),
                 ));
             }
+            FrontendRequest::GetHistoryContent(event_id) => {
+                events.push(FrontendEvent::HistoryContentResult {
+                    event_id,
+                    text: None,
+                    image: None,
+                    error: Some("History content is unavailable on this platform".into()),
+                });
+            }
             FrontendRequest::QueryHistory { .. }
             | FrontendRequest::SetHistoryPinned { .. }
             | FrontendRequest::GetHistoryImage(_)

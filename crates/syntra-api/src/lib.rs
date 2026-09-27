@@ -793,6 +793,17 @@ pub enum FrontendEvent {
         /// Carries the error for this protocol variant.
         error: Option<String>,
     },
+    /// Complete content requested for copying text or opening an image preview.
+    HistoryContentResult {
+        /// Requested record identity.
+        event_id: HistoryEventId,
+        /// Complete text, not the page preview.
+        text: Option<String>,
+        /// Original image payload, not the thumbnail.
+        image: Option<HistoryImage>,
+        /// Failure, including a record deleted since the request.
+        error: Option<String>,
+    },
     /// History operation failure. Global clear is reported here until peer coordination exists.
     HistoryError(String),
     /// Terminal result of an explicitly coordinated global clear.
@@ -902,6 +913,8 @@ pub enum FrontendRequest {
     },
     /// Fetch one image payload separately from bounded page snapshots.
     GetHistoryImage(HistoryEventId),
+    /// Fetch complete retained text or image after an explicit user action.
+    GetHistoryContent(HistoryEventId),
     /// Request a coordinated global clear. Fails without deleting until peer coordination exists.
     ClearGlobalHistory,
     /// globally enable or disable outgoing and incoming input sharing
@@ -923,6 +936,9 @@ pub enum FrontendRequest {
         transfer_id: u64,
         /// Carries the destination directory for this protocol variant.
         destination_directory: PathBuf,
+        /// Explicit user approval to atomically replace the named destination file.
+        #[serde(default)]
+        overwrite: bool,
     },
     /// This variant reports or requests the declinefiletransfer protocol state.
     DeclineFileTransfer {

@@ -194,7 +194,9 @@ impl InputEmulation {
     }
 
     pub async fn destroy(&mut self, handle: EmulationHandle) {
-        let _ = self.release_keys(handle).await;
+        if let Err(error) = self.release_keys(handle).await {
+            log::warn!("could not fully release keys for handle {handle}: {error}");
+        }
         if self.handles.remove(&handle) {
             self.pressed_keys.remove(&handle);
             self.emulation.destroy(handle).await
@@ -209,6 +211,7 @@ impl InputEmulation {
     }
 
     pub async fn release_keys(&mut self, handle: EmulationHandle) -> Result<(), EmulationError> {
+        let mut release_result = Ok(());
         if let Some(keys) = self.pressed_keys.get_mut(&handle) {
             let keys = keys.drain().collect::<Vec<_>>();
             for key in keys {
@@ -217,7 +220,11 @@ impl InputEmulation {
                     key,
                     state: 0,
                 });
-                self.emulation.consume(event, handle).await?;
+                if let Err(error) = self.emulation.consume(event, handle).await {
+                    if release_result.is_ok() {
+                        release_result = Err(error);
+                    }
+                }
                 if let Ok(key) = syntra_input_event::scancode::Linux::try_from(key) {
                     log::warn!("releasing stuck key: {key:?}");
                 }
@@ -230,8 +237,8 @@ impl InputEmulation {
             locked: 0,
             group: 0,
         });
-        self.emulation.consume(event, handle).await?;
-        Ok(())
+        let modifiers_result = self.emulation.consume(event, handle).await;
+        release_result.and(modifiers_result)
     }
     pub async fn clipboard_event(&mut self) -> Option<(String, Vec<u8>)> {
         match self.clipboard_rx.as_mut() {
@@ -296,4 +303,71 @@ trait Emulation: Send {
     async fn create(&mut self, handle: EmulationHandle);
     async fn destroy(&mut self, handle: EmulationHandle);
     async fn terminate(&mut self);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    struct FailingRelease {
+        events: Arc<Mutex<Vec<Event>>>,
+    }
+
+    #[async_trait]
+    impl Emulation for FailingRelease {
+        async fn consume(
+            &mut self,
+            event: Event,
+            _handle: EmulationHandle,
+        ) -> Result<(), EmulationError> {
+            let mut events = self.events.lock().await;
+            events.push(event);
+            if events.len() == 1 {
+                Err(std::io::Error::other("first release failed").into())
+            } else {
+                Ok(())
+            }
+        }
+
+        async fn create(&mut self, _handle: EmulationHandle) {}
+        async fn destroy(&mut self, _handle: EmulationHandle) {}
+        async fn terminate(&mut self) {}
+    }
+
+    #[tokio::test]
+    async fn release_attempts_every_key_and_modifiers_after_an_error() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut emulation = InputEmulation {
+            emulation: Box::new(FailingRelease {
+                events: Arc::clone(&events),
+            }),
+            selected: Backend::Dummy,
+            handles: HashSet::from([1]),
+            pressed_keys: HashMap::from([(1, HashSet::from([29, 42]))]),
+            clipboard_rx: None,
+        };
+
+        let error = emulation.release_keys(1).await.unwrap_err();
+        assert!(error.to_string().contains("first release failed"));
+        let events = events.lock().await;
+        let released = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Keyboard(KeyboardEvent::Key { key, state: 0, .. }) => Some(*key),
+                _ => None,
+            })
+            .collect::<HashSet<_>>();
+        assert_eq!(released, HashSet::from([29, 42]));
+        assert!(matches!(
+            events.last(),
+            Some(Event::Keyboard(KeyboardEvent::Modifiers {
+                depressed: 0,
+                latched: 0,
+                locked: 0,
+                group: 0,
+            }))
+        ));
+    }
 }
