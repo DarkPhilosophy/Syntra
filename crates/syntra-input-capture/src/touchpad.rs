@@ -58,6 +58,10 @@ pub fn sender() -> TouchpadSender {
 
 pub(crate) struct TouchpadInputCapture {
     rx: UnboundedReceiver<Item>,
+    /// Device currently being controlled. The page asks to begin on every
+    /// touch; re-sending Begin would restart the enter handshake and drop
+    /// the clicks and keys that follow it, so only the first one passes.
+    active: Option<Position>,
 }
 
 impl TouchpadInputCapture {
@@ -74,7 +78,7 @@ impl TouchpadInputCapture {
                 drop(tx);
                 rx
             });
-        Ok(Self { rx })
+        Ok(Self { rx, active: None })
     }
 }
 
@@ -100,6 +104,7 @@ impl Capture for TouchpadInputCapture {
     }
 
     async fn release(&mut self) -> Result<(), CaptureError> {
+        self.active = None;
         Ok(())
     }
 
@@ -112,6 +117,17 @@ impl Stream for TouchpadInputCapture {
     type Item = Result<Item, CaptureError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.rx.poll_recv(cx).map(|item| item.map(Ok))
+        loop {
+            let Some((position, event)) = std::task::ready!(self.rx.poll_recv(cx)) else {
+                return Poll::Ready(None);
+            };
+            if matches!(event, CaptureEvent::Begin) {
+                if self.active == Some(position) {
+                    continue;
+                }
+                self.active = Some(position);
+            }
+            return Poll::Ready(Some(Ok((position, event))));
+        }
     }
 }

@@ -2635,7 +2635,7 @@ fn bind_app_state_callbacks(
             use crate::touchpad;
             global.on_touchpad_begin(touchpad::begin);
             global.on_touchpad_motion(|zone, dx, dy| touchpad::motion(zone, dx, dy, 1.6));
-            global.on_touchpad_click(touchpad::click);
+            global.on_touchpad_button(touchpad::button);
             global.on_touchpad_scroll(touchpad::scroll);
             global.on_touchpad_type(|zone, text| touchpad::type_text(zone, &text));
             global.on_touchpad_backspace(touchpad::backspace);

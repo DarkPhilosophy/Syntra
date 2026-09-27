@@ -234,7 +234,7 @@ export global AppState {
     // Phone touchpad: zone is the controlled device's position index.
     callback touchpad-begin(int);
     callback touchpad-motion(int, float, float);
-    callback touchpad-click(int, int);
+    callback touchpad-button(int, int, bool);
     callback touchpad-scroll(int, float);
     callback touchpad-type(int, string);
     callback touchpad-backspace(int);

@@ -326,6 +326,12 @@ impl ListenTask {
     /// through its own edges, so a capture backend that is still starting or
     /// re-initialising must not bounce the peer out mid-movement.
     fn accepts_input(&self) -> bool {
+        // Android has no way to inject input yet (only the dummy backend),
+        // so it must never invite a computer to hand its pointer over:
+        // the pointer would vanish into a device that cannot move it.
+        if cfg!(target_os = "android") {
+            return false;
+        }
         input_accepted(
             self.input_sharing,
             self.emulation_proxy.emulation_ready.get(),

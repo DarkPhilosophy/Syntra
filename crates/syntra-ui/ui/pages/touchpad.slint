@@ -4,16 +4,46 @@ import { Translations } from "../localization.slint";
 import { AppButton } from "../components/controls.slint";
 import { ClientItem } from "../components/client-row.slint";
 
-// The phone as a touchpad and keyboard for one of the paired computers.
-// Drag to move, tap to click, two-button bar for left/right, a strip on the
-// right edge to scroll, and a text field whose keystrokes are typed remotely.
+// One mouse button of the drawn mouse. Pressing it holds the remote button
+// down until release, so drag-and-drop works as on a real mouse.
+component MouseButton inherits Rectangle {
+    in property <bool> enabled;
+    in property <string> label;
+    in property <length> radius-left;
+    in property <length> radius-right;
+    callback press();
+    callback release();
+    border-top-left-radius: root.radius-left;
+    border-top-right-radius: root.radius-right;
+    background: area.pressed ? Theme.accent.with-alpha(0.30) : Theme.elevated-surface;
+    animate background { duration: 80ms; }
+    Text {
+        text: root.label;
+        color: Theme.muted-text;
+        font-size: Theme.caption-size;
+        horizontal-alignment: center;
+        vertical-alignment: bottom;
+        y: parent.height - self.height - 10px;
+        width: parent.width;
+    }
+    area := TouchArea {
+        enabled: root.enabled;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down { root.press(); }
+            if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel { root.release(); }
+        }
+    }
+}
+
+// The phone as a mouse and keyboard for one of the paired computers.
+// The mouse is drawn as a mouse: two buttons at the top, a wheel between
+// them that turns as you drag it, and the body as the touch surface.
 export component TouchpadPage inherits Rectangle {
     in property <[ClientItem]> clients;
-    // Index into `clients` of the computer being controlled.
     in-out property <int> target: 0;
     callback begin(int);
     callback motion(int, float, float);
-    callback click(int, int);
+    callback button(int, int, bool);
     callback scroll(int, float);
     callback type-text(int, string);
     callback backspace(int);
@@ -22,6 +52,11 @@ export component TouchpadPage inherits Rectangle {
     private property <bool> has-target: root.clients.length > 0 && root.target < root.clients.length;
     private property <int> zone: root.has-target ? root.clients[root.target].position : 0;
     private property <bool> ready: root.has-target && root.clients[root.target].alive;
+    // Turn of the drawn wheel, following the scroll drags.
+    private property <angle> wheel-turn: 0deg;
+    // A zero-width placeholder keeps the text field non-empty, so the
+    // keyboard's delete key has something to remove and can be detected.
+    private property <string> sentinel: "\u{200B}";
 
     background: Theme.background;
 
@@ -37,7 +72,6 @@ export component TouchpadPage inherits Rectangle {
             vertical-stretch: 0;
         }
 
-        // Device picker: one chip per paired computer.
         if root.clients.length > 0: HorizontalLayout {
             spacing: Theme.small-spacing;
             alignment: start;
@@ -68,87 +102,143 @@ export component TouchpadPage inherits Rectangle {
             vertical-stretch: 0;
         }
 
-        // The pad itself, with a scroll strip on its right edge.
-        HorizontalLayout {
+        // The mouse.
+        mouse := Rectangle {
             vertical-stretch: 1;
-            spacing: Theme.small-spacing;
-            pad := Rectangle {
-                horizontal-stretch: 1;
-                border-radius: 18px;
-                background: Theme.surface;
+            private property <length> buttons-height: min(150px, self.height * 0.28);
+            private property <length> wheel-width: 34px;
+            border-top-left-radius: self.width / 2.4;
+            border-top-right-radius: self.width / 2.4;
+            border-bottom-left-radius: self.width / 3;
+            border-bottom-right-radius: self.width / 3;
+            clip: true;
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: body.pressed || mouse.dragging ? Theme.accent : Theme.border;
+            // Held left button started by a long press, released on lift.
+            private property <bool> dragging: false;
+            private property <length> last-x;
+            private property <length> last-y;
+            private property <length> press-x;
+            private property <length> press-y;
+            private property <bool> travelled: false;
+
+            MouseButton {
+                x: 0; y: 0;
+                width: (parent.width - mouse.wheel-width) / 2;
+                height: mouse.buttons-height;
+                radius-left: parent.width / 2.4;
+                enabled: root.has-target;
+                label: Translations.tr("touchpad-left");
+                press => { root.begin(root.zone); root.button(root.zone, 0, true); }
+                release => { root.button(root.zone, 0, false); }
+            }
+            MouseButton {
+                x: (parent.width + mouse.wheel-width) / 2; y: 0;
+                width: (parent.width - mouse.wheel-width) / 2;
+                height: mouse.buttons-height;
+                radius-right: parent.width / 2.4;
+                enabled: root.has-target;
+                label: Translations.tr("touchpad-right");
+                press => { root.begin(root.zone); root.button(root.zone, 1, true); }
+                release => { root.button(root.zone, 1, false); }
+            }
+            // The wheel: ridges scroll past as it turns.
+            wheel := Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: 18px;
+                width: mouse.wheel-width - 8px;
+                height: mouse.buttons-height - 36px;
+                border-radius: self.width / 2;
+                background: wheel-touch.pressed ? Theme.accent.with-alpha(0.35) : Theme.background;
                 border-width: 1px;
-                border-color: touch.pressed ? Theme.accent : Theme.border;
-                private property <length> last-x;
-                private property <length> last-y;
-                private property <length> press-x;
-                private property <length> press-y;
-                Text {
-                    text: Translations.tr("touchpad-hint");
-                    color: Theme.muted-text.with-alpha(0.6);
-                    font-size: Theme.caption-size;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                    wrap: word-wrap;
-                    width: parent.width - 32px;
-                    x: 16px;
+                border-color: Theme.border;
+                clip: true;
+                for i in [0, 1, 2, 3, 4, 5, 6, 7]: Rectangle {
+                    private property <float> phase: mod(i * 0.125 + root.wheel-turn / 360deg, 1.0);
+                    x: 4px;
+                    width: parent.width - 8px;
+                    height: 2px;
+                    border-radius: 1px;
+                    y: self.phase * parent.height;
+                    // Ridges near the ends curve away and fade, like a cylinder.
+                    opacity: sin(self.phase * 180deg);
+                    background: Theme.muted-text;
                 }
-                touch := TouchArea {
+                private property <length> last-y;
+                wheel-touch := TouchArea {
                     enabled: root.has-target;
                     pointer-event(event) => {
-                        if event.kind == PointerEventKind.down {
-                            // The first touch hands this computer's input
-                            // over to the phone.
-                            root.begin(root.zone);
-                            pad.last-x = self.mouse-x; pad.last-y = self.mouse-y;
-                            pad.press-x = self.mouse-x; pad.press-y = self.mouse-y;
-                        }
+                        if event.kind == PointerEventKind.down { root.begin(root.zone); wheel.last-y = self.mouse-y; }
                     }
                     moved => {
-                        root.motion(root.zone, (self.mouse-x - pad.last-x) / 1px, (self.mouse-y - pad.last-y) / 1px);
-                        pad.last-x = self.mouse-x; pad.last-y = self.mouse-y;
-                    }
-                    clicked => {
-                        // A tap without travel is a left click.
-                        if abs(self.mouse-x - pad.press-x) + abs(self.mouse-y - pad.press-y) < 8px {
-                            root.click(root.zone, 0);
-                        }
+                        let dy = (self.mouse-y - wheel.last-y) / 1px;
+                        root.scroll(root.zone, dy);
+                        root.wheel-turn += dy * 3deg;
+                        wheel.last-y = self.mouse-y;
                     }
                 }
             }
-            strip := Rectangle {
-                width: 44px;
-                border-radius: 18px;
-                background: Theme.surface;
-                border-width: 1px;
-                border-color: strip-touch.pressed ? Theme.accent : Theme.border;
-                private property <length> last-y;
-                Text { text: "⇕"; color: Theme.muted-text; font-size: 20px; horizontal-alignment: center; vertical-alignment: center; }
-                strip-touch := TouchArea {
-                    enabled: root.has-target;
-                    pointer-event(event) => {
-                        if event.kind == PointerEventKind.down {
-                            root.begin(root.zone);
-                            strip.last-y = self.mouse-y;
+            // Seam between the buttons and the body.
+            Rectangle { y: mouse.buttons-height; height: 1px; background: Theme.border; }
+
+            Text {
+                y: mouse.buttons-height;
+                height: parent.height - mouse.buttons-height;
+                width: parent.width;
+                text: mouse.dragging ? Translations.tr("touchpad-dragging") : Translations.tr("touchpad-hint");
+                color: Theme.muted-text.with-alpha(0.6);
+                font-size: Theme.caption-size;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+            long-press := Timer {
+                interval: 450ms;
+                running: false;
+                triggered => {
+                    self.running = false;
+                    if body.pressed && !mouse.travelled {
+                        mouse.dragging = true;
+                        root.button(root.zone, 0, true);
+                    }
+                }
+            }
+            body := TouchArea {
+                y: mouse.buttons-height;
+                height: parent.height - mouse.buttons-height;
+                enabled: root.has-target;
+                pointer-event(event) => {
+                    if event.kind == PointerEventKind.down {
+                        root.begin(root.zone);
+                        mouse.last-x = self.mouse-x; mouse.last-y = self.mouse-y;
+                        mouse.press-x = self.mouse-x; mouse.press-y = self.mouse-y;
+                        mouse.travelled = false;
+                        long-press.running = true;
+                    }
+                    if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel {
+                        long-press.running = false;
+                        if mouse.dragging {
+                            mouse.dragging = false;
+                            root.button(root.zone, 0, false);
+                        } else if !mouse.travelled && event.kind == PointerEventKind.up {
+                            // A tap is a left click.
+                            root.button(root.zone, 0, true);
+                            root.button(root.zone, 0, false);
                         }
                     }
-                    moved => {
-                        root.scroll(root.zone, (self.mouse-y - strip.last-y) / 1px);
-                        strip.last-y = self.mouse-y;
+                }
+                moved => {
+                    if abs(self.mouse-x - mouse.press-x) + abs(self.mouse-y - mouse.press-y) > 8px {
+                        mouse.travelled = true;
                     }
+                    root.motion(root.zone, (self.mouse-x - mouse.last-x) / 1px, (self.mouse-y - mouse.last-y) / 1px);
+                    mouse.last-x = self.mouse-x; mouse.last-y = self.mouse-y;
                 }
             }
         }
 
-        HorizontalLayout {
-            spacing: Theme.small-spacing;
-            vertical-stretch: 0;
-            height: 52px;
-            AppButton { horizontal-stretch: 1; text: Translations.tr("touchpad-left"); enabled: root.has-target; clicked => { root.begin(root.zone); root.click(root.zone, 0); } }
-            AppButton { horizontal-stretch: 1; text: Translations.tr("touchpad-right"); enabled: root.has-target; clicked => { root.begin(root.zone); root.click(root.zone, 1); } }
-        }
-
-        // Keystrokes typed here are sent one by one; the field itself stays
-        // empty so it never accumulates text.
+        // One row: type on the computer, delete, enter.
         HorizontalLayout {
             spacing: Theme.small-spacing;
             vertical-stretch: 0;
@@ -156,17 +246,21 @@ export component TouchpadPage inherits Rectangle {
                 horizontal-stretch: 1;
                 placeholder-text: Translations.tr("touchpad-type");
                 enabled: root.has-target;
+                text: root.sentinel;
                 edited(value) => {
-                    if value != "" {
-                        root.begin(root.zone);
+                    root.begin(root.zone);
+                    if value == "" {
+                        // The sentinel was deleted: the user pressed delete.
+                        root.backspace(root.zone);
+                    } else if value != root.sentinel {
                         root.type-text(root.zone, value);
-                        self.text = "";
                     }
+                    self.text = root.sentinel;
                 }
                 accepted => { root.enter(root.zone); }
             }
-            AppButton { text: "⌫"; enabled: root.has-target; clicked => { root.begin(root.zone); root.backspace(root.zone); } }
-            AppButton { text: "⏎"; enabled: root.has-target; clicked => { root.begin(root.zone); root.enter(root.zone); } }
+            AppButton { text: Translations.tr("touchpad-delete"); enabled: root.has-target; clicked => { root.begin(root.zone); root.backspace(root.zone); } }
+            AppButton { text: Translations.tr("touchpad-enter"); enabled: root.has-target; clicked => { root.begin(root.zone); root.enter(root.zone); } }
         }
     }
 }

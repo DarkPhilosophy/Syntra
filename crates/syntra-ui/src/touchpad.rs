@@ -56,12 +56,6 @@ pub fn button(zone: i32, which: i32, pressed: bool) {
     );
 }
 
-/// A full click: press and release.
-pub fn click(zone: i32, which: i32) {
-    button(zone, which, true);
-    button(zone, which, false);
-}
-
 /// Scrolls vertically by a finger displacement; down is positive.
 pub fn scroll(zone: i32, dy: f32) {
     // One detent is 120; a 40 px drag should feel like one wheel click.

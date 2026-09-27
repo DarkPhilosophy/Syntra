@@ -301,7 +301,7 @@ export component AppWindow inherits Window {
                     clients: AppState.clients;
                     begin(zone) => { AppState.touchpad-begin(zone); }
                     motion(zone, dx, dy) => { AppState.touchpad-motion(zone, dx, dy); }
-                    click(zone, which) => { AppState.touchpad-click(zone, which); }
+                    button(zone, which, pressed) => { AppState.touchpad-button(zone, which, pressed); }
                     scroll(zone, dy) => { AppState.touchpad-scroll(zone, dy); }
                     type-text(zone, text) => { AppState.touchpad-type(zone, text); }
                     backspace(zone) => { AppState.touchpad-backspace(zone); }
