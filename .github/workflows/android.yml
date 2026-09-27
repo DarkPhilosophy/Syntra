@@ -76,6 +76,10 @@ jobs:
         run: |
           export ANDROID_SDK_ROOT="$ANDROID_HOME"
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION"
+          # Named directly so the Slint backend's build script cannot pick
+          # a different SDK root than the one populated above.
+          export ANDROID_JAR="$ANDROID_HOME/platforms/android-$ANDROID_API_LEVEL/android.jar"
+          test -f "$ANDROID_JAR"
           gradle --no-daemon assembleDebug
         working-directory: crates/syntra-ui/android
 

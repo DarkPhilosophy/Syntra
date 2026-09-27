@@ -1,8 +1,9 @@
 import { Theme } from "../theme.slint";
 import { NavEntry } from "navigation.slint";
+import { Wordmark } from "wordmark.slint";
 
-// Phone header: the mark and the name of the current page. Window controls
-// do not exist on a phone, so there is nothing else to show.
+// Phone header. On the tab pages it carries the brand: the tab bar already
+// says where you are. Sub-pages show a back arrow and their own title.
 export component MobileTopBar inherits Rectangle {
     in property <string> title;
     in property <bool> can-go-back;
@@ -21,7 +22,12 @@ export component MobileTopBar inherits Rectangle {
             height: 32px;
             y: (parent.height - self.height) / 2;
         }
-        Text {
+        if !root.can-go-back: VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Wordmark { size: 20px; tracking: 0.08; }
+        }
+        if root.can-go-back: Text {
             text: root.title;
             color: Theme.text;
             font-size: 20px;

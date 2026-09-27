@@ -108,6 +108,9 @@ export component PeerMap inherits Rectangle {
             horizontal-alignment: center; vertical-alignment: center; overflow: elide;
         }
         drag := TouchArea {
+            // On touch screens a drag here is a page scroll; the position is
+            // set from the device editor instead.
+            enabled: Theme.desktop-platform;
             pointer-event(event) => {
                 if event.kind == PointerEventKind.down {
                     parent.press-x = self.mouse-x;

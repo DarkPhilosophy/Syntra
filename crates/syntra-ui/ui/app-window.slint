@@ -97,7 +97,17 @@ export component AppWindow inherits Window {
         let id = index == 0 ? "overview" : index == 1 ? "devices" : index == 2 ? "clipboard" : index == 3 ? "transfers" : "settings";
         root.navigate(id); root.selected-page = id;
     }
-    Rectangle {
+    // Android's back key arrives as Key.Back and bubbles up from whatever
+    // has focus. Handle it like a phone app: leave a sub-page, then return
+    // to Overview, and only let it close the app from there.
+    back-scope := FocusScope {
+    init => { if root.mobile { self.focus(); } }
+    key-pressed(event) => {
+        if event.text != Key.Back { return reject; }
+        if root.settings-child { root.go-tab(4); return accept; }
+        if root.selected-page != "overview" { root.go-tab(0); return accept; }
+        reject
+    }
     visible: root.launch-ready;
     x: root.mobile ? root.safe.left : 0;
     y: root.mobile ? root.safe.top : 0;
