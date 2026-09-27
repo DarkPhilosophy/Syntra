@@ -2,6 +2,7 @@ import { ScrollView } from "std-widgets.slint";
 import { Translations } from "../localization.slint";
 import { Theme } from "../theme.slint";
 import { AppButton } from "../components/controls.slint";
+import { Wordmark } from "../components/wordmark.slint";
 
 struct Credit {
     name: string,
@@ -103,11 +104,7 @@ export component AboutPage inherits Rectangle {
                         VerticalLayout {
                             alignment: center;
                             spacing: 4px;
-                            HorizontalLayout {
-                                alignment: start;
-                                Text { text: "SY"; color: Theme.accent; font-size: root.compact ? 26px : 34px; font-weight: 800; letter-spacing: 4px; }
-                                Text { text: "NTRA"; color: Theme.text; font-size: root.compact ? 26px : 34px; font-weight: 300; letter-spacing: 4px; }
-                            }
+                            Wordmark { size: root.compact ? 26px : 34px; }
                             Text { text: Translations.tr("welcome-motto"); color: Theme.muted-text; font-size: Theme.body-size; wrap: word-wrap; }
                             Text {
                                 text: Translations.tr("about-version") + " " + root.app-version + " · GPL-3.0-or-later";
@@ -125,16 +122,35 @@ export component AboutPage inherits Rectangle {
                         AppButton { text: Translations.tr("about-source"); clicked => { root.open-link("https://github.com/DarkPhilosophy/Syntra"); } }
                         AppButton { text: Translations.tr("about-issues"); clicked => { root.open-link("https://github.com/DarkPhilosophy/Syntra/issues"); } }
                         AppButton { text: Translations.tr("about-license"); clicked => { root.open-link("https://www.gnu.org/licenses/gpl-3.0.html"); } }
+                        AppButton { text: Translations.tr("about-disclaimer"); clicked => { root.open-link("https://github.com/DarkPhilosophy/Syntra/blob/main/.github/DISCLAIMER.md"); } }
                     }
                     if root.compact: VerticalLayout {
                         spacing: Theme.small-spacing;
                         AppButton { text: Translations.tr("about-source"); clicked => { root.open-link("https://github.com/DarkPhilosophy/Syntra"); } }
                         AppButton { text: Translations.tr("about-issues"); clicked => { root.open-link("https://github.com/DarkPhilosophy/Syntra/issues"); } }
                         AppButton { text: Translations.tr("about-license"); clicked => { root.open-link("https://www.gnu.org/licenses/gpl-3.0.html"); } }
+                        AppButton { text: Translations.tr("about-disclaimer"); clicked => { root.open-link("https://github.com/DarkPhilosophy/Syntra/blob/main/.github/DISCLAIMER.md"); } }
                     }
                 }
             }
 
+            // The warranty disclaimer, stated where people look for it.
+            Rectangle {
+                height: warranty.preferred-height + 2 * Theme.spacing;
+                border-radius: Theme.corner-radius;
+                background: Theme.warning.with-alpha(0.08);
+                border-width: 1px;
+                border-color: Theme.warning.with-alpha(0.35);
+                warranty := Text {
+                    x: Theme.spacing;
+                    width: parent.width - 2 * Theme.spacing;
+                    y: Theme.spacing;
+                    text: Translations.tr("about-warranty");
+                    color: Theme.text;
+                    font-size: Theme.body-size;
+                    wrap: word-wrap;
+                }
+            }
             Text {
                 text: Translations.tr("about-credits-intro");
                 color: Theme.muted-text;
@@ -199,7 +215,6 @@ export component AboutPage inherits Rectangle {
                 open(url) => { root.open-link(url); }
                 credits: [
                     { name: "Sunshine", role: "about-role-sunshine", url: "https://github.com/LizardByte/Sunshine" },
-                    { name: "lan-mouse", role: "about-role-lan-mouse", url: "https://github.com/feschber/lan-mouse" },
                 ];
             }
         }

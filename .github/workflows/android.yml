@@ -34,6 +34,10 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The legacy `tools` package no longer exists in the SDK channel;
+          # the default list still asks for it and fails.
+          packages: platform-tools
 
       - name: Install Android SDK and NDK
         run: sdkmanager "platform-tools" "platforms;android-${ANDROID_API_LEVEL}" "build-tools;35.0.0" "ndk;${ANDROID_NDK_VERSION}"

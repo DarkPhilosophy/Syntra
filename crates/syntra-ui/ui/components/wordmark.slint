@@ -1,0 +1,37 @@
+import { Theme } from "../theme.slint";
+
+// The brand name as drawn everywhere: light letters with the Y replaced by
+// the mark's two horns, the one accented glyph. One component, so the
+// splash, the sidebar and About can never drift apart again.
+export component Wordmark inherits HorizontalLayout {
+    in property <length> size: 34px;
+    in property <color> color: Theme.text;
+    // Extra tracking between letters, as a fraction of the size.
+    in property <float> tracking: 0.12;
+
+    alignment: start;
+    spacing: root.size * root.tracking;
+    accessible-role: text;
+    accessible-label: "Syntra";
+
+    for letter[index] in ["S", "Y", "N", "T", "R", "A"]: Rectangle {
+        width: index == 1 ? root.size * 0.875 : glyph.preferred-width;
+        height: root.size * 1.2;
+        glyph := Text {
+            visible: index != 1;
+            text: letter;
+            color: root.color;
+            font-size: root.size;
+            font-weight: 300;
+            vertical-alignment: center;
+            height: parent.height;
+        }
+        if index == 1: Image {
+            source: @image-url("../assets/splash/y-horns.svg");
+            // Matches the cap height of the light face.
+            width: parent.width;
+            height: root.size * 0.8;
+            y: (parent.height - self.height) / 2;
+        }
+    }
+}

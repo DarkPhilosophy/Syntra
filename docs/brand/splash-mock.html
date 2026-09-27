@@ -1,0 +1,172 @@
+<!doctype html><html lang="ro"><meta charset="utf-8"><title>Syntra splash mock</title>
+<style>
+:root{--accent:#a9c980;--cream:#eef0d9;--sage:#718355}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;font-family:"Inter","Segoe UI",system-ui,sans-serif;overflow:hidden}
+body{background:var(--desk);transition:background .4s}
+body[data-bg=wallpaper]{--desk:radial-gradient(1200px 700px at 20% 20%,#3b5b8c,transparent),radial-gradient(900px 700px at 85% 80%,#8c3b6b,transparent),linear-gradient(135deg,#1c2433,#3a2a3f)}
+body[data-bg=light]{--desk:linear-gradient(135deg,#dfe6ee,#f7f3ea)}
+body[data-bg=dark]{--desk:#0d0f12}
+body[data-bg=checker]{--desk:repeating-conic-gradient(#9a9a9a 0 25%,#6b6b6b 0 50%) 0 0/28px 28px}
+.bar{position:fixed;top:14px;left:50%;transform:translateX(-50%);display:flex;gap:6px;z-index:9;font-size:13px}
+.bar button{border:0;border-radius:999px;padding:7px 14px;background:#000a;color:#fff;cursor:pointer}
+.bar button.on{background:var(--accent);color:#111}
+.note{position:fixed;bottom:12px;left:50%;transform:translateX(-50%);color:#fffb;font-size:12px;background:#0007;padding:6px 12px;border-radius:999px}
+/* The splash itself: no panel, nothing but the drawing. */
+.splash{position:fixed;inset:0;display:grid;place-items:center;pointer-events:none}
+.stage{position:relative;width:560px;height:560px;filter:drop-shadow(0 6px 18px #000a)}
+svg.gears{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.g{transform-box:fill-box;transform-origin:center}
+.cw{animation:spin var(--d,20s) linear infinite}
+.ccw{animation:spin var(--d,20s) linear infinite reverse}
+@keyframes spin{to{transform:rotate(360deg)}}
+.breathe{animation:breathe 6s ease-in-out infinite}@keyframes breathe{50%{opacity:.55}}
+.mark{position:absolute;left:50%;top:44%;width:150px;height:150px;transform:translate(-50%,-50%) scale(0);animation:pop 1s .35s cubic-bezier(.2,1.4,.4,1) forwards}
+.mark svg{width:100%;height:100%;filter:drop-shadow(0 0 22px #a9c98066)}
+@keyframes pop{to{transform:translate(-50%,-50%) scale(1)}}
+.word{position:absolute;left:0;right:0;top:76%;text-align:center;font-size:64px;letter-spacing:12px;color:var(--cream);font-weight:300;text-shadow:0 2px 14px #000c}
+.word span{display:inline-block;opacity:0;transform:translateY(24px);animation:rise .6s cubic-bezier(.2,.9,.3,1) forwards}
+.word span.sy{color:var(--cream)}
+.word .yh{width:.86em;height:.8em;vertical-align:-.03em}
+.card{position:absolute;left:50%;top:74%;width:520px;height:172px;transform:translateX(-50%);border-radius:22px;background:#0f140dc7;border:1px solid #a9c98047;box-shadow:0 10px 34px #0008;opacity:0;animation:fade .7s .5s forwards}
+@keyframes rise{to{opacity:1;transform:none}}
+.motto{position:absolute;left:0;right:0;top:91%;text-align:center;color:#e8ecd9;font-size:18px;opacity:0;animation:fade .8s 1.2s forwards;text-shadow:0 1px 8px #000}
+.status{position:absolute;left:0;right:0;top:98%;text-align:center;color:#d6dcc4;font-size:13px;opacity:0;animation:fade .6s 1.5s forwards;text-shadow:0 1px 6px #000}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#f5c36b;margin-right:8px;animation:blink 1.2s infinite}
+@keyframes fade{to{opacity:1}} @keyframes blink{50%{opacity:.3}}
+.appear{opacity:0;animation:fade 1s forwards}
+</style>
+<body data-bg="wallpaper">
+<div class="bar">
+ <button data-b="wallpaper" class="on">Wallpaper</button><button data-b="light">Desktop luminos</button>
+ <button data-b="dark">Desktop întunecat</button><button data-b="checker">Transparență</button>
+ <button id="replay">↻ Reia</button>
+</div>
+<div class="splash"><div class="stage" id="stage">
+ <svg class="gears" viewBox="-280 -280 560 560" id="gears"></svg>
+ <div class="mark">LOGO</div>
+ <div class="card"></div>
+ <div class="word" id="word"></div>
+ <div class="motto">Move freely. Stay connected.</div>
+ <div class="status"><span class="dot"></span>Se conectează la serviciu · v0.11.0</div>
+</div></div>
+<div class="note">Mock: fereastra splash este complet transparentă — vezi desktopul prin ea</div>
+<script>
+const NS="http://www.w3.org/2000/svg";
+// Involute-ish gear outline: teeth as trapezoids on a circle, with a hub hole.
+function gear(r,teeth,depth){
+  const pts=[],step=Math.PI*2/teeth;
+  for(let i=0;i<teeth;i++){
+    const a=i*step;
+    const seg=[[a-step*.28,r-depth],[a-step*.16,r],[a+step*.16,r],[a+step*.28,r-depth],[a+step*.5,r-depth]];
+    for(const [t,rr] of seg) pts.push([Math.cos(t)*rr,Math.sin(t)*rr]);
+  }
+  return "M"+pts.map(p=>p[0].toFixed(2)+" "+p[1].toFixed(2)).join("L")+"Z";
+}
+function spokes(r,n){let d="";for(let i=0;i<n;i++){const a=i*Math.PI*2/n;d+=`M${(Math.cos(a)*r*.28).toFixed(1)} ${(Math.sin(a)*r*.28).toFixed(1)}L${(Math.cos(a)*r*.72).toFixed(1)} ${(Math.sin(a)*r*.72).toFixed(1)}`}return d}
+// Meshing gears: angular speed inversely proportional to teeth, opposite directions.
+const base=3; // seconds per tooth
+const specs=[
+ {x:0,y:-26,r:122,t:36,dir:"cw",stroke:"#3b2c14",w:1.5,op:1,delay:0,fill:"url(#brass)"},
+ {x:-170,y:-120,r:62,t:18,dir:"ccw",stroke:"#262b22",w:1.5,op:1,delay:.25,fill:"url(#steel)"},
+ {x:164,y:84,r:74,t:22,dir:"ccw",stroke:"#262b22",w:1.5,op:1,delay:.4,fill:"url(#verdigris)"},
+ {x:-128,y:118,r:38,t:12,dir:"cw",stroke:"#3b2c14",w:1.5,op:1,delay:.55,fill:"url(#brass)"},
+ {x:212,y:-40,r:30,t:10,dir:"cw",stroke:"#262b22",w:1.5,op:1,delay:.7,fill:"url(#steel)"},
+];
+const svg=document.getElementById("gears");
+svg.insertAdjacentHTML("afterbegin",`<defs>
+ <radialGradient id="brass" cx="35%" cy="30%" r="80%"><stop offset="0" stop-color="#f2e3b0"/><stop offset=".45" stop-color="#b8904a"/><stop offset="1" stop-color="#5b4220"/></radialGradient>
+ <radialGradient id="steel" cx="35%" cy="30%" r="80%"><stop offset="0" stop-color="#eef0d9"/><stop offset=".5" stop-color="#8e9a80"/><stop offset="1" stop-color="#3a4234"/></radialGradient>
+ <radialGradient id="verdigris" cx="35%" cy="30%" r="80%"><stop offset="0" stop-color="#d9ecb8"/><stop offset=".5" stop-color="#7f9c5a"/><stop offset="1" stop-color="#2f4121"/></radialGradient>
+</defs>`);
+// Thick partial rings sweeping around the mechanism, breathing as they turn.
+for(const [r,deg,w,color,op,d,dir,offset] of [
+  [235,80,7,"#a9c980",.55,9,"cw",0],[235,40,7,"#eef0d9",.4,9,"cw",180],
+  [205,220,4,"#eef0d9",.45,14,"ccw",0],[175,150,5,"#a9c980",.75,6,"cw",0]]){
+  const a1=deg*Math.PI/180, large=deg>180?1:0;
+  const g=document.createElementNS(NS,"g");g.setAttribute("transform","translate(0 -26)");
+  const inner=document.createElementNS(NS,"g");inner.setAttribute("class","g "+dir);
+  inner.style.setProperty("--d",d+"s");inner.style.transformOrigin="0 0";inner.style.transformBox="view-box";
+  inner.style.animationDelay=(-d*offset/360)+"s";
+  const arc=document.createElementNS(NS,"path");
+  arc.setAttribute("d",`M${r} 0A${r} ${r} 0 ${large} 1 ${(r*Math.cos(a1)).toFixed(2)} ${(r*Math.sin(a1)).toFixed(2)}`);
+  arc.setAttribute("fill","none");arc.setAttribute("stroke",color);arc.setAttribute("stroke-opacity",op);
+  arc.setAttribute("stroke-width",w);arc.setAttribute("stroke-linecap","round");
+  arc.setAttribute("class","breathe");arc.style.animationDuration=d+"s";
+  inner.appendChild(arc);g.appendChild(inner);g.setAttribute("class","appear");svg.appendChild(g);
+}
+for(const s of specs){
+  const g=document.createElementNS(NS,"g");g.setAttribute("transform",`translate(${s.x} ${s.y})`);
+  g.setAttribute("class","appear");g.style.animationDelay=s.delay+"s";
+  const inner=document.createElementNS(NS,"g");inner.setAttribute("class","g "+s.dir);
+  inner.style.setProperty("--d",(s.t*base/6).toFixed(1)+"s");
+  // Solid body with windows cut between the spokes, so the desktop still
+  // shows through the gear itself but the metal reads as metal.
+  const body=document.createElementNS(NS,"path");
+  const n=s.t>20?6:4, ri=s.r*.70, rh=s.r*.22;
+  let windows="";
+  for(let i=0;i<n;i++){
+    const a0=i*Math.PI*2/n+.22, a1=(i+1)*Math.PI*2/n-.22;
+    const P=(a,r)=>`${(Math.cos(a)*r).toFixed(1)} ${(Math.sin(a)*r).toFixed(1)}`;
+    windows+=`M${P(a0,rh+6)}L${P(a0,ri)}A${ri} ${ri} 0 0 1 ${P(a1,ri)}L${P(a1,rh+6)}A${rh+6} ${rh+6} 0 0 0 ${P(a0,rh+6)}Z`;
+  }
+  body.setAttribute("d",gear(s.r,s.t,s.r*.12)+windows+`M${-rh*.45} 0a${rh*.45} ${rh*.45} 0 1 0 ${rh*.9} 0a${rh*.45} ${rh*.45} 0 1 0 ${-rh*.9} 0`);
+  body.setAttribute("fill",s.fill);body.setAttribute("fill-rule","evenodd");
+  body.setAttribute("stroke",s.stroke);body.setAttribute("stroke-width",s.w);body.setAttribute("stroke-linejoin","round");
+  const p=body;
+  // Rim highlight for depth.
+  const hub=document.createElementNS(NS,"circle");hub.setAttribute("r",s.r*.82);hub.setAttribute("fill","none");
+  hub.setAttribute("stroke","#fff3");hub.setAttribute("stroke-width",1.2);
+  inner.append(p,hub);g.appendChild(inner);svg.appendChild(g);
+}
+document.querySelector(".mark").innerHTML=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="horn" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f4f6e4"/>
+      <stop offset="1" stop-color="#8fa574"/>
+    </linearGradient>
+    <linearGradient id="hair" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1d2a1a"/>
+      <stop offset="1" stop-color="#0b120a"/>
+    </linearGradient>
+    <linearGradient id="skin" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#eef1dc"/>
+      <stop offset="1" stop-color="#c9d3ac"/>
+    </linearGradient>
+  </defs>
+  <!-- horns: sweep up and out, the signature of the mark -->
+  <path fill="url(#horn)" d="M47 37C27 35 14 22 19 3 25 17 36 23 54 27Z"/>
+  <path fill="url(#horn)" d="M81 37C101 35 114 22 109 3 103 17 92 23 74 27Z"/>
+  <!-- hair silhouette, falling to the shoulders -->
+  <path fill="url(#hair)" d="M64 27C40 25 25 40 25 62L20 106Q31 115 45 112L64 102 83 112Q97 115 108 106L103 62C103 40 88 25 64 27Z"/>
+  <!-- face -->
+  <path fill="url(#skin)" d="M44 57 50 48 64 56 78 48 84 57 80 81Q75 94 64 101 53 94 48 81Z"/>
+  <!-- fringe, cut into three points -->
+  <path fill="#1d2a1a" d="M38 60Q41 35 64 37 87 35 90 60L81 53 72 47 64 61 56 47 47 53Z"/>
+  <!-- eyes: the green glow gives the mark its character -->
+  <path fill="#a9c980" d="M47 68Q53 63.5 59.5 68.5 53 72 47 68Z"/>
+  <path fill="#a9c980" d="M81 68Q75 63.5 68.5 68.5 75 72 81 68Z"/>
+  <path fill="none" stroke="#6f7f5a" stroke-width="2" stroke-linecap="round" d="M59.5 88Q64 90.5 68.5 88"/>
+  <!-- crest -->
+  <path fill="#a9c980" d="M64 17 68.5 24 64 31 59.5 24Z"/>
+</svg>`;
+const w=document.getElementById("word");
+"SYNTRA".split("").forEach((ch,i)=>{const s=document.createElement("span");if(i==1)s.innerHTML=`<svg class="yh" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- The "Y" of the wordmark drawn as the mark's two horns meeting on a stem. -->
+  <defs>
+    <linearGradient id="horn" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d6ebb0"/>
+      <stop offset="1" stop-color="#8fb567"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#horn)" d="M44 58C26 52 9 36 5 2 17 24 33 36 56 42Z"/>
+  <path fill="url(#horn)" d="M56 58C74 52 91 36 95 2 83 24 67 36 44 42Z"/>
+  <path fill="url(#horn)" d="M45.5 40H54.5V100H45.5Z"/>
+</svg>
+`;else s.textContent=ch;s.style.animationDelay=(.7+i*.08)+"s";w.appendChild(s)});
+document.querySelectorAll(".bar button[data-b]").forEach(b=>b.onclick=()=>{document.body.dataset.bg=b.dataset.b;document.querySelectorAll(".bar button[data-b]").forEach(x=>x.classList.toggle("on",x===b))});
+document.getElementById("replay").onclick=()=>{const st=document.getElementById("stage");const c=st.cloneNode(true);st.replaceWith(c)};
+// #t=<ms> jumps the timeline (for screenshots).
+const jump=/#t=(\d+)/.exec(location.hash);
+if(jump) requestAnimationFrame(()=>document.getAnimations().forEach(a=>a.currentTime=+jump[1]));
+</script></body></html>

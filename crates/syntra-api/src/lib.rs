@@ -34,7 +34,6 @@ use std::{
 use thiserror::Error;
 
 // Path resolution moved to `paths`; only the socket type is still needed here.
-#[cfg(unix)]
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -855,7 +854,12 @@ pub enum FrontendRequest {
     Create,
     /// Add a client for a peer found by discovery, reachable at its
     /// advertised addresses and port.
-    CreateDiscovered { addresses: Vec<IpAddr>, port: u16 },
+    CreateDiscovered {
+        /// Addresses the peer advertised.
+        addresses: Vec<IpAddr>,
+        /// Port the peer listens on.
+        port: u16,
+    },
     /// change the listen port (recreate udp listener)
     ChangePort(u16),
     /// remove a client

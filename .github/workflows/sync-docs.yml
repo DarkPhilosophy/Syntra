@@ -1,0 +1,45 @@
+name: Sync generated docs
+
+# Keeps the generated README sections and third-party notices in step with
+# Cargo metadata, so updating a crate or version never leaves them stale.
+# Commits made with GITHUB_TOKEN do not trigger further workflow runs.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/Cargo.toml"
+      - Cargo.lock
+      - .github/README.md
+      - .scripts/**
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-docs
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Regenerate
+        run: |
+          node .scripts/sync-readme.js
+          node .scripts/sync-licenses.js
+      - name: Commit changes
+        run: |
+          if git diff --quiet; then
+            echo "Generated docs are current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "docs: refresh generated sections"
+          git push

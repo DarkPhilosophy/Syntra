@@ -1,6 +1,7 @@
 //! Installation of the process-wide logger.
 
 use std::io::{self, Write};
+#[cfg(unix)]
 use std::path::PathBuf;
 use std::sync::mpsc::{SyncSender, sync_channel};
 

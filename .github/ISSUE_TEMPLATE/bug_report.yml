@@ -1,0 +1,77 @@
+name: Bug report
+description: Something does not work as documented.
+labels: [bug, triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report. Please search
+        [existing issues](https://github.com/DarkPhilosophy/Syntra/issues?q=is%3Aissue) first,
+        and **remove private data** (IP addresses, host names, user names, paths, fingerprints)
+        from everything you paste. Security problems go to the
+        [private advisory form](https://github.com/DarkPhilosophy/Syntra/security/advisories/new) instead.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. On machine A (Linux, GNOME) ...
+        2. Move the pointer to ...
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Syntra version
+      description: Shown under About, or the release/commit you built.
+      placeholder: 0.11.0 / commit abc1234
+    validations:
+      required: true
+  - type: dropdown
+    id: role
+    attributes:
+      label: Where does it happen?
+      options:
+        - Machine that captures (sends input)
+        - Machine that receives input
+        - Both / not sure
+        - Dashboard only
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: For each machine involved.
+      placeholder: |
+        OS and version:
+        Desktop / session (GNOME Wayland, KDE X11, ...):
+        Emulation backend (Diagnostics shows it):
+        Installed from (release, source, Nix):
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Diagnostics
+      description: Diagnostics → Copy all, around the time of the problem. Redact private data.
+      render: text
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Acknowledgements
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I removed private data from this report.
+          required: true
+        - label: I understand Syntra is provided as is, without warranty or support obligation ([disclaimer](https://github.com/DarkPhilosophy/Syntra/blob/main/.github/DISCLAIMER.md)).
+          required: true

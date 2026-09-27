@@ -165,10 +165,16 @@ mod tests {
     /// A second daemon must never unlink the endpoint of one that is alive.
     ///
     /// Deleting it leaves the first daemon listening on an inode no client
+    /// Both tests point the daemon socket at their own path through one
+    /// process-wide environment variable; run in parallel they overwrite
+    /// each other's value and see the other test's socket.
+    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     /// can reach: the process keeps running and every dashboard reports "no
     /// service is reachable" for as long as it lives.
     #[tokio::test]
     async fn a_listening_socket_is_never_removed() {
+        let _env = ENV_LOCK.lock().await;
         let directory = std::env::temp_dir().join("syntra-listen-live");
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).unwrap();
@@ -193,6 +199,7 @@ mod tests {
     /// could never start again after a crash.
     #[tokio::test]
     async fn an_abandoned_socket_is_replaced() {
+        let _env = ENV_LOCK.lock().await;
         let directory = std::env::temp_dir().join("syntra-listen-stale");
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).unwrap();
