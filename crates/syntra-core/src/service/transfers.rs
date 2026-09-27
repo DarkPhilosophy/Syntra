@@ -451,7 +451,7 @@ impl Service {
                                         gnome_files,
                                     ),
                                 ],
-                                Some(m),
+                                crate::emulation::ClipboardFallback::Adapter(m),
                             );
                             continue;
                         }

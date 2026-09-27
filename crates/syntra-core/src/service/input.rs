@@ -116,7 +116,7 @@ impl Service {
                                 ),
                                 ("text/plain".to_string(), text.as_bytes().to_vec()),
                             ],
-                            None,
+                            crate::emulation::ClipboardFallback::Local(content.clone()),
                         );
                     }
                     _ => self.clipboard.write(content),
@@ -179,7 +179,14 @@ impl Service {
                 self.native_file_selection = true;
                 self.handle_native_file_clipboard(mime_type, value);
             }
-            EmulationEvent::FileClipboardFallback(publication) => {
+            EmulationEvent::ClipboardFallback(crate::emulation::ClipboardFallback::Local(
+                content,
+            )) => {
+                self.clipboard.write(content);
+            }
+            EmulationEvent::ClipboardFallback(crate::emulation::ClipboardFallback::Adapter(
+                publication,
+            )) => {
                 if let Some(manager) = self.adapter_manager.as_ref() {
                     if let Err(error) =
                         manager.try_send(ManagerCommand::PublishFileClipboard(publication))

@@ -86,14 +86,27 @@ pub(crate) enum EmulationEvent {
         mime_type: String,
         value: String,
     },
-    /// Native publication failed; the service can use its clipboard adapter.
-    FileClipboardFallback(syntra_plugin_api::PublishFileClipboard),
+    /// Native publication failed or the backend has no clipboard; the
+    /// service publishes through its own clipboard path instead.
+    ClipboardFallback(ClipboardFallback),
     NativeClipboard(ClipboardContent),
     /// File-clipboard protocol traffic received from an authenticated listener peer.
     ClipboardProtocol {
         addr: SocketAddr,
         event: ProtoEvent,
     },
+}
+
+/// Where a clipboard goes when the emulation backend cannot publish it.
+///
+/// Kernel-level backends such as uinput have no clipboard at all, so every
+/// publication must name a working alternative rather than be dropped.
+#[derive(Debug)]
+pub(crate) enum ClipboardFallback {
+    /// Hand file URIs to the clipboard adapter plugin.
+    Adapter(syntra_plugin_api::PublishFileClipboard),
+    /// Write through the service's desktop clipboard.
+    Local(ClipboardContent),
 }
 
 enum EmulationRequest {
@@ -108,7 +121,7 @@ enum EmulationRequest {
     },
     PublishFileClipboard {
         contents: Vec<(String, Vec<u8>)>,
-        fallback: Option<syntra_plugin_api::PublishFileClipboard>,
+        fallback: ClipboardFallback,
     },
     Terminate,
 }
@@ -176,7 +189,7 @@ impl Emulation {
     pub(crate) fn publish_file_clipboard(
         &self,
         contents: Vec<(String, Vec<u8>)>,
-        fallback: Option<syntra_plugin_api::PublishFileClipboard>,
+        fallback: ClipboardFallback,
     ) {
         if self
             .request_tx
@@ -482,9 +495,7 @@ impl ListenTask {
                     EmulationRequest::PublishFileClipboard { contents, fallback } => {
                         if let Err(error) = self.emulation_proxy.publish_file_clipboard(contents).await {
                             log::warn!("native clipboard publication failed: {error}");
-                            if let Some(publication) = fallback {
-                                let _ = self.event_tx.send(EmulationEvent::FileClipboardFallback(publication));
-                            }
+                            let _ = self.event_tx.send(EmulationEvent::ClipboardFallback(fallback));
                         }
                     }
                     EmulationRequest::Terminate => break,
@@ -1161,12 +1172,13 @@ mod tests {
                         "text/uri-list".into(),
                         publication.uris[0].as_bytes().to_vec(),
                     )],
-                    Some(publication.clone()),
+                    super::ClipboardFallback::Adapter(publication.clone()),
                 );
                 let fallback = tokio::time::timeout(std::time::Duration::from_secs(2), async {
                     loop {
-                        if let super::EmulationEvent::FileClipboardFallback(value) =
-                            emulation.event().await
+                        if let super::EmulationEvent::ClipboardFallback(
+                            super::ClipboardFallback::Adapter(value),
+                        ) = emulation.event().await
                         {
                             break value;
                         }
