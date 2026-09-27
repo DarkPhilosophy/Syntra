@@ -1,13 +1,60 @@
 import { Translations } from "../localization.slint";
 import { Theme } from "../theme.slint";
 
-// Launch splash, told as the product's own story: a pointer leaves one
-// screen, arcs over the mark and lands on the other, while the name builds
-// up and the real connection state is reported underneath.
-//
-// Everything is driven from one clock (`animation-tick()`), not from timers,
-// so the scene plays even when the first frame arrives late and never
-// depends on a state flip that may have happened before anything rendered.
+// One meshing gear of the splash mechanism. Rotation comes from the shared
+// clock, so every gear stays in step and none of them depends on a timer.
+component Gear inherits Image {
+    // Centre relative to the stage centre, in design units.
+    in property <float> cx;
+    in property <float> cy;
+    in property <float> radius;
+    in property <int> teeth;
+    in property <float> direction: 1;
+    in property <float> t;
+    in property <float> appear-at;
+    in property <length> unit;
+    in property <length> stage-x;
+    in property <length> stage-y;
+
+    private property <float> grow: clamp((root.t - root.appear-at) / 700, 0, 1);
+    // Overshoots slightly before settling, like a part dropping into place.
+    private property <float> pop: root.grow <= 0 ? 0 : 1 + 2.2 * pow(root.grow - 1, 3) + 1.2 * pow(root.grow - 1, 2);
+
+    width: (root.radius + 2) * 2 * root.unit * max(0, root.pop);
+    height: self.width;
+    x: root.stage-x + root.cx * root.unit - self.width / 2;
+    y: root.stage-y + root.cy * root.unit - self.height / 2;
+    // Meshing gears turn at speeds inversely proportional to their teeth.
+    transform-rotation: root.direction * root.t / (root.teeth * 500) * 360deg;
+    opacity: clamp(root.grow * 2, 0, 1);
+}
+
+// A partial ring sweeping around the mechanism.
+component Arc inherits Image {
+    in property <float> radius;
+    in property <float> width-units;
+    in property <float> period;
+    in property <float> direction: 1;
+    in property <float> t;
+    in property <float> appear-at;
+    in property <length> unit;
+    in property <length> stage-x;
+    in property <length> stage-y;
+    in property <float> cy;
+
+    width: (root.radius + root.width-units) * 2 * root.unit;
+    height: self.width;
+    x: root.stage-x - self.width / 2;
+    y: root.stage-y + root.cy * root.unit - self.height / 2;
+    transform-rotation: root.direction * root.t / root.period * 360deg;
+    // Fades in, then breathes so the rings never look pasted on.
+    opacity: clamp((root.t - root.appear-at) / 800, 0, 1) * (0.7 + 0.3 * sin(root.t / root.period * 720deg));
+}
+
+// Launch splash: a brass-and-steel mechanism turning around the mark, the
+// name rising beneath it and the real service state below. The window is
+// transparent while it shows, and nothing here paints a background, so only
+// the drawing itself appears over the desktop.
 export component WelcomeOverlay inherits Rectangle {
     in-out property <bool> launch-visible: true;
     in property <bool> launch-ready: false;
@@ -15,21 +62,18 @@ export component WelcomeOverlay inherits Rectangle {
     in property <string> version;
 
     private property <duration> origin;
-    // Milliseconds since the splash appeared.
+    // Milliseconds since the splash appeared; one clock drives everything.
     private property <float> t: Theme.motion-enabled ? (animation-tick() - root.origin) / 1ms : 100000;
-    private property <bool> compact: self.width < Theme.compact-breakpoint;
-    private property <length> unit: root.compact ? 0.72px : 1px;
+    private property <length> unit: min(1px, min(self.width, self.height) / 620);
+    // Mechanism centre.
+    private property <length> sx: self.width / 2;
+    private property <length> sy: self.height / 2 - 70 * root.unit;
 
-    // 0..1 progress of a segment starting at `start` lasting `length` ms.
     pure function span(start: float, length: float) -> float {
         return clamp((root.t - start) / length, 0, 1);
     }
     pure function ease-out(x: float) -> float {
         return 1 - pow(1 - x, 3);
-    }
-    // Overshoots slightly before settling: gives the mark some weight.
-    pure function ease-back(x: float) -> float {
-        return 1 + 2.2 * pow(x - 1, 3) + 1.2 * pow(x - 1, 2);
     }
 
     init => { root.origin = animation-tick(); }
@@ -48,144 +92,81 @@ export component WelcomeOverlay inherits Rectangle {
         triggered => { root.launch-visible = false; }
     }
 
-    panel := Rectangle {
-        private property <float> enter: ease-out(span(0, 520));
-        width: min(parent.width - 32px, 620 * root.unit);
-        height: min(parent.height - 32px, 470 * root.unit);
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2 + (1 - self.enter) * 24px;
-        opacity: self.enter;
-        border-radius: 32px;
-        background: @linear-gradient(160deg, Theme.surface.with-alpha(0.92) 0%, Theme.background.with-alpha(0.94) 100%);
-        border-width: 1px;
-        border-color: Theme.accent.with-alpha(0.20);
-        drop-shadow-blur: 56px;
-        drop-shadow-color: #000000b0;
-        clip: true;
+    Arc { source: @image-url("../assets/splash/arc-outer.svg"); radius: 235; width-units: 7; period: 9000; direction: 1; t: root.t; appear-at: 100; unit: root.unit; stage-x: root.sx; stage-y: root.sy; cy: 0; }
+    Arc { source: @image-url("../assets/splash/arc-outer-b.svg"); radius: 235; width-units: 7; period: 9000; direction: 1; t: root.t + 4500; appear-at: 4600; unit: root.unit; stage-x: root.sx; stage-y: root.sy; cy: 0; }
+    Arc { source: @image-url("../assets/splash/arc-mid.svg"); radius: 205; width-units: 4; period: 14000; direction: -1; t: root.t; appear-at: 250; unit: root.unit; stage-x: root.sx; stage-y: root.sy; cy: 0; }
+    Arc { source: @image-url("../assets/splash/arc-inner.svg"); radius: 175; width-units: 5; period: 6000; direction: 1; t: root.t; appear-at: 400; unit: root.unit; stage-x: root.sx; stage-y: root.sy; cy: 0; }
 
-        private property <length> stage-y: self.height * 0.34;
+    // The train: each gear meshes with a neighbour and turns the other way.
+    Gear { source: @image-url("../assets/splash/gear-a.svg"); cx: -170; cy: -94; radius: 62; teeth: 18; direction: -1; t: root.t; appear-at: 250; unit: root.unit; stage-x: root.sx; stage-y: root.sy; }
+    Gear { source: @image-url("../assets/splash/gear-c.svg"); cx: -128; cy: 144; radius: 38; teeth: 12; direction: 1; t: root.t; appear-at: 550; unit: root.unit; stage-x: root.sx; stage-y: root.sy; }
+    Gear { source: @image-url("../assets/splash/gear-d.svg"); cx: 212; cy: -14; radius: 30; teeth: 10; direction: 1; t: root.t; appear-at: 700; unit: root.unit; stage-x: root.sx; stage-y: root.sy; }
+    Gear { source: @image-url("../assets/splash/gear-b.svg"); cx: 164; cy: 110; radius: 74; teeth: 22; direction: -1; t: root.t; appear-at: 400; unit: root.unit; stage-x: root.sx; stage-y: root.sy; }
+    Gear { source: @image-url("../assets/splash/gear-main.svg"); cx: 0; cy: 0; radius: 122; teeth: 36; direction: 1; t: root.t; appear-at: 0; unit: root.unit; stage-x: root.sx; stage-y: root.sy; }
 
-        // Two screens the pointer travels between.
-        for side[index] in [-1, 1]: Rectangle {
-            private property <float> show: ease-out(span(120 + index * 90, 500));
-            width: 118 * root.unit;
-            height: 78 * root.unit;
-            x: parent.width / 2 + side * (parent.width * 0.33) - self.width / 2 + side * (1 - self.show) * 30px;
-            y: panel.stage-y - self.height / 2;
-            opacity: self.show * 0.9;
-            border-radius: 12px;
-            border-width: 2px;
-            border-color: Theme.accent.with-alpha(0.45);
-            background: Theme.accent.with-alpha(0.05);
-            Rectangle {
-                y: parent.height + 8px;
-                x: (parent.width - self.width) / 2;
-                width: parent.width * 0.36;
-                height: 3px;
-                border-radius: 2px;
-                background: Theme.accent.with-alpha(0.45);
+    mark := Image {
+        source: @image-url("../assets/shell/syntra.svg");
+        private property <float> grow: span(350, 800);
+        private property <float> pop: self.grow <= 0 ? 0 : 1 + 2.2 * pow(self.grow - 1, 3) + 1.2 * pow(self.grow - 1, 2);
+        width: 150 * root.unit * max(0, self.pop);
+        height: self.width;
+        x: root.sx - self.width / 2;
+        y: root.sy - 8 * root.unit - self.height / 2;
+    }
+
+    // Wordmark: letters rise into place one after another.
+    wordmark := HorizontalLayout {
+        y: root.sy + 262 * root.unit;
+        x: 0;
+        width: root.width;
+        height: 76 * root.unit;
+        alignment: center;
+        spacing: 12 * root.unit;
+        for letter[index] in ["S", "Y", "N", "T", "R", "A"]: Rectangle {
+            private property <float> show: ease-out(span(700 + index * 80, 600));
+            width: glyph.preferred-width;
+            glyph := Text {
+                text: letter;
+                color: index < 2 ? Theme.accent : #eef0d9;
+                font-size: 64 * root.unit;
+                font-weight: index < 2 ? 800 : 300;
+                // No panel behind the text: a soft outline keeps it legible
+                // on light and busy wallpapers alike.
+                stroke: #00000070;
+                stroke-width: 1.5px;
+                stroke-style: outside;
+                opacity: parent.show;
+                vertical-alignment: center;
+                height: parent.height;
+                y: (1 - parent.show) * 26px;
             }
         }
+    }
 
-        // Halo behind the mark, breathing.
-        Rectangle {
-            private property <float> breath: 0.5 + 0.5 * sin(root.t * 0.18deg);
-            private property <length> size: (190 + 26 * self.breath) * root.unit * ease-out(span(200, 700));
-            width: self.size;
-            height: self.size;
-            x: (parent.width - self.width) / 2;
-            y: panel.stage-y - self.height / 2;
-            border-radius: self.width / 2;
-            background: @radial-gradient(circle, Theme.accent.with-alpha(0.34) 0%, Theme.accent.with-alpha(0.10) 50%, transparent 72%);
-            opacity: 0.55 + 0.45 * self.breath;
-        }
+    Text {
+        private property <float> show: ease-out(span(1200, 700));
+        y: wordmark.y + wordmark.height + 4px + (1 - self.show) * 10px;
+        x: 24px;
+        width: root.width - 48px;
+        text: Translations.tr("welcome-motto");
+        color: #e8ecd9;
+        stroke: #00000080;
+        stroke-width: 1px;
+        stroke-style: outside;
+        font-size: 19 * root.unit;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+        opacity: self.show;
+    }
 
-        // Orbiting sparks around the mark.
-        for spark[index] in [0, 1, 2]: Rectangle {
-            private property <angle> a: root.t * 0.12deg + index * 120deg;
-            private property <length> r: 92 * root.unit;
-            width: 7px;
-            height: 7px;
-            border-radius: 4px;
-            background: index == 0 ? Theme.accent : Theme.text;
-            x: parent.width / 2 + cos(self.a) * self.r - self.width / 2;
-            y: panel.stage-y + sin(self.a) * self.r * 0.42 - self.height / 2;
-            // Behind the mark on the far side of the orbit.
-            opacity: span(700, 500) * (sin(self.a) > 0 ? 0.95 : 0.35);
-        }
-
-        mark := Image {
-            source: @image-url("../assets/shell/syntra.svg");
-            private property <float> pop: ease-back(span(220, 760));
-            width: 150 * root.unit * max(0, self.pop);
-            height: self.width;
-            x: (parent.width - self.width) / 2;
-            y: panel.stage-y - self.height / 2;
-            opacity: span(220, 300);
-        }
-
-        // The pointer's journey: screen to screen over the mark, on a loop,
-        // leaving a fading trail.
-        for trail[index] in [4, 3, 2, 1, 0]: Image {
-            private property <float> travel: mod(max(0, root.t - 900 - trail * 38), 2100) / 2100;
-            // Linger a moment on each screen, move quickly between them.
-            private property <float> u: ease-out(clamp((self.travel - 0.08) / 0.62, 0, 1));
-            private property <length> from-x: parent.width / 2 - parent.width * 0.33;
-            private property <length> to-x: parent.width / 2 + parent.width * 0.33;
-            source: @image-url("../assets/shell/pointer.svg");
-            colorize: trail == 0 ? Theme.text : Theme.accent;
-            width: (trail == 0 ? 20 : 14 - trail) * root.unit;
-            height: self.width * 36 / 26;
-            x: self.from-x + (self.to-x - self.from-x) * self.u - 4px;
-            y: panel.stage-y - 14px - sin(self.u * 180deg) * 120 * root.unit;
-            opacity: span(900, 300) * (trail == 0 ? 1 : 0.5 - trail * 0.1) * (self.travel < 0.9 ? 1 : (1 - self.travel) * 10);
-        }
-
-        // Wordmark: letters rise into place one after another.
-        wordmark := HorizontalLayout {
-            y: parent.height * 0.62;
-            x: 0;
-            width: parent.width;
-            height: 76 * root.unit;
-            alignment: center;
-            spacing: 10 * root.unit;
-            for letter[index] in ["S", "Y", "N", "T", "R", "A"]: Rectangle {
-                private property <float> show: ease-out(span(420 + index * 70, 520));
-                width: glyph.preferred-width;
-                glyph := Text {
-                    text: letter;
-                    color: index < 2 ? Theme.accent : Theme.text;
-                    font-size: 60 * root.unit;
-                    font-weight: index < 2 ? 800 : 300;
-                    opacity: parent.show;
-                    vertical-alignment: center;
-                    height: parent.height;
-                    // Only the glyph moves; the layout slot stays put.
-                    y: (1 - parent.show) * 26px;
-                }
-            }
-        }
-
-        Text {
-            y: wordmark.y + wordmark.height + 2px + (1 - ease-out(span(900, 600))) * 10px;
-            x: 24px;
-            width: parent.width - 48px;
-            text: Translations.tr("welcome-motto");
-            color: Theme.muted-text;
-            font-size: 18 * root.unit;
-            horizontal-alignment: center;
-            wrap: word-wrap;
-            opacity: ease-out(span(900, 600));
-        }
-
-        // What the app is actually doing right now.
-        Rectangle {
-            y: parent.height - 52px;
-            x: 0;
-            width: parent.width;
-            height: 20px;
-            opacity: ease-out(span(1100, 500));
-          HorizontalLayout {
+    // What the app is actually doing right now.
+    Rectangle {
+        y: wordmark.y + wordmark.height + 44 * root.unit;
+        x: 0;
+        width: root.width;
+        height: 20px;
+        opacity: ease-out(span(1500, 500));
+        HorizontalLayout {
             alignment: center;
             spacing: 8px;
             Rectangle {
@@ -198,11 +179,13 @@ export component WelcomeOverlay inherits Rectangle {
             Text {
                 text: (root.connected ? Translations.tr("welcome-connected") : Translations.tr("welcome-connecting"))
                     + (root.version != "" ? "  ·  v" + root.version : "");
-                color: Theme.muted-text;
+                color: #d6dcc4;
+                stroke: #00000080;
+                stroke-width: 1px;
+                stroke-style: outside;
                 font-size: Theme.caption-size;
                 vertical-alignment: center;
             }
-          }
         }
     }
 }
