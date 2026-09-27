@@ -139,6 +139,7 @@ export global AppState {
     // and how it came to exist.
     in-out property <bool> daemon-known;
     in-out property <string> daemon-version;
+    in-out property <string> app-version;
     in-out property <string> daemon-executable;
     in-out property <string> daemon-pid;
     in-out property <string> daemon-socket;
@@ -229,6 +230,7 @@ export global AppState {
     callback set-clipboard-image(bool);
     callback set-clipboard-files(bool);
     callback set-independent-pointers(bool);
+    callback open-link(string);
     callback cancel-transfer(string);
     callback synchronize();
     callback request-permission();

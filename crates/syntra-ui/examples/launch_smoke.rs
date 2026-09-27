@@ -46,11 +46,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ => key,
         });
 
+    if std::env::var_os("SYNTRA_SMOKE_ABOUT").is_some() {
+        app.set_selected_page("about".into());
+    }
     let weak = app.as_weak();
     let timer = slint::Timer::default();
     timer.start(
         slint::TimerMode::SingleShot,
-        std::time::Duration::from_millis(300),
+        std::time::Duration::from_millis(1500),
         move || {
             let app = weak.upgrade().unwrap();
             snapshot(&app, "welcome");
@@ -81,13 +84,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 slint::Timer::single_shot(std::time::Duration::from_millis(100), move || {
                     let app = weak.upgrade().unwrap();
                     snapshot(&app, "main-dark-ice");
+
                     println!(
                         "STATE launch-visible={} mode={} palette={}",
                         app.get_launch_visible(),
                         app.global::<syntra_ui::app::Theme>().get_base_mode(),
                         app.global::<syntra_ui::app::Theme>().get_palette(),
                     );
-                    slint::quit_event_loop().unwrap();
+                    let weak = app.as_weak();
+                    slint::Timer::single_shot(std::time::Duration::from_millis(200), move || {
+                        let app = weak.upgrade().unwrap();
+                        snapshot(&app, "about");
+                        app.window().set_size(slint::LogicalSize::new(380.0, 760.0));
+                        let weak = app.as_weak();
+                        slint::Timer::single_shot(
+                            std::time::Duration::from_millis(200),
+                            move || {
+                                snapshot(&weak.upgrade().unwrap(), "about-compact");
+                                slint::quit_event_loop().unwrap();
+                            },
+                        );
+                    });
                 });
             });
         },

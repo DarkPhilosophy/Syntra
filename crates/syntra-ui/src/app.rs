@@ -97,10 +97,38 @@ fn acquire_frontend_instance(
     }
 }
 
+/// Opens an `https` link in the user's browser. Only credit and project
+/// links reach this, but anything else is refused rather than executed.
+fn open_link(url: &str) {
+    if !url.starts_with("https://") {
+        log::warn!("refusing to open non-https link");
+        return;
+    }
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+    let command = std::process::Command::new("xdg-open").arg(url).spawn();
+    #[cfg(target_os = "macos")]
+    let command = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(windows)]
+    let command = std::process::Command::new("explorer").arg(url).spawn();
+    #[cfg(target_os = "android")]
+    let command: std::io::Result<std::process::Child> = Err(std::io::Error::other(
+        "links are not supported on Android yet",
+    ));
+    match command {
+        // Reap the launcher so it does not linger as a zombie.
+        Ok(mut child) => {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
+        Err(error) => log::warn!("could not open link: {error}"),
+    }
+}
+
 fn schedule_launch_ready(app: &AppWindow) -> Option<Timer> {
     let display_time =
         std::time::Duration::from_millis(if app.global::<Theme>().get_motion_enabled() {
-            1200
+            2000
         } else {
             250
         });
@@ -2561,6 +2589,8 @@ fn bind_app_state_callbacks(
         let tx = tx.clone();
         let weak = weak.clone();
         let state = Arc::clone(&state);
+        global.set_app_version(env!("CARGO_PKG_VERSION").into());
+        global.on_open_link(|url| open_link(&url));
         global.on_add_discovered_peer(move |id| {
             let peer = state.lock().ok().and_then(|view| {
                 view.discovered_peers

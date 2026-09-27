@@ -14,6 +14,7 @@ import { PluginsPage, PluginEntry } from "pages/plugins.slint";
 import { SettingsPage } from "pages/settings.slint";
 import { AuthorizationPage } from "pages/authorization.slint";
 import { WelcomeOverlay } from "components/welcome.slint";
+import { AboutPage } from "pages/about.slint";
 import { Palette, ScrollView } from "std-widgets.slint";
 import { Avatar, AvatarRenderer } from "components/avatar.slint";
 import { IncomingFileDialog } from "components/incoming-file-dialog.slint";
@@ -41,7 +42,9 @@ export component AppWindow inherits Window {
     preferred-height: Theme.window-preferred-height;
     min-width: Theme.window-min-width;
     min-height: Theme.window-min-height;
-    background: Theme.background;
+    // Transparent while the splash floats over the desktop; the dashboard
+    // appears underneath as the splash fades.
+    background: root.launch-ready ? Theme.background : transparent;
     in-out property <string> selected-page: "overview";
     in-out property <bool> sidebar-expanded: true;
     in-out property <bool> window-maximized: false;
@@ -70,6 +73,8 @@ export component AppWindow inherits Window {
     // The sidebar runs the full height of the window and carries the
     // application mark at its top; the title bar occupies only the region to
     // its right, so the two never overlap.
+    Rectangle {
+    visible: root.launch-ready;
     HorizontalLayout {
         spacing: 0;
         Rectangle {
@@ -105,9 +110,10 @@ export component AppWindow inherits Window {
                         { id: "history", icon: @image-url("assets/navigation/history.svg"), label: Translations.tr("history-title") },
                         { id: "transfers", icon: @image-url("assets/navigation/transfers.svg"), label: Translations.tr("navigation-transfers") },
                         { id: "diagnostics", icon: @image-url("assets/navigation/diagnostics.svg"), label: Translations.tr("navigation-diagnostics") },
-                        { id: "plugins", icon: @image-url("assets/navigation/transfers.svg"), label: Translations.tr("navigation-plugins") },
+                        { id: "plugins", icon: @image-url("assets/navigation/plugins.svg"), label: Translations.tr("navigation-plugins") },
                         { id: "authorization", icon: @image-url("assets/navigation/authorization.svg"), label: Translations.tr("navigation-authorization") },
-                        { id: "settings", icon: @image-url("assets/navigation/settings.svg"), label: Translations.tr("navigation-settings") }
+                        { id: "settings", icon: @image-url("assets/navigation/settings.svg"), label: Translations.tr("navigation-settings") },
+                        { id: "about", icon: @image-url("assets/navigation/about.svg"), label: Translations.tr("navigation-about") }
                     ]: Rectangle {
                         height: Theme.nav-item-height;
                         vertical-stretch: 0;
@@ -405,6 +411,10 @@ export component AppWindow inherits Window {
                     port: "\{AppState.listen-port}";
                     port-changed(value) => { AppState.change-port(round(value.to-float())); }
                 }
+                if selected-page == "about": AboutPage {
+                    app-version: AppState.app-version;
+                    open-link(url) => { AppState.open-link(url); }
+                }
                 if selected-page == "authorization": AuthorizationPage {
                     local-fingerprint: AppState.local-fingerprint;
                     regenerated-fingerprint: AppState.regenerated-fingerprint;
@@ -417,6 +427,7 @@ export component AppWindow inherits Window {
                 }
             }
         }
+    }
     }
     WelcomeOverlay {
         x: 0;
