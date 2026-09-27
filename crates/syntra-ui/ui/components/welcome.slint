@@ -1,18 +1,38 @@
 import { Translations } from "../localization.slint";
 import { Theme } from "../theme.slint";
 
-// Launch splash. While it shows, the window background is transparent, so
-// only this floating panel is visible over the desktop.
+// Launch splash, told as the product's own story: a pointer leaves one
+// screen, arcs over the mark and lands on the other, while the name builds
+// up and the real connection state is reported underneath.
+//
+// Everything is driven from one clock (`animation-tick()`), not from timers,
+// so the scene plays even when the first frame arrives late and never
+// depends on a state flip that may have happened before anything rendered.
 export component WelcomeOverlay inherits Rectangle {
     in-out property <bool> launch-visible: true;
     in property <bool> launch-ready: false;
+    in property <bool> connected: false;
+    in property <string> version;
 
-    // Flips on the first frame so every entrance animation has a start state.
-    private property <bool> started: false;
-    // Toggles continuously to drive the halo pulse and the progress sweep.
-    private property <bool> pulse: false;
+    private property <duration> origin;
+    // Milliseconds since the splash appeared.
+    private property <float> t: Theme.motion-enabled ? (animation-tick() - root.origin) / 1ms : 100000;
     private property <bool> compact: self.width < Theme.compact-breakpoint;
-    private property <duration> motion: Theme.motion-enabled ? 1ms : 0ms;
+    private property <length> unit: root.compact ? 0.72px : 1px;
+
+    // 0..1 progress of a segment starting at `start` lasting `length` ms.
+    pure function span(start: float, length: float) -> float {
+        return clamp((root.t - start) / length, 0, 1);
+    }
+    pure function ease-out(x: float) -> float {
+        return 1 - pow(1 - x, 3);
+    }
+    // Overshoots slightly before settling: gives the mark some weight.
+    pure function ease-back(x: float) -> float {
+        return 1 + 2.2 * pow(x - 1, 3) + 1.2 * pow(x - 1, 2);
+    }
+
+    init => { root.origin = animation-tick(); }
 
     visible: launch-visible;
     background: transparent;
@@ -22,16 +42,6 @@ export component WelcomeOverlay inherits Rectangle {
     // Swallow input so nothing underneath reacts during the splash.
     TouchArea { width: parent.width; height: parent.height; }
 
-    start-timer := Timer {
-        interval: 16ms;
-        running: root.launch-visible && !root.started;
-        triggered => { root.started = true; }
-    }
-    pulse-timer := Timer {
-        interval: 900ms;
-        running: root.launch-visible && !root.launch-ready && Theme.motion-enabled;
-        triggered => { root.pulse = !root.pulse; }
-    }
     dismiss-timer := Timer {
         interval: Theme.motion-enabled ? 380ms : 1ms;
         running: root.launch-visible && root.launch-ready;
@@ -39,103 +49,160 @@ export component WelcomeOverlay inherits Rectangle {
     }
 
     panel := Rectangle {
-        width: min(parent.width - 32px, root.compact ? 360px : 560px);
-        height: min(parent.height - 32px, root.compact ? 380px : 460px);
+        private property <float> enter: ease-out(span(0, 520));
+        width: min(parent.width - 32px, 620 * root.unit);
+        height: min(parent.height - 32px, 470 * root.unit);
         x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2 + (root.started ? 0px : 18px);
+        y: (parent.height - self.height) / 2 + (1 - self.enter) * 24px;
+        opacity: self.enter;
         border-radius: 32px;
-        background: Theme.background.with-alpha(0.82);
+        background: @linear-gradient(160deg, Theme.surface.with-alpha(0.92) 0%, Theme.background.with-alpha(0.94) 100%);
         border-width: 1px;
-        border-color: Theme.accent.with-alpha(0.22);
-        drop-shadow-blur: 48px;
-        drop-shadow-color: #000000a0;
-        opacity: root.started ? 1 : 0;
-        animate y, opacity { duration: Theme.motion-enabled ? 520ms : 0ms; easing: ease-out; }
+        border-color: Theme.accent.with-alpha(0.20);
+        drop-shadow-blur: 56px;
+        drop-shadow-color: #000000b0;
+        clip: true;
 
-        // Halo behind the mark, breathing while the app loads.
-        halo := Rectangle {
-            private property <length> size: (root.compact ? 150px : 210px) * (root.pulse ? 1.08 : 0.94);
+        private property <length> stage-y: self.height * 0.34;
+
+        // Two screens the pointer travels between.
+        for side[index] in [-1, 1]: Rectangle {
+            private property <float> show: ease-out(span(120 + index * 90, 500));
+            width: 118 * root.unit;
+            height: 78 * root.unit;
+            x: parent.width / 2 + side * (parent.width * 0.33) - self.width / 2 + side * (1 - self.show) * 30px;
+            y: panel.stage-y - self.height / 2;
+            opacity: self.show * 0.9;
+            border-radius: 12px;
+            border-width: 2px;
+            border-color: Theme.accent.with-alpha(0.45);
+            background: Theme.accent.with-alpha(0.05);
+            Rectangle {
+                y: parent.height + 8px;
+                x: (parent.width - self.width) / 2;
+                width: parent.width * 0.36;
+                height: 3px;
+                border-radius: 2px;
+                background: Theme.accent.with-alpha(0.45);
+            }
+        }
+
+        // Halo behind the mark, breathing.
+        Rectangle {
+            private property <float> breath: 0.5 + 0.5 * sin(root.t * 0.18deg);
+            private property <length> size: (190 + 26 * self.breath) * root.unit * ease-out(span(200, 700));
             width: self.size;
             height: self.size;
             x: (parent.width - self.width) / 2;
-            y: mark.y + (mark.height - self.height) / 2;
+            y: panel.stage-y - self.height / 2;
             border-radius: self.width / 2;
-            background: @radial-gradient(circle, Theme.accent.with-alpha(0.30) 0%, Theme.accent.with-alpha(0.08) 55%, transparent 72%);
-            opacity: root.started ? (root.pulse ? 1 : 0.65) : 0;
-            animate width, height, opacity { duration: Theme.motion-enabled ? 900ms : 0ms; easing: ease-in-out; }
+            background: @radial-gradient(circle, Theme.accent.with-alpha(0.34) 0%, Theme.accent.with-alpha(0.10) 50%, transparent 72%);
+            opacity: 0.55 + 0.45 * self.breath;
+        }
+
+        // Orbiting sparks around the mark.
+        for spark[index] in [0, 1, 2]: Rectangle {
+            private property <angle> a: root.t * 0.12deg + index * 120deg;
+            private property <length> r: 92 * root.unit;
+            width: 7px;
+            height: 7px;
+            border-radius: 4px;
+            background: index == 0 ? Theme.accent : Theme.text;
+            x: parent.width / 2 + cos(self.a) * self.r - self.width / 2;
+            y: panel.stage-y + sin(self.a) * self.r * 0.42 - self.height / 2;
+            // Behind the mark on the far side of the orbit.
+            opacity: span(700, 500) * (sin(self.a) > 0 ? 0.95 : 0.35);
         }
 
         mark := Image {
             source: @image-url("../assets/shell/syntra.svg");
-            private property <length> size: root.compact ? 112px : 152px;
-            width: self.size * (root.started ? 1 : 0.82);
+            private property <float> pop: ease-back(span(220, 760));
+            width: 150 * root.unit * max(0, self.pop);
             height: self.width;
             x: (parent.width - self.width) / 2;
-            y: parent.height * 0.33 - self.height / 2;
-            opacity: root.started ? 1 : 0;
-            animate width, opacity { duration: Theme.motion-enabled ? 700ms : 0ms; easing: cubic-bezier(0.2, 0.9, 0.3, 1.2); }
+            y: panel.stage-y - self.height / 2;
+            opacity: span(220, 300);
         }
 
+        // The pointer's journey: screen to screen over the mark, on a loop,
+        // leaving a fading trail.
+        for trail[index] in [4, 3, 2, 1, 0]: Image {
+            private property <float> travel: mod(max(0, root.t - 900 - trail * 38), 2100) / 2100;
+            // Linger a moment on each screen, move quickly between them.
+            private property <float> u: ease-out(clamp((self.travel - 0.08) / 0.62, 0, 1));
+            private property <length> from-x: parent.width / 2 - parent.width * 0.33;
+            private property <length> to-x: parent.width / 2 + parent.width * 0.33;
+            source: @image-url("../assets/shell/pointer.svg");
+            colorize: trail == 0 ? Theme.text : Theme.accent;
+            width: (trail == 0 ? 20 : 14 - trail) * root.unit;
+            height: self.width * 36 / 26;
+            x: self.from-x + (self.to-x - self.from-x) * self.u - 4px;
+            y: panel.stage-y - 14px - sin(self.u * 180deg) * 120 * root.unit;
+            opacity: span(900, 300) * (trail == 0 ? 1 : 0.5 - trail * 0.1) * (self.travel < 0.9 ? 1 : (1 - self.travel) * 10);
+        }
+
+        // Wordmark: letters rise into place one after another.
         wordmark := HorizontalLayout {
-            y: parent.height * 0.55;
+            y: parent.height * 0.62;
             x: 0;
             width: parent.width;
-            height: root.compact ? 52px : 72px;
+            height: 76 * root.unit;
             alignment: center;
-            // The "SY" monogram carries the accent; the rest follows the text
-            // color. Kept literal because the wordmark is the brand itself.
-            Text {
-                text: "SY";
-                color: Theme.accent;
-                font-size: root.compact ? 44px : 64px;
-                font-weight: 800;
-                letter-spacing: root.started ? (root.compact ? 6px : 10px) : 28px;
-                opacity: root.started ? 1 : 0;
-                animate letter-spacing, opacity { duration: Theme.motion-enabled ? 800ms : 0ms; delay: Theme.motion-enabled ? 180ms : 0ms; easing: ease-out; }
-            }
-            Text {
-                text: "NTRA";
-                color: Theme.text;
-                font-size: root.compact ? 44px : 64px;
-                font-weight: 300;
-                letter-spacing: root.started ? (root.compact ? 6px : 10px) : 28px;
-                opacity: root.started ? 1 : 0;
-                animate letter-spacing, opacity { duration: Theme.motion-enabled ? 800ms : 0ms; delay: Theme.motion-enabled ? 180ms : 0ms; easing: ease-out; }
+            spacing: 10 * root.unit;
+            for letter[index] in ["S", "Y", "N", "T", "R", "A"]: Rectangle {
+                private property <float> show: ease-out(span(420 + index * 70, 520));
+                width: glyph.preferred-width;
+                glyph := Text {
+                    text: letter;
+                    color: index < 2 ? Theme.accent : Theme.text;
+                    font-size: 60 * root.unit;
+                    font-weight: index < 2 ? 800 : 300;
+                    opacity: parent.show;
+                    vertical-alignment: center;
+                    height: parent.height;
+                    // Only the glyph moves; the layout slot stays put.
+                    y: (1 - parent.show) * 26px;
+                }
             }
         }
 
-        motto := Text {
-            y: wordmark.y + wordmark.height + (root.started ? 6px : 16px);
+        Text {
+            y: wordmark.y + wordmark.height + 2px + (1 - ease-out(span(900, 600))) * 10px;
             x: 24px;
             width: parent.width - 48px;
             text: Translations.tr("welcome-motto");
             color: Theme.muted-text;
-            font-size: root.compact ? 15px : 19px;
+            font-size: 18 * root.unit;
             horizontal-alignment: center;
             wrap: word-wrap;
-            opacity: root.started ? 1 : 0;
-            animate y, opacity { duration: Theme.motion-enabled ? 700ms : 0ms; delay: Theme.motion-enabled ? 450ms : 0ms; easing: ease-out; }
+            opacity: ease-out(span(900, 600));
         }
 
-        // Indeterminate progress: a short highlight sweeping along a track.
-        track := Rectangle {
-            width: min(parent.width - 96px, 220px);
-            height: 4px;
-            x: (parent.width - self.width) / 2;
-            y: parent.height - 44px;
-            border-radius: 2px;
-            background: Theme.accent.with-alpha(0.14);
-            clip: true;
-            opacity: root.started ? 1 : 0;
-            animate opacity { duration: Theme.motion-enabled ? 500ms : 0ms; delay: Theme.motion-enabled ? 600ms : 0ms; }
+        // What the app is actually doing right now.
+        Rectangle {
+            y: parent.height - 52px;
+            x: 0;
+            width: parent.width;
+            height: 20px;
+            opacity: ease-out(span(1100, 500));
+          HorizontalLayout {
+            alignment: center;
+            spacing: 8px;
             Rectangle {
-                width: parent.width * 0.35;
-                height: parent.height;
-                x: root.pulse ? parent.width - self.width : 0px;
-                border-radius: 2px;
-                background: @linear-gradient(90deg, Theme.accent.with-alpha(0) 0%, Theme.accent 50%, Theme.accent.with-alpha(0) 100%);
-                animate x { duration: Theme.motion-enabled ? 900ms : 0ms; easing: ease-in-out; }
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: root.connected ? Theme.success : Theme.warning;
+                opacity: root.connected ? 1 : 0.45 + 0.55 * (0.5 + 0.5 * sin(root.t * 0.5deg));
             }
+            Text {
+                text: (root.connected ? Translations.tr("welcome-connected") : Translations.tr("welcome-connecting"))
+                    + (root.version != "" ? "  ·  v" + root.version : "");
+                color: Theme.muted-text;
+                font-size: Theme.caption-size;
+                vertical-alignment: center;
+            }
+          }
         }
     }
 }

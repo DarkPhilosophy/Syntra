@@ -404,3 +404,7 @@ about-role-lan-mouse = The project Syntra was originally forked from
 navigation-group-connect = CONNECT
 navigation-group-share = SHARE
 navigation-group-system = SYSTEM
+diagnostics-copy-all = Copy all
+diagnostics-copy = Copy
+welcome-connecting = Connecting to the service
+welcome-connected = Service connected

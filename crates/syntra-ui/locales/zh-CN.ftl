@@ -404,3 +404,7 @@ about-role-lan-mouse = Syntra 最初分叉自的项目
 navigation-group-connect = 连接
 navigation-group-share = 共享
 navigation-group-system = 系统
+diagnostics-copy-all = 全部复制
+diagnostics-copy = 复制
+welcome-connecting = 正在连接服务
+welcome-connected = 服务已连接

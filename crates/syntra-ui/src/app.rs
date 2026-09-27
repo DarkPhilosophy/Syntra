@@ -125,6 +125,36 @@ fn open_link(url: &str) {
     }
 }
 
+/// One diagnostic as a single plain-text line, for copying.
+fn diagnostic_line(entry: &DiagnosticEntry) -> String {
+    [
+        entry.timestamp.as_str(),
+        entry.level.as_str(),
+        entry.stage.as_str(),
+        entry.direction.as_str(),
+        entry.correlation.as_str(),
+        entry.message.as_str(),
+    ]
+    .into_iter()
+    .filter(|part| !part.is_empty())
+    .collect::<Vec<_>>()
+    .join("  ")
+}
+
+/// Log records carry UTC RFC 3339 stamps; people read local wall time.
+/// Today's records show only the time, older ones the day as well.
+fn local_log_time(stamp: &str) -> String {
+    let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(stamp) else {
+        return stamp.to_owned();
+    };
+    let local = parsed.with_timezone(&chrono::Local);
+    if local.date_naive() == chrono::Local::now().date_naive() {
+        local.format("%H:%M:%S%.3f").to_string()
+    } else {
+        local.format("%d.%m %H:%M:%S").to_string()
+    }
+}
+
 fn schedule_launch_ready(app: &AppWindow) -> Option<Timer> {
     let display_time =
         std::time::Duration::from_millis(if app.global::<Theme>().get_motion_enabled() {
@@ -1186,7 +1216,7 @@ fn project_live_diagnostics(
         .filtered(DIAGNOSTIC_VISIBLE_ROWS)
         .into_iter()
         .map(|entry| DiagnosticEntry {
-            timestamp: entry.timestamp.into(),
+            timestamp: local_log_time(&entry.timestamp).into(),
             level: entry.level.into(),
             stage: entry.stage.into(),
             direction: entry.direction.into(),
@@ -2590,6 +2620,21 @@ fn bind_app_state_callbacks(
         let weak = weak.clone();
         let state = Arc::clone(&state);
         global.set_app_version(env!("CARGO_PKG_VERSION").into());
+        {
+            let weak = weak.clone();
+            global.on_diagnostics_copy_all(move || {
+                let text = DIAGNOSTIC_MODEL.with(|model| {
+                    model
+                        .iter()
+                        .map(|entry| diagnostic_line(&entry))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                });
+                if let Some(app) = weak.upgrade() {
+                    app.invoke_history_copy_text(text.into());
+                }
+            });
+        }
         global.on_open_link(|url| open_link(&url));
         global.on_add_discovered_peer(move |id| {
             let peer = state.lock().ok().and_then(|view| {

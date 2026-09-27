@@ -74,6 +74,11 @@ pub(crate) struct UinputEmulation {
     /// shared pointer.
     independent: bool,
     pointers: HashMap<EmulationHandle, PeerPointer>,
+    /// Pens of peers that left. Handles are per-session, so every re-entry
+    /// would otherwise create a new device, swallow motion while the
+    /// compositor opens it and restart the cursor from the middle of the
+    /// screen. Reusing one keeps it where it left, ready immediately.
+    idle: Vec<PeerPointer>,
 }
 
 impl UinputEmulation {
@@ -85,6 +90,7 @@ impl UinputEmulation {
             scroll: ScrollAccumulator::default(),
             independent: false,
             pointers: HashMap::new(),
+            idle: Vec::new(),
         })
     }
 
@@ -103,15 +109,18 @@ impl UinputEmulation {
         }
         let pointer = match self.pointers.entry(handle) {
             std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                let area = pointer_area();
-                log::info!(
-                    "creating independent pointer for peer {handle} over {}x{}",
-                    area.0,
-                    area.1
-                );
-                entry.insert(PeerPointer::create(handle, area)?)
-            }
+            std::collections::hash_map::Entry::Vacant(entry) => match self.idle.pop() {
+                Some(pointer) => entry.insert(pointer),
+                None => {
+                    let area = pointer_area();
+                    log::info!(
+                        "creating independent pointer for peer {handle} over {}x{}",
+                        area.0,
+                        area.1
+                    );
+                    entry.insert(PeerPointer::create(handle, area)?)
+                }
+            },
         };
         let events = pointer.translate(pointer_event);
         pointer.device.write_events(&events)?;
@@ -566,6 +575,7 @@ impl Emulation for UinputEmulation {
         } else {
             // Dropping a peer pointer lifts its pen, releasing its buttons.
             self.pointers.clear();
+            self.idle.clear();
         }
         self.independent = enabled;
     }
@@ -592,12 +602,23 @@ impl Emulation for UinputEmulation {
     // mice. Independent pointers are created lazily on first motion.
     async fn create(&mut self, _handle: EmulationHandle) {}
     async fn destroy(&mut self, handle: EmulationHandle) {
-        self.pointers.remove(&handle);
+        if let Some(mut pointer) = self.pointers.remove(&handle) {
+            // Hide the cursor now; keep the device for the next entry.
+            let _ = pointer.leave();
+            pointer.pen.edge = None;
+            if self.idle.len() < MAX_IDLE_POINTERS {
+                self.idle.push(pointer);
+            }
+        }
     }
     async fn terminate(&mut self) {
         self.pointers.clear();
+        self.idle.clear();
     }
 }
+
+/// Idle pen devices kept for reuse; more peers than this simply recreate.
+const MAX_IDLE_POINTERS: usize = 4;
 
 #[cfg(test)]
 mod tests {

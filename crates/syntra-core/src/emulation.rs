@@ -160,6 +160,7 @@ impl Emulation {
             request_rx,
             event_tx,
             capture_ready: false,
+            independent_pointers: false,
             input_sharing: true,
             active_inputs: HashSet::new(),
             entered_from: HashMap::new(),
@@ -249,6 +250,8 @@ struct ListenTask {
     request_rx: Receiver<EmulationRequest>,
     event_tx: Sender<EmulationEvent>,
     capture_ready: bool,
+    /// Peers drive their own cursor, which returns control by itself.
+    independent_pointers: bool,
     input_sharing: bool,
     active_inputs: HashSet<SocketAddr>,
     /// Side of this screen each active peer entered from.
@@ -304,7 +307,29 @@ fn start_clipboard_transfer(
     transfers.insert((addr, transfer_id), transfer);
 }
 
+fn input_accepted(
+    sharing: bool,
+    emulation_ready: bool,
+    capture_ready: bool,
+    independent: bool,
+) -> bool {
+    sharing && emulation_ready && (capture_ready || independent)
+}
+
 impl ListenTask {
+    /// Whether a peer may drive input here. Local capture is only needed to
+    /// hand the shared pointer back; an independent pointer returns control
+    /// through its own edges, so a capture backend that is still starting or
+    /// re-initialising must not bounce the peer out mid-movement.
+    fn accepts_input(&self) -> bool {
+        input_accepted(
+            self.input_sharing,
+            self.emulation_proxy.emulation_ready.get(),
+            self.capture_ready,
+            self.independent_pointers,
+        )
+    }
+
     async fn run(mut self) {
         let mut interval = tokio::time::interval(Duration::from_secs(5));
         let mut last_response = HashMap::new();
@@ -318,10 +343,7 @@ impl ListenTask {
                         last_response.insert(addr, Instant::now());
                         match event {
                             ProtoEvent::Enter(pos) => {
-                                if !self.input_sharing
-                                    || !self.emulation_proxy.emulation_ready.get()
-                                    || !self.capture_ready
-                                {
+                                if !self.accepts_input() {
                                     log::warn!(
                                         "rejecting entry from {addr}: remote input is unavailable"
                                     );
@@ -364,11 +386,7 @@ impl ListenTask {
                                 self.listener
                                     .reply(
                                         addr,
-                                        ProtoEvent::Pong(
-                                            self.input_sharing
-                                                && self.emulation_proxy.emulation_ready.get()
-                                                && self.capture_ready,
-                                        ),
+                                        ProtoEvent::Pong(self.accepts_input()),
                                     )
                                     .await
                             }
@@ -523,6 +541,7 @@ impl ListenTask {
                         self.capture_ready = ready;
                     }
                     EmulationRequest::SetIndependentPointers(enabled) => {
+                        self.independent_pointers = enabled;
                         self.emulation_proxy.set_independent_pointers(enabled);
                     }
                     EmulationRequest::SetInputSharing(enabled) => {
@@ -1078,6 +1097,25 @@ mod tests {
         ClipboardTransfer, ClipboardTransferKind, HashMap, SocketAddr, decode_native_image,
         start_clipboard_transfer,
     };
+
+    /// Capture flapping on this machine must not eject a peer that drives
+    /// its own pointer, but still gates the shared pointer, whose way back
+    /// depends on it.
+    #[test]
+    fn capture_readiness_only_gates_the_shared_pointer() {
+        use super::input_accepted;
+        assert!(input_accepted(true, true, false, true));
+        assert!(!input_accepted(true, true, false, false));
+        assert!(input_accepted(true, true, true, false));
+        assert!(
+            !input_accepted(true, false, true, true),
+            "emulation must be ready"
+        );
+        assert!(
+            !input_accepted(false, true, true, true),
+            "sharing must be on"
+        );
+    }
 
     /// A peer that starts transfer after transfer without finishing any must
     /// hold at most one reassembly buffer, and none reserved at the declared

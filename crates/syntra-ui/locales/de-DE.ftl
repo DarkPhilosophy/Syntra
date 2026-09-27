@@ -404,3 +404,7 @@ about-role-lan-mouse = Das Projekt, von dem Syntra ursprünglich abgespalten wur
 navigation-group-connect = VERBINDEN
 navigation-group-share = TEILEN
 navigation-group-system = SYSTEM
+diagnostics-copy-all = Alles kopieren
+diagnostics-copy = Kopieren
+welcome-connecting = Verbindung zum Dienst
+welcome-connected = Dienst verbunden

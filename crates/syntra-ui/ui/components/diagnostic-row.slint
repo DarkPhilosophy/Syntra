@@ -62,12 +62,20 @@ export component DiagnosticRow inherits Rectangle {
     in property <DiagnosticEntry> entry;
     in property <bool> compact: false;
     in property <bool> header: false;
+    in property <bool> selected: false;
+    callback clicked();
     height: max(compact || header ? 36px : 44px, Theme.body-size * 2 + Theme.small-spacing);
     vertical-stretch: 0;
     horizontal-stretch: 1;
     clip: true;
-    background: header ? Theme.elevated-surface : entry.level == "error" ? Theme.danger.with-alpha(0.08) : entry.level == "warning" ? Theme.warning.with-alpha(0.06) : transparent;
+    background: header ? Theme.elevated-surface : root.selected ? Theme.accent.with-alpha(0.16) : row-touch.has-hover ? Theme.text.with-alpha(0.04) : entry.level == "error" ? Theme.danger.with-alpha(0.08) : entry.level == "warning" ? Theme.warning.with-alpha(0.06) : transparent;
     Rectangle { y: parent.height - 1px; height: 1px; background: Theme.border; }
+    // Below the cells so header resize handles keep working.
+    row-touch := TouchArea {
+        enabled: !root.header;
+        mouse-cursor: root.header ? default : pointer;
+        clicked => { root.clicked(); }
+    }
     HorizontalLayout {
         spacing: 0px;
         for value[index] in [root.entry.timestamp, root.entry.level, root.entry.stage, root.entry.direction, root.entry.correlation, root.entry.message]: DiagnosticCell {

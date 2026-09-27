@@ -404,3 +404,7 @@ about-role-lan-mouse = Proiectul din care Syntra a pornit ca fork
 navigation-group-connect = CONECTARE
 navigation-group-share = PARTAJARE
 navigation-group-system = SISTEM
+diagnostics-copy-all = Copiază tot
+diagnostics-copy = Copiază
+welcome-connecting = Se conectează la serviciu
+welcome-connected = Serviciu conectat
