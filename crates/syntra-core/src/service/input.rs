@@ -66,6 +66,8 @@ impl Service {
                 self.notify_frontend(FrontendEvent::EmulationStatus(self.emulation_status));
             }
             EmulationEvent::ReleaseNotify => self.capture.release(),
+            // Consumed by the listen task before it reaches the service.
+            EmulationEvent::PointerEdge { .. } => {}
             EmulationEvent::Connected { addr, fingerprint } => {
                 self.authenticated_peer_fingerprints
                     .insert(addr, fingerprint.clone());

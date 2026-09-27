@@ -31,6 +31,19 @@ pub(crate) struct Emulation {
     event_rx: Receiver<EmulationEvent>,
 }
 
+/// Whether leaving through `edge` returns towards a peer that entered
+/// from `entered`: `Enter` carries the side of this screen the peer is on.
+fn edge_matches(entered: Position, edge: syntra_input_emulation::PointerEdge) -> bool {
+    use syntra_input_emulation::PointerEdge;
+    matches!(
+        (entered, edge),
+        (Position::Left, PointerEdge::Left)
+            | (Position::Right, PointerEdge::Right)
+            | (Position::Top, PointerEdge::Top)
+            | (Position::Bottom, PointerEdge::Bottom)
+    )
+}
+
 pub(crate) enum EmulationEvent {
     Connected {
         addr: SocketAddr,
@@ -63,6 +76,12 @@ pub(crate) enum EmulationEvent {
     EmulationEnabled(String),
     /// capture should be released
     ReleaseNotify,
+    /// A peer's independent cursor was pushed past a desktop edge. Handled
+    /// inside the listen task, never forwarded to the service.
+    PointerEdge {
+        addr: SocketAddr,
+        edge: syntra_input_emulation::PointerEdge,
+    },
     /// peer sent us a Hello with its build commit hash. Used to
     /// populate `client_manager.peer_commit` from the listen side
     /// too — without this, peer-version visibility silently fails
@@ -143,6 +162,7 @@ impl Emulation {
             capture_ready: false,
             input_sharing: true,
             active_inputs: HashSet::new(),
+            entered_from: HashMap::new(),
         };
         let task = spawn_local(emulation_task.run());
         Self {
@@ -231,6 +251,8 @@ struct ListenTask {
     capture_ready: bool,
     input_sharing: bool,
     active_inputs: HashSet<SocketAddr>,
+    /// Side of this screen each active peer entered from.
+    entered_from: HashMap<SocketAddr, Position>,
 }
 
 #[derive(Debug)]
@@ -312,6 +334,7 @@ impl ListenTask {
                                 {
                                     log::info!("accepting entry from {addr}");
                                     self.active_inputs.insert(addr);
+                                    self.entered_from.insert(addr, pos);
                                     self.event_tx
                                         .send(EmulationEvent::ReleaseNotify)
                                         .expect("channel closed");
@@ -471,6 +494,19 @@ impl ListenTask {
                     None => break
                 }}
                 event = self.emulation_proxy.event() => {
+                    if let EmulationEvent::PointerEdge { addr, edge } = event {
+                        // An independent cursor is invisible to local
+                        // capture, so its edges must hand control back here.
+                        if self.active_inputs.contains(&addr)
+                            && self.entered_from.get(&addr).is_some_and(|pos| edge_matches(*pos, edge))
+                        {
+                            log::info!("independent pointer of {addr} left through the {edge:?} edge");
+                            self.active_inputs.remove(&addr);
+                            self.emulation_proxy.remove(addr);
+                            self.listener.reply(addr, ProtoEvent::Leave(0)).await;
+                        }
+                        continue;
+                    }
                     self.event_tx.send(event).expect("channel closed");
                 }
                 request = self.request_rx.recv() => match request.expect("channel closed") {
@@ -835,6 +871,9 @@ impl EmulationTask {
                                 }
                             }
                             emulation.consume(event, handle).await?;
+                            if let Some(edge) = emulation.take_pointer_edge(handle) {
+                                let _ = self.event_tx.send(EmulationEvent::PointerEdge { addr, edge });
+                            }
                         }
                     },
                     ProxyRequest::Remove(addr) => {

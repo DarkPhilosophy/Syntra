@@ -18,7 +18,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use async_trait::async_trait;
 use syntra_input_event::{Event, KeyboardEvent, PointerEvent};
 
-use super::{Emulation, EmulationHandle, error::EmulationError};
+use super::{Emulation, EmulationHandle, PointerEdge, error::EmulationError};
 
 const DEVICE_PATH: &str = "/dev/uinput";
 const DEVICE_NAME: &[u8] = b"Syntra virtual input";
@@ -206,6 +206,8 @@ struct PenState {
     area: (i32, i32),
     position: (f64, f64),
     in_proximity: bool,
+    /// Edge the last motion tried to cross.
+    edge: Option<PointerEdge>,
 }
 
 impl PenState {
@@ -214,6 +216,7 @@ impl PenState {
             area,
             position: (f64::from(area.0) / 2.0, f64::from(area.1) / 2.0),
             in_proximity: false,
+            edge: None,
         }
     }
 }
@@ -289,8 +292,23 @@ impl PenState {
             PointerEvent::Motion { dx, dy, .. } => {
                 if dx.is_finite() && dy.is_finite() {
                     let max = (f64::from(self.area.0 - 1), f64::from(self.area.1 - 1));
-                    self.position.0 = (self.position.0 + dx).clamp(0.0, max.0);
-                    self.position.1 = (self.position.1 + dy).clamp(0.0, max.1);
+                    let target = (self.position.0 + dx, self.position.1 + dy);
+                    // Pushing past an edge is how the user leaves this
+                    // screen; the shared pointer gets the same signal from
+                    // local capture, which cannot see this cursor.
+                    self.edge = if target.0 < 0.0 {
+                        Some(PointerEdge::Left)
+                    } else if target.0 > max.0 {
+                        Some(PointerEdge::Right)
+                    } else if target.1 < 0.0 {
+                        Some(PointerEdge::Top)
+                    } else if target.1 > max.1 {
+                        Some(PointerEdge::Bottom)
+                    } else {
+                        self.edge
+                    };
+                    self.position.0 = target.0.clamp(0.0, max.0);
+                    self.position.1 = target.1.clamp(0.0, max.1);
                     events.push(raw(EV_ABS, ABS_X, self.position.0 as i32));
                     events.push(raw(EV_ABS, ABS_Y, self.position.1 as i32));
                 }
@@ -552,6 +570,10 @@ impl Emulation for UinputEmulation {
         self.independent = enabled;
     }
 
+    fn take_pointer_edge(&mut self, handle: EmulationHandle) -> Option<PointerEdge> {
+        self.pointers.get_mut(&handle)?.pen.edge.take()
+    }
+
     async fn consume(
         &mut self,
         event: Event,
@@ -613,6 +635,22 @@ mod tests {
             Vec::new(),
             "invalid motion is dropped without moving the pen"
         );
+    }
+
+    #[test]
+    fn peer_pen_reports_the_edge_it_is_pushed_past() {
+        let mut pen = PenState::new((100, 100));
+        let motion = |dx, dy| PointerEvent::Motion { time: 0, dx, dy };
+        pen.translate(motion(49.0, 0.0));
+        assert_eq!(pen.edge.take(), None, "reaching the edge is not leaving");
+        pen.translate(motion(1.0, 0.0));
+        assert_eq!(pen.edge.take(), Some(PointerEdge::Right));
+        pen.translate(motion(-200.0, 0.0));
+        assert_eq!(pen.edge.take(), Some(PointerEdge::Left));
+        pen.translate(motion(0.0, -500.0));
+        assert_eq!(pen.edge.take(), Some(PointerEdge::Top));
+        pen.translate(motion(10.0, 10.0));
+        assert_eq!(pen.edge.take(), None);
     }
 
     #[test]

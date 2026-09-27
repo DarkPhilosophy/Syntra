@@ -34,6 +34,15 @@ mod xdg_desktop_portal;
 #[cfg(libei)]
 mod libei;
 
+/// A desktop edge an independent pointer was pushed against.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PointerEdge {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
 #[cfg(uinput)]
 mod uinput;
 
@@ -180,6 +189,11 @@ impl InputEmulation {
         self.emulation.set_independent_pointers(enabled);
     }
 
+    /// See [`Emulation::take_pointer_edge`].
+    pub fn take_pointer_edge(&mut self, handle: EmulationHandle) -> Option<PointerEdge> {
+        self.emulation.take_pointer_edge(handle)
+    }
+
     /// Whether the backend transport is still able to consume input.
     pub fn healthy(&self) -> bool {
         self.emulation.healthy()
@@ -302,6 +316,12 @@ trait Emulation: Send {
     }
     /// Gives each peer its own cursor where the backend supports it.
     fn set_independent_pointers(&mut self, _enabled: bool) {}
+    /// Edge of the desktop the peer's own cursor was last pushed against,
+    /// cleared by reading. Only independent pointers report edges; the
+    /// shared pointer is watched by local capture instead.
+    fn take_pointer_edge(&mut self, _handle: EmulationHandle) -> Option<PointerEdge> {
+        None
+    }
     fn take_clipboard_receiver(&mut self) -> Option<mpsc::Receiver<(String, Vec<u8>)>> {
         None
     }
