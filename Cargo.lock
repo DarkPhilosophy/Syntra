@@ -7257,6 +7257,8 @@ dependencies = [
  "slint-build",
  "syntra-api",
  "syntra-core",
+ "syntra-input-capture",
+ "syntra-input-event",
  "syntra-log",
  "syntra-store",
  "tar",

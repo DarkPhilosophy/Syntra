@@ -2630,6 +2630,17 @@ fn bind_app_state_callbacks(
         let weak = weak.clone();
         let state = Arc::clone(&state);
         global.set_app_version(env!("CARGO_PKG_VERSION").into());
+        #[cfg(target_os = "android")]
+        {
+            use crate::touchpad;
+            global.on_touchpad_begin(touchpad::begin);
+            global.on_touchpad_motion(|zone, dx, dy| touchpad::motion(zone, dx, dy, 1.6));
+            global.on_touchpad_click(touchpad::click);
+            global.on_touchpad_scroll(touchpad::scroll);
+            global.on_touchpad_type(|zone, text| touchpad::type_text(zone, &text));
+            global.on_touchpad_backspace(touchpad::backspace);
+            global.on_touchpad_enter(touchpad::enter);
+        }
         {
             let weak = weak.clone();
             global.on_diagnostics_copy_all(move || {

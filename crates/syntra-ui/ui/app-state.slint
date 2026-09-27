@@ -231,6 +231,14 @@ export global AppState {
     callback set-clipboard-files(bool);
     callback set-independent-pointers(bool);
     callback open-link(string);
+    // Phone touchpad: zone is the controlled device's position index.
+    callback touchpad-begin(int);
+    callback touchpad-motion(int, float, float);
+    callback touchpad-click(int, int);
+    callback touchpad-scroll(int, float);
+    callback touchpad-type(int, string);
+    callback touchpad-backspace(int);
+    callback touchpad-enter(int);
     callback diagnostics-copy-all();
     callback cancel-transfer(string);
     callback synchronize();

@@ -15,6 +15,7 @@ import { SettingsPage } from "pages/settings.slint";
 import { AuthorizationPage } from "pages/authorization.slint";
 import { WelcomeOverlay } from "components/welcome.slint";
 import { AboutPage } from "pages/about.slint";
+import { TouchpadPage } from "pages/touchpad.slint";
 import { NavItem, NavSection } from "components/navigation.slint";
 import { MobileTopBar, MobileBottomNav } from "components/mobile-nav.slint";
 import { Palette, ScrollView } from "std-widgets.slint";
@@ -84,6 +85,7 @@ export component AppWindow inherits Window {
         : selected-page == "devices" ? Translations.tr("navigation-devices")
         : selected-page == "clipboard" ? Translations.tr("navigation-clipboard")
         : selected-page == "transfers" ? Translations.tr("navigation-transfers")
+        : selected-page == "control" ? Translations.tr("navigation-control")
         : selected-page == "history" ? Translations.tr("history-title")
         : selected-page == "authorization" ? Translations.tr("navigation-authorization")
         : selected-page == "input" ? Translations.tr("navigation-input")
@@ -91,10 +93,10 @@ export component AppWindow inherits Window {
         : selected-page == "plugins" ? Translations.tr("navigation-plugins")
         : selected-page == "diagnostics" ? Translations.tr("navigation-diagnostics")
         : Translations.tr("navigation-about");
-    private property <bool> settings-child: selected-page == "history" || selected-page == "authorization" || selected-page == "input" || selected-page == "diagnostics" || selected-page == "about" || selected-page == "plugins";
-    private property <int> tab-index: selected-page == "overview" ? 0 : selected-page == "devices" ? 1 : selected-page == "clipboard" ? 2 : selected-page == "transfers" ? 3 : 4;
+    private property <bool> settings-child: selected-page == "history" || selected-page == "authorization" || selected-page == "input" || selected-page == "diagnostics" || selected-page == "about" || selected-page == "plugins" || selected-page == "transfers";
+    private property <int> tab-index: selected-page == "overview" ? 0 : selected-page == "devices" ? 1 : selected-page == "clipboard" ? 2 : selected-page == "control" ? 3 : 4;
     function go-tab(index: int) {
-        let id = index == 0 ? "overview" : index == 1 ? "devices" : index == 2 ? "clipboard" : index == 3 ? "transfers" : "settings";
+        let id = index == 0 ? "overview" : index == 1 ? "devices" : index == 2 ? "clipboard" : index == 3 ? "control" : "settings";
         root.navigate(id); root.selected-page = id;
     }
     // Android's back key arrives as Key.Back and bubbles up from whatever
@@ -230,8 +232,8 @@ export component AppWindow inherits Window {
                 background: Theme.background;
                 SwipeGestureHandler {
                     enabled: root.mobile;
-                    handle-swipe-left: root.tab-index < 4 && !root.settings-child && selected-page != "devices";
-                    handle-swipe-right: root.tab-index > 0 && !root.settings-child && selected-page != "devices";
+                    handle-swipe-left: root.tab-index < 4 && !root.settings-child && selected-page != "devices" && selected-page != "control";
+                    handle-swipe-right: root.tab-index > 0 && !root.settings-child && selected-page != "devices" && selected-page != "control";
                     handle-swipe-up: false;
                     handle-swipe-down: false;
                     swiped => {
@@ -294,6 +296,16 @@ export component AppWindow inherits Window {
                     toggle-text(enabled) => { AppState.set-clipboard-text(enabled); }
                     toggle-image(enabled) => { AppState.set-clipboard-image(enabled); }
                     toggle-files(enabled) => { AppState.set-clipboard-files(enabled); }
+                }
+                if selected-page == "control": TouchpadPage {
+                    clients: AppState.clients;
+                    begin(zone) => { AppState.touchpad-begin(zone); }
+                    motion(zone, dx, dy) => { AppState.touchpad-motion(zone, dx, dy); }
+                    click(zone, which) => { AppState.touchpad-click(zone, which); }
+                    scroll(zone, dy) => { AppState.touchpad-scroll(zone, dy); }
+                    type-text(zone, text) => { AppState.touchpad-type(zone, text); }
+                    backspace(zone) => { AppState.touchpad-backspace(zone); }
+                    enter(zone) => { AppState.touchpad-enter(zone); }
                 }
                 if selected-page == "input": InputPage {
                     capture-enabled: AppState.capture-enabled;
@@ -519,7 +531,7 @@ export component AppWindow inherits Window {
             { id: "overview", icon: @image-url("assets/navigation/overview.svg"), label: Translations.tr("navigation-overview") },
             { id: "devices", icon: @image-url("assets/navigation/devices.svg"), label: Translations.tr("navigation-devices") },
             { id: "clipboard", icon: @image-url("assets/navigation/clipboard.svg"), label: Translations.tr("navigation-clipboard") },
-            { id: "transfers", icon: @image-url("assets/navigation/transfers.svg"), label: Translations.tr("navigation-transfers") },
+            { id: "control", icon: @image-url("assets/navigation/input.svg"), label: Translations.tr("navigation-control") },
             { id: "settings", icon: @image-url("assets/navigation/settings.svg"), label: Translations.tr("navigation-settings") },
         ];
     }

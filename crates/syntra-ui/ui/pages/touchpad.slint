@@ -1,0 +1,172 @@
+import { LineEdit } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { Translations } from "../localization.slint";
+import { AppButton } from "../components/controls.slint";
+import { ClientItem } from "../components/client-row.slint";
+
+// The phone as a touchpad and keyboard for one of the paired computers.
+// Drag to move, tap to click, two-button bar for left/right, a strip on the
+// right edge to scroll, and a text field whose keystrokes are typed remotely.
+export component TouchpadPage inherits Rectangle {
+    in property <[ClientItem]> clients;
+    // Index into `clients` of the computer being controlled.
+    in-out property <int> target: 0;
+    callback begin(int);
+    callback motion(int, float, float);
+    callback click(int, int);
+    callback scroll(int, float);
+    callback type-text(int, string);
+    callback backspace(int);
+    callback enter(int);
+
+    private property <bool> has-target: root.clients.length > 0 && root.target < root.clients.length;
+    private property <int> zone: root.has-target ? root.clients[root.target].position : 0;
+    private property <bool> ready: root.has-target && root.clients[root.target].alive;
+
+    background: Theme.background;
+
+    VerticalLayout {
+        padding: Theme.spacing;
+        spacing: Theme.small-spacing;
+
+        if root.clients.length == 0: Text {
+            text: Translations.tr("touchpad-no-devices");
+            color: Theme.muted-text;
+            font-size: Theme.body-size;
+            wrap: word-wrap;
+            vertical-stretch: 0;
+        }
+
+        // Device picker: one chip per paired computer.
+        if root.clients.length > 0: HorizontalLayout {
+            spacing: Theme.small-spacing;
+            alignment: start;
+            vertical-stretch: 0;
+            for client[index] in root.clients: Rectangle {
+                height: 36px;
+                width: chip-text.preferred-width + 28px;
+                border-radius: 18px;
+                background: index == root.target ? Theme.accent.with-alpha(0.22) : Theme.surface;
+                border-width: 1px;
+                border-color: index == root.target ? Theme.accent : Theme.border;
+                chip-text := Text {
+                    text: (client.alive ? "● " : "○ ") + client.display-name;
+                    color: index == root.target ? Theme.text : Theme.muted-text;
+                    font-size: Theme.body-size;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+                TouchArea { clicked => { root.target = index; } }
+            }
+        }
+
+        if root.has-target && !root.ready: Text {
+            text: Translations.tr("touchpad-offline");
+            color: Theme.warning;
+            font-size: Theme.caption-size;
+            wrap: word-wrap;
+            vertical-stretch: 0;
+        }
+
+        // The pad itself, with a scroll strip on its right edge.
+        HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: Theme.small-spacing;
+            pad := Rectangle {
+                horizontal-stretch: 1;
+                border-radius: 18px;
+                background: Theme.surface;
+                border-width: 1px;
+                border-color: touch.pressed ? Theme.accent : Theme.border;
+                private property <length> last-x;
+                private property <length> last-y;
+                private property <length> press-x;
+                private property <length> press-y;
+                Text {
+                    text: Translations.tr("touchpad-hint");
+                    color: Theme.muted-text.with-alpha(0.6);
+                    font-size: Theme.caption-size;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                    width: parent.width - 32px;
+                    x: 16px;
+                }
+                touch := TouchArea {
+                    enabled: root.has-target;
+                    pointer-event(event) => {
+                        if event.kind == PointerEventKind.down {
+                            // The first touch hands this computer's input
+                            // over to the phone.
+                            root.begin(root.zone);
+                            pad.last-x = self.mouse-x; pad.last-y = self.mouse-y;
+                            pad.press-x = self.mouse-x; pad.press-y = self.mouse-y;
+                        }
+                    }
+                    moved => {
+                        root.motion(root.zone, (self.mouse-x - pad.last-x) / 1px, (self.mouse-y - pad.last-y) / 1px);
+                        pad.last-x = self.mouse-x; pad.last-y = self.mouse-y;
+                    }
+                    clicked => {
+                        // A tap without travel is a left click.
+                        if abs(self.mouse-x - pad.press-x) + abs(self.mouse-y - pad.press-y) < 8px {
+                            root.click(root.zone, 0);
+                        }
+                    }
+                }
+            }
+            strip := Rectangle {
+                width: 44px;
+                border-radius: 18px;
+                background: Theme.surface;
+                border-width: 1px;
+                border-color: strip-touch.pressed ? Theme.accent : Theme.border;
+                private property <length> last-y;
+                Text { text: "⇕"; color: Theme.muted-text; font-size: 20px; horizontal-alignment: center; vertical-alignment: center; }
+                strip-touch := TouchArea {
+                    enabled: root.has-target;
+                    pointer-event(event) => {
+                        if event.kind == PointerEventKind.down {
+                            root.begin(root.zone);
+                            strip.last-y = self.mouse-y;
+                        }
+                    }
+                    moved => {
+                        root.scroll(root.zone, (self.mouse-y - strip.last-y) / 1px);
+                        strip.last-y = self.mouse-y;
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: Theme.small-spacing;
+            vertical-stretch: 0;
+            height: 52px;
+            AppButton { horizontal-stretch: 1; text: Translations.tr("touchpad-left"); enabled: root.has-target; clicked => { root.begin(root.zone); root.click(root.zone, 0); } }
+            AppButton { horizontal-stretch: 1; text: Translations.tr("touchpad-right"); enabled: root.has-target; clicked => { root.begin(root.zone); root.click(root.zone, 1); } }
+        }
+
+        // Keystrokes typed here are sent one by one; the field itself stays
+        // empty so it never accumulates text.
+        HorizontalLayout {
+            spacing: Theme.small-spacing;
+            vertical-stretch: 0;
+            keyboard := LineEdit {
+                horizontal-stretch: 1;
+                placeholder-text: Translations.tr("touchpad-type");
+                enabled: root.has-target;
+                edited(value) => {
+                    if value != "" {
+                        root.begin(root.zone);
+                        root.type-text(root.zone, value);
+                        self.text = "";
+                    }
+                }
+                accepted => { root.enter(root.zone); }
+            }
+            AppButton { text: "⌫"; enabled: root.has-target; clicked => { root.begin(root.zone); root.backspace(root.zone); } }
+            AppButton { text: "⏎"; enabled: root.has-target; clicked => { root.begin(root.zone); root.enter(root.zone); } }
+        }
+    }
+}

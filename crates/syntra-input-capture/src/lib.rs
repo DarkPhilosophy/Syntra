@@ -44,6 +44,10 @@ mod x11;
 /// fallback input capture (does not produce events)
 mod dummy;
 
+/// Input from the app's own touchpad surface (phones).
+#[cfg(target_os = "android")]
+pub mod touchpad;
+
 pub type CaptureHandle = u64;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -111,6 +115,8 @@ pub enum Backend {
     Windows,
     #[cfg(target_os = "macos")]
     MacOs,
+    #[cfg(target_os = "android")]
+    Touchpad,
     Dummy,
 }
 
@@ -127,6 +133,8 @@ impl Display for Backend {
             Backend::Windows => write!(f, "windows"),
             #[cfg(target_os = "macos")]
             Backend::MacOs => write!(f, "MacOS"),
+            #[cfg(target_os = "android")]
+            Backend::Touchpad => write!(f, "touchpad"),
             Backend::Dummy => write!(f, "dummy"),
         }
     }
@@ -346,6 +354,8 @@ async fn create_backend(
         Backend::Windows => Ok(Box::new(windows::WindowsInputCapture::new())),
         #[cfg(target_os = "macos")]
         Backend::MacOs => Ok(Box::new(macos::MacOSInputCapture::new().await?)),
+        #[cfg(target_os = "android")]
+        Backend::Touchpad => Ok(Box::new(touchpad::TouchpadInputCapture::new()?)),
         Backend::Dummy => Ok(Box::new(dummy::DummyInputCapture::new())),
     }
 }
@@ -380,6 +390,8 @@ async fn create(
         Backend::Windows,
         #[cfg(target_os = "macos")]
         Backend::MacOs,
+        #[cfg(target_os = "android")]
+        Backend::Touchpad,
     ] {
         match create_backend(backend).await {
             Ok(created) => {

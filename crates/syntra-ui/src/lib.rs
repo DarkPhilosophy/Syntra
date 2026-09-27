@@ -43,4 +43,6 @@ pub mod lifecycle;
 pub(crate) mod manual_ui;
 #[cfg(not(target_os = "android"))]
 pub mod single_instance;
+#[cfg(target_os = "android")]
+pub mod touchpad;
 pub mod updates;
