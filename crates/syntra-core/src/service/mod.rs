@@ -550,30 +550,49 @@ async fn recv_optional<T>(receiver: &mut Option<mpsc::Receiver<T>>) -> Option<T>
 
 /// SIGINT and, on Unix, SIGTERM both request an orderly shutdown so held
 /// keys and grabbed devices are released however the process is stopped.
+///
+/// The listeners are registered once and kept for the whole loop: a fresh
+/// `ctrl_c()` future per iteration only observes signals delivered after it
+/// is first polled, so a signal arriving while another branch runs is lost.
 struct ShutdownSignal {
     #[cfg(unix)]
+    interrupt: signal::unix::Signal,
+    #[cfg(unix)]
     terminate: signal::unix::Signal,
+    #[cfg(not(unix))]
+    ctrl_c: signal::windows::CtrlC,
 }
 
 impl ShutdownSignal {
     fn new() -> io::Result<Self> {
-        Ok(Self {
-            #[cfg(unix)]
-            terminate: signal::unix::signal(signal::unix::SignalKind::terminate())?,
-        })
+        #[cfg(unix)]
+        {
+            use signal::unix::{SignalKind, signal};
+            Ok(Self {
+                interrupt: signal(SignalKind::interrupt())?,
+                terminate: signal(SignalKind::terminate())?,
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(Self {
+                ctrl_c: signal::windows::ctrl_c()?,
+            })
+        }
     }
 
     async fn requested(&mut self) -> io::Result<()> {
         #[cfg(unix)]
         {
             tokio::select! {
-                result = signal::ctrl_c() => result,
+                _ = self.interrupt.recv() => Ok(()),
                 _ = self.terminate.recv() => Ok(()),
             }
         }
         #[cfg(not(unix))]
         {
-            signal::ctrl_c().await
+            self.ctrl_c.recv().await;
+            Ok(())
         }
     }
 }
