@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- The "Y" of the wordmark drawn as the mark's two horns meeting on a stem. -->
+  <defs>
+    <linearGradient id="horn" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d6ebb0"/>
+      <stop offset="1" stop-color="#8fb567"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#horn)" d="M44 58C26 52 9 36 5 2 17 24 33 36 56 42Z"/>
+  <path fill="url(#horn)" d="M56 58C74 52 91 36 95 2 83 24 67 36 44 42Z"/>
+  <path fill="url(#horn)" d="M45.5 40H54.5V100H45.5Z"/>
+</svg>

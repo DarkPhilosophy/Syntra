@@ -114,7 +114,25 @@ export component WelcomeOverlay inherits Rectangle {
         y: root.sy - 8 * root.unit - self.height / 2;
     }
 
-    // Wordmark: letters rise into place one after another.
+    // Card behind the text only: the mechanism stays free-floating, the
+    // words get a quiet surface so they read on any wallpaper.
+    Rectangle {
+        private property <float> show: ease-out(span(550, 600));
+        width: min(root.width - 32px, max(wordmark.preferred-width, 420 * root.unit) + 72 * root.unit);
+        height: 168 * root.unit;
+        x: (root.width - self.width) / 2;
+        y: wordmark.y - 18 * root.unit + (1 - self.show) * 12px;
+        border-radius: 22px;
+        background: Theme.background.with-alpha(0.78);
+        border-width: 1px;
+        border-color: Theme.accent.with-alpha(0.28);
+        drop-shadow-blur: 30px;
+        drop-shadow-color: #00000080;
+        opacity: self.show;
+    }
+
+    // Wordmark: letters rise into place one after another. The Y is drawn
+    // as the mark's two horns, the only accented letter, echoing the logo.
     wordmark := HorizontalLayout {
         y: root.sy + 262 * root.unit;
         x: 0;
@@ -124,21 +142,25 @@ export component WelcomeOverlay inherits Rectangle {
         spacing: 12 * root.unit;
         for letter[index] in ["S", "Y", "N", "T", "R", "A"]: Rectangle {
             private property <float> show: ease-out(span(700 + index * 80, 600));
-            width: glyph.preferred-width;
+            width: index == 1 ? 56 * root.unit : glyph.preferred-width;
             glyph := Text {
+                visible: index != 1;
                 text: letter;
-                color: index < 2 ? Theme.accent : #eef0d9;
+                color: #eef0d9;
                 font-size: 64 * root.unit;
-                font-weight: index < 2 ? 800 : 300;
-                // No panel behind the text: a soft outline keeps it legible
-                // on light and busy wallpapers alike.
-                stroke: #00000070;
-                stroke-width: 1.5px;
-                stroke-style: outside;
+                font-weight: 300;
                 opacity: parent.show;
                 vertical-alignment: center;
                 height: parent.height;
                 y: (1 - parent.show) * 26px;
+            }
+            if index == 1: Image {
+                source: @image-url("../assets/splash/y-horns.svg");
+                // Cap height of the light face at this size.
+                width: parent.width;
+                height: 51 * root.unit;
+                y: (parent.height - self.height) / 2 + (1 - parent.show) * 26px;
+                opacity: parent.show;
             }
         }
     }
@@ -150,9 +172,6 @@ export component WelcomeOverlay inherits Rectangle {
         width: root.width - 48px;
         text: Translations.tr("welcome-motto");
         color: #e8ecd9;
-        stroke: #00000080;
-        stroke-width: 1px;
-        stroke-style: outside;
         font-size: 19 * root.unit;
         horizontal-alignment: center;
         wrap: word-wrap;
@@ -161,7 +180,7 @@ export component WelcomeOverlay inherits Rectangle {
 
     // What the app is actually doing right now.
     Rectangle {
-        y: wordmark.y + wordmark.height + 44 * root.unit;
+        y: wordmark.y + wordmark.height + 40 * root.unit;
         x: 0;
         width: root.width;
         height: 20px;
@@ -180,9 +199,6 @@ export component WelcomeOverlay inherits Rectangle {
                 text: (root.connected ? Translations.tr("welcome-connected") : Translations.tr("welcome-connecting"))
                     + (root.version != "" ? "  ·  v" + root.version : "");
                 color: #d6dcc4;
-                stroke: #00000080;
-                stroke-width: 1px;
-                stroke-style: outside;
                 font-size: Theme.caption-size;
                 vertical-alignment: center;
             }
