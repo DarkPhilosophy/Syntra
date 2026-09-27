@@ -171,5 +171,13 @@ document.getElementById("replay").onclick=()=>{const st=document.getElementById(
 // #t=<ms> jumps the timeline (for screenshots).
 const jump=/#t=(\d+)/.exec(location.hash);
 if(jump) requestAnimationFrame(()=>document.getAnimations().forEach(a=>a.currentTime=+jump[1]));
+// Capture mode: every period divides 6 s so the recorded loop is seamless.
+if(/bg=/.test(location.hash)){
+  const loopD={36:6,18:3,22:3,12:2,10:1.5};
+  document.querySelectorAll('.g').forEach(el=>{const d=parseFloat(el.style.getPropertyValue('--d'));
+    const teeth=specs.find(s=>Math.abs(s.t*base/6-d)<.01)?.t;
+    el.style.setProperty('--d',(teeth?loopD[teeth]:(d>10?6:d>7?6:3))+'s');});
+  document.querySelectorAll('.breathe').forEach(el=>el.style.animationDuration='6s');
+}
 const bgm=/bg=([\w-]+)/.exec(location.hash); if(bgm){document.body.dataset.bg=bgm[1];document.body.classList.add('capture');}
 </script></body></html>
