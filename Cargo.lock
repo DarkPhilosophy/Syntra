@@ -7133,6 +7133,7 @@ dependencies = [
  "dirs",
  "futures",
  "keycode",
+ "libc",
  "log",
  "once_cell",
  "reis",

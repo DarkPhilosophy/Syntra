@@ -37,6 +37,9 @@ pub enum EmulationError {
 
 #[derive(Debug, Error)]
 pub enum EmulationCreationError {
+    #[cfg(uinput)]
+    #[error("uinput: `{0}`")]
+    Uinput(#[from] crate::uinput::UinputEmulationCreationError),
     #[cfg(wlroots)]
     #[error("wlroots backend: `{0}`")]
     Wlroots(#[from] WlrootsEmulationCreationError),

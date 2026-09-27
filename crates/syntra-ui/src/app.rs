@@ -3144,6 +3144,15 @@ fn bind_window_callbacks(
                         app.window().is_maximized(),
                         app.window().size()
                     );
+                    // Go straight to winit. Wayland never reports when a
+                    // window is restored from the taskbar, so Slint's cached
+                    // "minimized" flag stays true forever after the first
+                    // minimize: every later request becomes a no-op and the
+                    // maximized state stops syncing as well.
+                    #[cfg(not(target_os = "android"))]
+                    if native_window(&app, |window| window.set_minimized(true)).is_some() {
+                        return;
+                    }
                     app.window().set_minimized(true);
                 }
             }
@@ -3152,6 +3161,13 @@ fn bind_window_callbacks(
             let weak = app.as_weak();
             move || {
                 if let Some(app) = weak.upgrade() {
+                    // The compositor may have changed the state (double-click,
+                    // tiling, keyboard shortcut); winit reflects that, Slint's
+                    // cached flag may not.
+                    #[cfg(not(target_os = "android"))]
+                    let before = native_window(&app, |window| window.is_maximized())
+                        .unwrap_or_else(|| app.window().is_maximized());
+                    #[cfg(target_os = "android")]
                     let before = app.window().is_maximized();
                     let maximized = !before;
                     log::debug!(
@@ -3161,6 +3177,11 @@ fn bind_window_callbacks(
                         app.window().is_minimized(),
                         maximized
                     );
+                    #[cfg(not(target_os = "android"))]
+                    if native_window(&app, |window| window.set_maximized(maximized)).is_none() {
+                        app.window().set_maximized(maximized);
+                    }
+                    #[cfg(target_os = "android")]
                     app.window().set_maximized(maximized);
                     app.set_window_maximized(maximized);
                 }

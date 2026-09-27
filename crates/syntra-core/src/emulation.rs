@@ -992,7 +992,42 @@ impl Drop for ReadyGuard {
 
 #[cfg(test)]
 mod tests {
-    use super::decode_native_image;
+    use super::{
+        ClipboardTransfer, ClipboardTransferKind, HashMap, SocketAddr, decode_native_image,
+        start_clipboard_transfer,
+    };
+
+    /// A peer that starts transfer after transfer without finishing any must
+    /// hold at most one reassembly buffer, and none reserved at the declared
+    /// maximum size.
+    #[test]
+    fn clipboard_starts_are_bounded_to_one_buffer_per_peer() {
+        let mut transfers = HashMap::new();
+        let peer: SocketAddr = "10.0.0.2:4242".parse().unwrap();
+        let other: SocketAddr = "10.0.0.3:4242".parse().unwrap();
+        for id in 0..1_000 {
+            start_clipboard_transfer(
+                &mut transfers,
+                peer,
+                id,
+                ClipboardTransfer::new(ClipboardTransferKind::Text, 64 * 1024 * 1024, 1),
+            );
+        }
+        start_clipboard_transfer(
+            &mut transfers,
+            other,
+            7,
+            ClipboardTransfer::new(ClipboardTransferKind::Text, 10, 1),
+        );
+        assert_eq!(transfers.len(), 2);
+        assert!(transfers.contains_key(&(peer, 999)));
+        assert!(transfers.contains_key(&(other, 7)));
+        assert!(
+            transfers
+                .values()
+                .all(|t| t.bytes.capacity() <= 1024 * 1024)
+        );
+    }
     use image::{ImageBuffer, ImageEncoder, Rgba};
 
     fn emulation_task() -> (

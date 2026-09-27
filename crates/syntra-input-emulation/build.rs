@@ -16,11 +16,13 @@ fn main() {
     let x11 = desktop_unix && cfg!(feature = "x11");
     let wlroots = desktop_unix && cfg!(feature = "wlroots");
     let rdp = desktop_unix && cfg!(feature = "remote_desktop_portal");
+    let uinput = os == "linux" && cfg!(feature = "uinput");
 
     println!("cargo::rustc-check-cfg=cfg(wlroots)");
     println!("cargo::rustc-check-cfg=cfg(libei)");
     println!("cargo::rustc-check-cfg=cfg(x11)");
     println!("cargo::rustc-check-cfg=cfg(rdp)");
+    println!("cargo::rustc-check-cfg=cfg(uinput)");
 
     if libei {
         println!("cargo::rustc-cfg=libei");
@@ -33,6 +35,9 @@ fn main() {
     }
     if rdp {
         println!("cargo::rustc-cfg=rdp");
+    }
+    if uinput {
+        println!("cargo::rustc-cfg=uinput");
     }
 }
 

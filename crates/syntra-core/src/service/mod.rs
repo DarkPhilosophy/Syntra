@@ -613,3 +613,40 @@ fn hex_operation(operation_id: [u8; 16]) -> String {
     }
     value
 }
+
+#[cfg(test)]
+mod loop_tests {
+    use super::*;
+
+    /// A disabled branch must park forever instead of resolving, otherwise a
+    /// `select!` loop polls it continuously.
+    #[tokio::test(start_paused = true)]
+    async fn missing_receiver_never_resolves() {
+        let mut receiver: Option<mpsc::Receiver<()>> = None;
+        let waited =
+            tokio::time::timeout(Duration::from_secs(3600), recv_optional(&mut receiver)).await;
+        assert!(waited.is_err());
+    }
+
+    #[tokio::test]
+    async fn closed_receiver_reports_closure_once_then_can_be_disabled() {
+        let (tx, rx) = mpsc::channel::<()>(1);
+        drop(tx);
+        let mut receiver = Some(rx);
+        assert_eq!(recv_optional(&mut receiver).await, None);
+    }
+
+    /// Signals delivered while the loop is busy elsewhere must still stop it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_signal_raised_before_waiting_is_not_lost() {
+        let mut shutdown = ShutdownSignal::new().unwrap();
+        // SAFETY: raising a signal at the current process.
+        unsafe { libc::raise(libc::SIGTERM) };
+        tokio::task::yield_now().await;
+        tokio::time::timeout(Duration::from_secs(5), shutdown.requested())
+            .await
+            .expect("signal observed")
+            .unwrap();
+    }
+}

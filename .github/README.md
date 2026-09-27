@@ -46,7 +46,7 @@ flowchart TB
 
 | Platform | Capture | Emulation | Notes |
 |---|---|---|---|
-| Linux | layer-shell, libei, X11 (feature-gated) | wlroots, libei, RDP, X11 (feature-gated) | Backend availability depends on the desktop and selected features. |
+| Linux | layer-shell, libei, X11 (feature-gated) | uinput (preferred), wlroots, libei, RDP, X11 (feature-gated) | uinput works on any compositor and at the lock screen but needs write access to `/dev/uinput`: install [`build-aux/60-syntra-uinput.rules`](../build-aux/60-syntra-uinput.rules) or join the `input` group. Without it the next backend is used. |
 | macOS | Not enabled by the current capture feature resolver | Not enabled by the current emulation feature resolver | Desktop UI code exists; input support is not verified here. |
 | Windows | Not enabled by the current capture feature resolver | Not enabled by the current emulation feature resolver | Desktop UI code exists; input support is not verified here. |
 | Android | Not enabled by the current desktop backend resolver | Not enabled by the current desktop backend resolver | Android UI/build scaffolding exists; a complete supported session is not verified. |
@@ -57,7 +57,7 @@ flowchart TB
 Use the immutable-host build container:
 
 ```bash
-distrobox enter "$SYNTRA_BUILD_CONTAINER" -- bash -lc 'cd /var/home/alexa/Projects/Syntra && cargo build --workspace --features syntra-daemon/layer_shell_capture,syntra-daemon/x11_capture,syntra-daemon/libei_capture,syntra-daemon/wlroots_emulation,syntra-daemon/libei_emulation,syntra-daemon/rdp_emulation,syntra-daemon/x11_emulation'
+distrobox enter "$SYNTRA_BUILD_CONTAINER" -- bash -lc 'cd /var/home/alexa/Projects/Syntra && cargo build --workspace --features syntra-daemon/layer_shell_capture,syntra-daemon/x11_capture,syntra-daemon/libei_capture,syntra-daemon/wlroots_emulation,syntra-daemon/libei_emulation,syntra-daemon/rdp_emulation,syntra-daemon/uinput_emulation,syntra-daemon/x11_emulation'
 ```
 
 Release packages, when available, are published on the [Releases](https://github.com/DarkPhilosophy/syntra/releases) page. Building from source is the authoritative route for the current tree.

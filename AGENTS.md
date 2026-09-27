@@ -49,11 +49,11 @@ packaged on Linux until a verified replacement exists; the FUSE helper remains s
 ## Commands
 
 ```sh
-cargo build -p syntra --no-default-features --features slint-ui,layer_shell_capture,x11_capture,libei_capture,wlroots_emulation,libei_emulation,rdp_emulation,x11_emulation  # Slint Linux build during cutover
+cargo build -p syntra --no-default-features --features slint-ui,layer_shell_capture,x11_capture,libei_capture,wlroots_emulation,libei_emulation,rdp_emulation,uinput_emulation,x11_emulation  # Slint Linux build during cutover
 cargo build -p <crate>                                     # single crate
 cargo test -p syntra-ui                                      # Slint UI tests
-cargo fmt && cargo clippy -p syntra --all-targets --no-default-features --features slint-ui,layer_shell_capture,x11_capture,libei_capture,wlroots_emulation,libei_emulation,rdp_emulation,x11_emulation  # lint
-RUST_LOG=syntra=debug cargo run -p syntra --no-default-features --features slint-ui,layer_shell_capture,x11_capture,libei_capture,wlroots_emulation,libei_emulation,rdp_emulation,x11_emulation  # Slint runtime
+cargo fmt && cargo clippy -p syntra --all-targets --no-default-features --features slint-ui,layer_shell_capture,x11_capture,libei_capture,wlroots_emulation,libei_emulation,rdp_emulation,uinput_emulation,x11_emulation  # lint
+RUST_LOG=syntra=debug cargo run -p syntra --no-default-features --features slint-ui,layer_shell_capture,x11_capture,libei_capture,wlroots_emulation,libei_emulation,rdp_emulation,uinput_emulation,x11_emulation  # Slint runtime
 ```
 
 Run from repo root—no `cd` in scripts.

@@ -243,6 +243,9 @@ impl From<CaptureBackend> for syntra_input_capture::Backend {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 pub enum EmulationBackend {
+    #[cfg(uinput_emulation)]
+    #[serde(rename = "uinput")]
+    Uinput,
     #[cfg(wlroots_emulation)]
     #[serde(rename = "wlroots")]
     Wlroots,
@@ -268,6 +271,8 @@ pub enum EmulationBackend {
 impl From<EmulationBackend> for syntra_input_emulation::Backend {
     fn from(backend: EmulationBackend) -> Self {
         match backend {
+            #[cfg(uinput_emulation)]
+            EmulationBackend::Uinput => Self::Uinput,
             #[cfg(wlroots_emulation)]
             EmulationBackend::Wlroots => Self::Wlroots,
             #[cfg(libei_emulation)]
@@ -288,6 +293,8 @@ impl From<EmulationBackend> for syntra_input_emulation::Backend {
 impl Display for EmulationBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            #[cfg(uinput_emulation)]
+            EmulationBackend::Uinput => write!(f, "uinput"),
             #[cfg(wlroots_emulation)]
             EmulationBackend::Wlroots => write!(f, "wlroots"),
             #[cfg(libei_emulation)]

@@ -1,0 +1,7 @@
+# Lets the logged-in user's Syntra daemon create its virtual keyboard and
+# mouse through /dev/uinput, the same access model Sunshine uses.
+#
+# Install:  sudo install -Dm644 60-syntra-uinput.rules /etc/udev/rules.d/60-syntra-uinput.rules
+#           echo uinput | sudo tee /etc/modules-load.d/syntra-uinput.conf
+#           sudo modprobe uinput && sudo udevadm control --reload && sudo udevadm trigger --name-match=uinput
+KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", TAG+="uaccess"

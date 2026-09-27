@@ -52,6 +52,7 @@ ashpd = { version = "0.13.9", default-features = false, features = [
     "async-io",
 ], optional = true }
 reis = { version = "0.7.0", features = ["tokio"], optional = true }
+libc = { workspace = true, optional = true }
 
 [target.'cfg(target_os="macos")'.dependencies]
 bitflags = "2.6.0"
@@ -72,7 +73,8 @@ windows = { version = "0.61.2", features = [
 ] }
 
 [features]
-default = ["wlroots", "x11", "remote_desktop_portal", "libei"]
+default = ["uinput", "wlroots", "x11", "remote_desktop_portal", "libei"]
+uinput = ["dep:libc"]
 wlroots = [
     "dep:wayland-client",
     "dep:wayland-protocols",

@@ -23,7 +23,7 @@ Read the architecture and contract guides in [`docs/`](../docs/). Keep the three
 Build inside the project container:
 
 ```bash
-distrobox enter "$SYNTRA_BUILD_CONTAINER" -- bash -lc 'cd /var/home/alexa/Projects/Syntra && cargo build --workspace --features syntra-daemon/layer_shell_capture,syntra-daemon/x11_capture,syntra-daemon/libei_capture,syntra-daemon/wlroots_emulation,syntra-daemon/libei_emulation,syntra-daemon/rdp_emulation,syntra-daemon/x11_emulation'
+distrobox enter "$SYNTRA_BUILD_CONTAINER" -- bash -lc 'cd /var/home/alexa/Projects/Syntra && cargo build --workspace --features syntra-daemon/layer_shell_capture,syntra-daemon/x11_capture,syntra-daemon/libei_capture,syntra-daemon/wlroots_emulation,syntra-daemon/libei_emulation,syntra-daemon/rdp_emulation,syntra-daemon/uinput_emulation,syntra-daemon/x11_emulation'
 ```
 
 Run formatting and checks through the workflows in [`.github/workflows/`](workflows/). Documentation changes must keep internal links valid and must update generated marker regions with `node .scripts/sync-readme.js`.

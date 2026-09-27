@@ -76,6 +76,7 @@ libei_emulation = ["syntra-input-event/libei", "syntra-input-emulation/libei"]
 wlroots_emulation = ["syntra-input-emulation/wlroots"]
 x11_emulation = ["syntra-input-emulation/x11"]
 rdp_emulation = ["syntra-input-emulation/remote_desktop_portal"]
+uinput_emulation = ["syntra-input-emulation/uinput"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

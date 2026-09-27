@@ -18,16 +18,16 @@ env:
 
 jobs:
   linux-release-build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@v6
     - name: install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install libx11-dev libxtst-dev libfuse3-dev libgtk-4-dev
+        sudo apt-get install --no-install-recommends -y libx11-dev libxtst-dev libei-dev libxkbcommon-dev libwayland-dev libgtk-4-dev libfuse3-dev pkg-config
     - name: Release Build
       run: |
-        cargo build --release
+        cargo build --release --features syntra-daemon/layer_shell_capture,syntra-daemon/x11_capture,syntra-daemon/libei_capture,syntra-daemon/wlroots_emulation,syntra-daemon/libei_emulation,syntra-daemon/rdp_emulation,syntra-daemon/uinput_emulation,syntra-daemon/x11_emulation
         cargo build --release -p syntra-plugin-fuse -p syntra-plugin-clipboard
         cp target/release/syntra syntra-linux-x86_64
         cp target/release/syntra-daemon syntra-daemon-linux-x86_64
@@ -54,14 +54,14 @@ jobs:
           target/release/bundle/appimage/syntra_*.AppImage
 
   linux-arm64-release-build:
-    runs-on: ubuntu-22.04-arm
+    runs-on: ubuntu-24.04-arm
     steps:
     - uses: actions/checkout@v6
     - name: install dependencies
-      run: sudo apt-get update && sudo apt-get install libx11-dev libxtst-dev libfuse3-dev libgtk-4-dev
+      run: sudo apt-get update && sudo apt-get install --no-install-recommends -y libx11-dev libxtst-dev libei-dev libxkbcommon-dev libwayland-dev libgtk-4-dev libfuse3-dev pkg-config
     - name: Release Build
       run: |
-        cargo build --release
+        cargo build --release --features syntra-daemon/layer_shell_capture,syntra-daemon/x11_capture,syntra-daemon/libei_capture,syntra-daemon/wlroots_emulation,syntra-daemon/libei_emulation,syntra-daemon/rdp_emulation,syntra-daemon/uinput_emulation,syntra-daemon/x11_emulation
         cargo build --release -p syntra-plugin-fuse -p syntra-plugin-clipboard
         cp target/release/syntra syntra-linux-arm64
         cp target/release/syntra-daemon syntra-daemon-linux-arm64
