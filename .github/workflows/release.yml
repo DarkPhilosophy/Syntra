@@ -45,8 +45,11 @@ jobs:
       run: |
         cargo bundle --release -p syntra-app
         # Full packages: dashboard, daemon and plugins, desktop entry, icon.
+        # They replace cargo-bundle's .deb, which holds the dashboard only.
+        rm -f target/release/bundle/deb/*.deb
         cargo deb -p syntra-app --no-build --no-strip -o target/release/bundle/deb/
-        cargo generate-rpm -p crates/syntra-app -o target/release/bundle/rpm/
+        mkdir -p target/release/bundle/rpm
+        cargo generate-rpm -p crates/syntra-app -o target/release/bundle/rpm
         ls target/release/bundle/*/
     - name: Upload build artifact
       uses: actions/upload-artifact@v6
@@ -125,7 +128,7 @@ jobs:
   flatpak-release-build:
     runs-on: ubuntu-24.04
     container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-48
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-49
       options: --privileged
     steps:
     - uses: actions/checkout@v6

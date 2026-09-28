@@ -1,7 +1,8 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/flatpak/flatpak-builder/refs/heads/main/data/flatpak-manifest.schema.json
 app-id: io.syntra.Syntra
 runtime: org.gnome.Platform
-runtime-version: "48"
+# GNOME 49 (freedesktop 25.08): its rust-stable meets Slint's minimum Rust.
+runtime-version: "49"
 sdk: org.gnome.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
