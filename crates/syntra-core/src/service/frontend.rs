@@ -118,6 +118,15 @@ impl Service {
                 self.notify_frontend(FrontendEvent::InputSharing(enabled));
             }
             FrontendRequest::SetIndependentPointers(enabled) => {
+                #[cfg(target_os = "linux")]
+                if enabled {
+                    if let Some(problem) = crate::gnome_guard::independent_pointer_blocker() {
+                        log::warn!("independent pointers refused: {problem}");
+                        self.notify_frontend(FrontendEvent::Error(problem));
+                        self.notify_frontend(FrontendEvent::IndependentPointers(false));
+                        return false;
+                    }
+                }
                 self.config.set_independent_pointers(enabled);
                 self.emulation.set_independent_pointers(enabled);
                 self.save_config();
@@ -487,7 +496,26 @@ impl Service {
         self.notify_frontend(FrontendEvent::DaemonInfo(info));
     }
 
+    /// Tells emulation which side of this screen each configured peer sits
+    /// on, so entering pointers follow this machine's layout.
+    pub(super) fn publish_peer_sides(&self) {
+        let mut sides = std::collections::HashMap::new();
+        for (_, config, state) in self.client_manager.get_client_states() {
+            let side = match config.pos {
+                syntra_api::Position::Left => syntra_proto::Position::Left,
+                syntra_api::Position::Right => syntra_proto::Position::Right,
+                syntra_api::Position::Top => syntra_proto::Position::Top,
+                syntra_api::Position::Bottom => syntra_proto::Position::Bottom,
+            };
+            for ip in config.fix_ips.iter().chain(state.ips.iter()) {
+                sides.insert(*ip, side);
+            }
+        }
+        self.emulation.set_peer_sides(sides);
+    }
+
     pub(super) fn save_config(&mut self) {
+        self.publish_peer_sides();
         let clients = self
             .client_manager
             .get_client_states()

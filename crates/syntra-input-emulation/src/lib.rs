@@ -203,6 +203,11 @@ impl InputEmulation {
         self.emulation.set_independent_pointers(enabled);
     }
 
+    /// See [`Emulation::place_pointer`].
+    pub fn place_pointer(&mut self, edge: PointerEdge) {
+        self.emulation.place_pointer(edge);
+    }
+
     /// See [`Emulation::take_pointer_edge`].
     pub fn take_pointer_edge(&mut self, handle: EmulationHandle) -> Option<PointerEdge> {
         self.emulation.take_pointer_edge(handle)
@@ -336,6 +341,10 @@ trait Emulation: Send {
     fn take_pointer_edge(&mut self, _handle: EmulationHandle) -> Option<PointerEdge> {
         None
     }
+    /// Moves the pointer to the middle of `edge`, where a peer entering
+    /// from that side appears. Backends driving the shared system pointer
+    /// leave it where it is.
+    fn place_pointer(&mut self, _edge: PointerEdge) {}
     fn take_clipboard_receiver(&mut self) -> Option<mpsc::Receiver<(String, Vec<u8>)>> {
         None
     }

@@ -186,6 +186,17 @@ impl Emulation for AndroidEmulation {
         self.edge.take()
     }
 
+    fn place_pointer(&mut self, edge: PointerEdge) {
+        self.edge = None;
+        let side = match edge {
+            PointerEdge::Left => 1,
+            PointerEdge::Right => 2,
+            PointerEdge::Top => 3,
+            PointerEdge::Bottom => 4,
+        };
+        call("enter", "(I)V", &[JValue::Int(side)]);
+    }
+
     async fn create(&mut self, _handle: EmulationHandle) {}
     async fn destroy(&mut self, _handle: EmulationHandle) {
         call("leave", "()V", &[]);

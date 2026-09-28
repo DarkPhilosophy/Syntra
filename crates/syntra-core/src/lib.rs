@@ -44,6 +44,8 @@ mod dns;
 mod emulation;
 pub mod emulation_test;
 mod file_transfer;
+#[cfg(target_os = "linux")]
+mod gnome_guard;
 mod history;
 mod history_sync;
 mod listen;

@@ -354,11 +354,9 @@ impl PenState {
     }
 }
 
-impl Drop for PeerPointer {
-    fn drop(&mut self) {
-        let _ = self.leave();
-    }
-}
+// No proximity-out on drop: destroying the device removes the tablet
+// sprite in one step. A separate proximity-out leaves GNOME with a sprite
+// whose cursor is unset, the state its compositor mishandles.
 
 /// Logical desktop size in pixels, which the pen range is mapped onto.
 ///

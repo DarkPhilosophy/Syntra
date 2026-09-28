@@ -135,6 +135,8 @@ enum EmulationRequest {
     CaptureReady(bool),
     SetInputSharing(bool),
     SetIndependentPointers(bool),
+    /// Where each configured peer sits on this screen, by address.
+    SetPeerSides(HashMap<std::net::IpAddr, Position>),
     SendProto {
         addr: SocketAddr,
         event: ProtoEvent,
@@ -164,6 +166,7 @@ impl Emulation {
             input_sharing: true,
             active_inputs: HashSet::new(),
             entered_from: HashMap::new(),
+            peer_sides: HashMap::new(),
         };
         let task = spawn_local(emulation_task.run());
         Self {
@@ -194,6 +197,15 @@ impl Emulation {
     pub(crate) fn set_independent_pointers(&self, enabled: bool) {
         self.request_tx
             .send(EmulationRequest::SetIndependentPointers(enabled))
+            .expect("channel closed");
+    }
+
+    /// Updates where each configured peer sits on this screen. An entering
+    /// peer's pointer appears on, and leaves through, the side configured
+    /// here: the other machine's own map may disagree.
+    pub(crate) fn set_peer_sides(&self, sides: HashMap<std::net::IpAddr, Position>) {
+        self.request_tx
+            .send(EmulationRequest::SetPeerSides(sides))
             .expect("channel closed");
     }
 
@@ -256,6 +268,8 @@ struct ListenTask {
     active_inputs: HashSet<SocketAddr>,
     /// Side of this screen each active peer entered from.
     entered_from: HashMap<SocketAddr, Position>,
+    /// Side of this screen each configured peer sits on, from local config.
+    peer_sides: HashMap<std::net::IpAddr, Position>,
 }
 
 #[derive(Debug)]
@@ -360,7 +374,11 @@ impl ListenTask {
                                 {
                                     log::info!("accepting entry from {addr}");
                                     self.active_inputs.insert(addr);
-                                    self.entered_from.insert(addr, pos);
+                                    // This machine's own layout wins over the
+                                    // side the other machine assumed.
+                                    let side = self.peer_sides.get(&addr.ip()).copied().unwrap_or(pos);
+                                    self.entered_from.insert(addr, side);
+                                    self.emulation_proxy.place_pointer(side);
                                     self.event_tx
                                         .send(EmulationEvent::ReleaseNotify)
                                         .expect("channel closed");
@@ -548,6 +566,9 @@ impl ListenTask {
                         self.independent_pointers = enabled;
                         self.emulation_proxy.set_independent_pointers(enabled);
                     }
+                    EmulationRequest::SetPeerSides(sides) => {
+                        self.peer_sides = sides;
+                    }
                     EmulationRequest::SetInputSharing(enabled) => {
                         self.input_sharing = enabled;
                         self.emulation_proxy.set_input_sharing(enabled);
@@ -619,6 +640,8 @@ pub(crate) struct EmulationProxy {
 
 enum ProxyRequest {
     Input(Event, SocketAddr),
+    /// Put the pointer on the given side of this screen (entry point).
+    PlacePointer(Position),
     Remove(SocketAddr),
     Terminate,
     Reenable,
@@ -691,6 +714,10 @@ impl EmulationProxy {
             .send(ProxyRequest::Remove(addr))
             .expect("channel closed");
     }
+    fn place_pointer(&self, side: Position) {
+        let _ = self.request_tx.send(ProxyRequest::PlacePointer(side));
+    }
+
     fn set_independent_pointers(&self, enabled: bool) {
         self.independent_pointers.set(enabled);
         self.request_tx
@@ -765,7 +792,7 @@ impl EmulationTask {
                         }
                     }
                     // Kept in the shared cell; applied on the next backend.
-                    ProxyRequest::SetIndependentPointers(_) => {}
+                    ProxyRequest::SetIndependentPointers(_) | ProxyRequest::PlacePointer(_) => {}
                     ProxyRequest::PublishFileClipboard { reply, .. } => {
                         let _ = reply.send(Err("emulation inactive".to_string()));
                     }
@@ -812,7 +839,9 @@ impl EmulationTask {
                         self.handles.remove(&addr);
                         self.pressed_buttons.remove(&addr);
                     }
-                    ProxyRequest::Input(..) | ProxyRequest::SetIndependentPointers(_) => {}
+                    ProxyRequest::Input(..)
+                    | ProxyRequest::SetIndependentPointers(_)
+                    | ProxyRequest::PlacePointer(_) => {}
                     ProxyRequest::PublishFileClipboard { reply, .. } => {
                         let _ = reply.send(Err("emulation not ready".to_string()));
                     }
@@ -917,6 +946,14 @@ impl EmulationTask {
                     }
                     ProxyRequest::SetIndependentPointers(enabled) => {
                         emulation.set_independent_pointers(enabled);
+                    }
+                    ProxyRequest::PlacePointer(side) => {
+                        emulation.place_pointer(match side {
+                            Position::Left => syntra_input_emulation::PointerEdge::Left,
+                            Position::Right => syntra_input_emulation::PointerEdge::Right,
+                            Position::Top => syntra_input_emulation::PointerEdge::Top,
+                            Position::Bottom => syntra_input_emulation::PointerEdge::Bottom,
+                        });
                     }
                     ProxyRequest::SetInputSharing(enabled) => {
                         if !enabled {
@@ -1051,7 +1088,9 @@ async fn wait_for_termination(rx: &mut Receiver<ProxyRequest>) {
             ProxyRequest::Terminate => return,
             ProxyRequest::Input(_, _) => continue,
             ProxyRequest::Remove(_) => continue,
-            ProxyRequest::SetInputSharing(_) | ProxyRequest::SetIndependentPointers(_) => continue,
+            ProxyRequest::SetInputSharing(_)
+            | ProxyRequest::SetIndependentPointers(_)
+            | ProxyRequest::PlacePointer(_) => continue,
             ProxyRequest::Reenable => continue,
             ProxyRequest::PublishFileClipboard { reply, .. } => {
                 let _ = reply.send(Err("emulation task stopped".to_string()));

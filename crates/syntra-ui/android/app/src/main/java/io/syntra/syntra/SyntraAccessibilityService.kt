@@ -210,5 +210,22 @@ class SyntraAccessibilityService : AccessibilityService() {
         @JvmStatic fun back() = run { performGlobalAction(GLOBAL_ACTION_BACK) }
         @JvmStatic fun home() = run { performGlobalAction(GLOBAL_ACTION_HOME) }
         @JvmStatic fun leave() = run { hidePointer() }
+
+        /** Places the pointer just inside the middle of edge 1-4 (L/R/T/B). */
+        @JvmStatic fun enter(side: Int) {
+            val service = instance ?: return
+            val metrics = service.resources.displayMetrics
+            val w = metrics.widthPixels.toFloat()
+            val h = metrics.heightPixels.toFloat()
+            synchronized(service) {
+                when (side) {
+                    1 -> { service.x = 2f; service.y = h / 2 }
+                    2 -> { service.x = w - 3f; service.y = h / 2 }
+                    3 -> { service.x = w / 2; service.y = 2f }
+                    else -> { service.x = w / 2; service.y = h - 3f }
+                }
+            }
+            service.main.post { service.showPointer(); service.movePointer() }
+        }
     }
 }

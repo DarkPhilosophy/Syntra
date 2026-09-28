@@ -201,6 +201,7 @@ impl Service {
                 }
                 let ips = ips.unwrap_or_default();
                 self.client_manager.set_dns_ips(handle, ips);
+                self.publish_peer_sides();
                 handle
             }
         };
