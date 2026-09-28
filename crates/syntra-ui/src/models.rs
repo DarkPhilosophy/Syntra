@@ -160,7 +160,7 @@ pub enum TransportLifecycleEvent {
 }
 impl AppViewState {
     pub fn next_history_refresh(&mut self) -> Option<FrontendRequest> {
-        if self.navigation.page != "history"
+        if self.navigation.page != "clipboard"
             || !self.status.connected
             || self.history_query_pending
             || !self.history_refresh_needed
@@ -533,7 +533,7 @@ mod tests {
     #[test]
     fn clear_refreshes_filtered_records_and_preserves_partial_failure() {
         let mut view = AppViewState::default();
-        view.navigation.page = "history".into();
+        view.navigation.page = "clipboard".into();
         view.history_query = "needle".into();
         view.reduce_transport(TransportLifecycleEvent::Resynchronized);
         view.reduce(FrontendEvent::HistoryPage(history_page("needle", &[1, 2])));
@@ -569,7 +569,7 @@ mod tests {
     #[test]
     fn clipboard_invalidations_coalesce_and_refresh_latest_search() {
         let mut view = AppViewState::default();
-        view.navigation.page = "history".into();
+        view.navigation.page = "clipboard".into();
         view.reduce_transport(TransportLifecycleEvent::Resynchronized);
         view.reduce(FrontendEvent::HistoryChanged);
         assert!(view.next_history_refresh().is_some());

@@ -7,6 +7,8 @@ import { ScrollView, LineEdit } from "std-widgets.slint";
 
 export component ClipboardPage inherits Rectangle {
     in property <bool> mobile;
+    // "sharing": what is shared; "permissions": sandbox file access grants.
+    in property <string> section: "sharing";
     in property <bool> text-enabled;
     in property <bool> image-enabled;
     in property <bool> files-enabled;
@@ -34,14 +36,14 @@ export component ClipboardPage inherits Rectangle {
             padding: Theme.content-gap;
             spacing: Theme.spacing;
             alignment: start;
-            if !root.mobile: Text { text: Translations.tr("navigation-clipboard"); color: Theme.text; font-size: Theme.title-size; vertical-stretch: 0; }
-            if !root.mobile: Text { text: Translations.tr("clipboard-description"); color: Theme.muted-text; font-size: Theme.body-size; wrap: word-wrap; vertical-stretch: 0; }
-            SettingRow { title: Translations.tr("clipboard-text"); description: root.mobile ? "" : Translations.tr("clipboard-text-description"); enabled: root.text-enabled; toggled(value) => { root.text-toggled(value); } }
-            SettingRow { title: Translations.tr("clipboard-images"); description: root.mobile ? "" : Translations.tr("clipboard-images-description"); enabled: root.image-enabled; toggled(value) => { root.image-toggled(value); } }
-            SettingRow { title: Translations.tr("clipboard-files"); description: root.mobile && root.files-supported ? "" : root.files-supported ? Translations.tr("clipboard-files-description") : Translations.tr("clipboard-unavailable"); enabled: root.files-enabled; interactive: root.files-supported; toggled(value) => { root.files-toggled(value); } }
+            if !root.mobile && root.section == "permissions": Text { text: Translations.tr("navigation-permissions"); color: Theme.text; font-size: Theme.title-size; vertical-stretch: 0; }
+            if !root.mobile && root.section == "sharing": Text { text: Translations.tr("clipboard-description"); color: Theme.muted-text; font-size: Theme.body-size; wrap: word-wrap; vertical-stretch: 0; }
+            if root.section == "sharing": SettingRow { title: Translations.tr("clipboard-text"); description: root.mobile ? "" : Translations.tr("clipboard-text-description"); enabled: root.text-enabled; toggled(value) => { root.text-toggled(value); } }
+            if root.section == "sharing": SettingRow { title: Translations.tr("clipboard-images"); description: root.mobile ? "" : Translations.tr("clipboard-images-description"); enabled: root.image-enabled; toggled(value) => { root.image-toggled(value); } }
+            if root.section == "sharing": SettingRow { title: Translations.tr("clipboard-files"); description: root.mobile && root.files-supported ? "" : root.files-supported ? Translations.tr("clipboard-files-description") : Translations.tr("clipboard-unavailable"); enabled: root.files-enabled; interactive: root.files-supported; toggled(value) => { root.files-toggled(value); } }
 
             // Flatpak sandbox grants only exist on Linux desktops.
-            if Theme.desktop-platform: VerticalLayout {
+            if Theme.desktop-platform && root.section == "permissions": VerticalLayout {
                 spacing: Theme.spacing;
                 vertical-stretch: 0;
                 Text { text: Translations.tr("clipboard-file-access-required"); color: Theme.text; font-size: Theme.body-size; font-weight: 600; vertical-stretch: 0; }

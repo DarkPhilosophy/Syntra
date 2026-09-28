@@ -14,7 +14,7 @@ use jni::{
 };
 use syntra_input_event::{BTN_LEFT, Event, KeyboardEvent, PointerEvent};
 
-use super::{Emulation, EmulationHandle, error::EmulationError};
+use super::{Emulation, EmulationHandle, PointerEdge, error::EmulationError};
 
 const SERVICE_CLASS: &str = "io.syntra.syntra.SyntraAccessibilityService";
 const KEY_BACKSPACE: u32 = 14;
@@ -87,6 +87,8 @@ fn call(method: &str, signature: &str, args: &[JValue<'_, '_>]) {
 
 pub(crate) struct AndroidEmulation {
     shift: bool,
+    /// Edge the pointer was last pushed past, taken by the service.
+    edge: Option<PointerEdge>,
 }
 
 impl AndroidEmulation {
@@ -94,7 +96,10 @@ impl AndroidEmulation {
         if !service_enabled() {
             return Err(AndroidEmulationCreationError::ServiceDisabled);
         }
-        Ok(Self { shift: false })
+        Ok(Self {
+            shift: false,
+            edge: None,
+        })
     }
 }
 
@@ -111,11 +116,23 @@ impl Emulation for AndroidEmulation {
     ) -> Result<(), EmulationError> {
         match event {
             Event::Pointer(PointerEvent::Motion { dx, dy, .. }) => {
-                call(
-                    "motion",
-                    "(FF)V",
-                    &[JValue::Float(dx as f32), JValue::Float(dy as f32)],
-                );
+                let edge = with_service(|env, class| {
+                    env.call_static_method(
+                        class,
+                        "motion",
+                        "(FF)I",
+                        &[JValue::Float(dx as f32), JValue::Float(dy as f32)],
+                    )?
+                    .i()
+                });
+                match edge {
+                    Ok(1) => self.edge = Some(PointerEdge::Left),
+                    Ok(2) => self.edge = Some(PointerEdge::Right),
+                    Ok(3) => self.edge = Some(PointerEdge::Top),
+                    Ok(4) => self.edge = Some(PointerEdge::Bottom),
+                    Ok(_) => {}
+                    Err(error) => log::warn!("accessibility motion: {error}"),
+                }
             }
             Event::Pointer(PointerEvent::Button { button, state, .. }) if button == BTN_LEFT => {
                 call("button", "(Z)V", &[JValue::Bool(u8::from(state != 0))]);
@@ -163,6 +180,10 @@ impl Emulation for AndroidEmulation {
             _ => {}
         }
         Ok(())
+    }
+
+    fn take_pointer_edge(&mut self, _handle: EmulationHandle) -> Option<PointerEdge> {
+        self.edge.take()
     }
 
     async fn create(&mut self, _handle: EmulationHandle) {}

@@ -1905,7 +1905,7 @@ fn project_app_state(app: &AppWindow, state: &AppViewState, settings: &Presentat
         .collect::<Vec<slint::SharedString>>();
     keys.sort_by(|left, right| left.as_str().cmp(right.as_str()));
     global.set_authorized_keys(ModelRc::new(VecModel::from(keys)));
-    if state.navigation.page == "history" {
+    if state.navigation.page == "clipboard" {
         project_history(app, state);
     }
 }
@@ -3104,7 +3104,7 @@ fn bind_window_callbacks(
             if let Ok(mut view) = state.lock() {
                 view.navigation.page = page.to_string();
             }
-            if page == "clipboard" {
+            if page == "permissions" {
                 if let Some(app) = weak.upgrade() {
                     app.global::<AppState>().invoke_refresh_flatpak_apps();
                 }
@@ -3112,7 +3112,7 @@ fn bind_window_callbacks(
             if let Some(app) = weak.upgrade() {
                 match page.as_str() {
                     "devices" => app.global::<AppState>().invoke_discover_peers(),
-                    "history" => app.global::<AppState>().invoke_history_refresh(),
+                    "clipboard" => app.global::<AppState>().invoke_history_refresh(),
                     "settings" | "overview" => app
                         .global::<AppState>()
                         .invoke_service_action("refresh".into()),

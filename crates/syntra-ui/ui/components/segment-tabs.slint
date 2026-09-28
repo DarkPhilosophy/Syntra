@@ -1,0 +1,43 @@
+import { Theme } from "../theme.slint";
+
+// Segmented control: equal-width tabs with a sliding highlight.
+export component SegmentTabs inherits Rectangle {
+    in property <[string]> labels;
+    in-out property <int> selected: 0;
+    height: 52px;
+    background: Theme.background;
+    track := Rectangle {
+        x: Theme.content-gap / 2;
+        y: 8px;
+        width: parent.width - Theme.content-gap;
+        height: parent.height - 12px;
+        border-radius: self.height / 2;
+        background: Theme.surface;
+        Rectangle {
+            x: root.selected * parent.width / max(1, root.labels.length) + 3px;
+            y: 3px;
+            width: parent.width / max(1, root.labels.length) - 6px;
+            height: parent.height - 6px;
+            border-radius: self.height / 2;
+            background: Theme.accent.with-alpha(0.22);
+            animate x { duration: Theme.motion-enabled ? 160ms : 0ms; easing: ease-out; }
+        }
+        HorizontalLayout {
+            for label[index] in root.labels: Rectangle {
+                accessible-role: tab;
+                accessible-label: label;
+                accessible-action-default => { root.selected = index; }
+                Text {
+                    text: label;
+                    color: index == root.selected ? Theme.text : Theme.muted-text;
+                    font-size: Theme.body-size;
+                    font-weight: index == root.selected ? 600 : 400;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                TouchArea { clicked => { root.selected = index; } }
+            }
+        }
+    }
+}

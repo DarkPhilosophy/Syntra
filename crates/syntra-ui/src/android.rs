@@ -144,6 +144,7 @@ pub fn android_main(app: slint::android::AndroidApp) {
     }
 }
 
+#[cfg(target_os = "android")]
 /// Re-enables emulation once the user turns the accessibility service on,
 /// so the phone becomes controllable without restarting the app.
 fn spawn_accessibility_watcher() {
@@ -163,6 +164,7 @@ fn spawn_accessibility_watcher() {
         });
 }
 
+#[cfg(target_os = "android")]
 /// Sends one request to the in-process service over its control socket.
 fn request(json: &str) {
     use std::io::Write;
@@ -177,6 +179,7 @@ fn request(json: &str) {
     }
 }
 
+#[cfg(target_os = "android")]
 /// Opens the system Accessibility settings, where the user enables
 /// "Syntra remote control".
 pub fn open_accessibility_settings() {
@@ -229,6 +232,7 @@ pub fn open_accessibility_settings() {
     }
 }
 
+#[cfg(target_os = "android")]
 /// Whether the user has enabled phone control.
 pub fn phone_control_enabled() -> bool {
     syntra_input_emulation::android::service_enabled()

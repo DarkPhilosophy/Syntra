@@ -30,8 +30,8 @@ class SyntraAccessibilityService : AccessibilityService() {
     private val main = Handler(Looper.getMainLooper())
     private var pointer: PointerView? = null
     private var params: WindowManager.LayoutParams? = null
-    private var x = 0f
-    private var y = 0f
+    @Volatile private var x = 0f
+    @Volatile private var y = 0f
     private var pressedAt: Pair<Float, Float>? = null
     private var dragPath: Path? = null
 
@@ -89,10 +89,31 @@ class SyntraAccessibilityService : AccessibilityService() {
         dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
     }
 
-    private fun onMotion(dx: Float, dy: Float) {
+    /**
+     * Moves the pointer and reports the screen edge it was pushed past:
+     * 0 none, 1 left, 2 right, 3 top, 4 bottom. Pushing past the edge that
+     * faces the controlling computer is how the user hands control back.
+     */
+    @Synchronized
+    private fun advance(dx: Float, dy: Float): Int {
         val metrics = resources.displayMetrics
-        x = (x + dx).coerceIn(0f, metrics.widthPixels - 1f)
-        y = (y + dy).coerceIn(0f, metrics.heightPixels - 1f)
+        val maxX = metrics.widthPixels - 1f
+        val maxY = metrics.heightPixels - 1f
+        val tx = x + dx
+        val ty = y + dy
+        val edge = when {
+            tx < 0f -> 1
+            tx > maxX -> 2
+            ty < 0f -> 3
+            ty > maxY -> 4
+            else -> 0
+        }
+        x = tx.coerceIn(0f, maxX)
+        y = ty.coerceIn(0f, maxY)
+        return edge
+    }
+
+    private fun onMotion() {
         showPointer()
         movePointer()
         dragPath?.lineTo(x, y)
@@ -176,7 +197,12 @@ class SyntraAccessibilityService : AccessibilityService() {
         }
 
         @JvmStatic fun isEnabled(): Boolean = instance != null
-        @JvmStatic fun motion(dx: Float, dy: Float) = run { onMotion(dx, dy) }
+        @JvmStatic fun motion(dx: Float, dy: Float): Int {
+            val service = instance ?: return 0
+            val edge = service.advance(dx, dy)
+            service.main.post { service.onMotion() }
+            return edge
+        }
         @JvmStatic fun button(pressed: Boolean) = run { onButton(pressed) }
         @JvmStatic fun scroll(detents: Float) = run { onScroll(detents) }
         @JvmStatic fun text(text: String) = run { onText(text) }

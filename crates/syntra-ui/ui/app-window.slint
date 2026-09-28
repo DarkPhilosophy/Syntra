@@ -15,6 +15,7 @@ import { SettingsPage } from "pages/settings.slint";
 import { AuthorizationPage } from "pages/authorization.slint";
 import { WelcomeOverlay } from "components/welcome.slint";
 import { AboutPage } from "pages/about.slint";
+import { SegmentTabs } from "components/segment-tabs.slint";
 import { TouchpadPage } from "pages/touchpad.slint";
 import { NavItem, NavSection } from "components/navigation.slint";
 import { MobileTopBar, MobileBottomNav } from "components/mobile-nav.slint";
@@ -86,7 +87,7 @@ export component AppWindow inherits Window {
         : selected-page == "clipboard" ? Translations.tr("navigation-clipboard")
         : selected-page == "transfers" ? Translations.tr("navigation-transfers")
         : selected-page == "control" ? Translations.tr("navigation-control")
-        : selected-page == "history" ? Translations.tr("history-title")
+        : selected-page == "permissions" ? Translations.tr("navigation-permissions")
         : selected-page == "authorization" ? Translations.tr("navigation-authorization")
         : selected-page == "input" ? Translations.tr("navigation-input")
         : selected-page == "settings" ? Translations.tr("navigation-settings")
@@ -94,7 +95,9 @@ export component AppWindow inherits Window {
         : selected-page == "diagnostics" ? Translations.tr("navigation-diagnostics")
         : Translations.tr("navigation-about");
     changed selected-page => { if root.mobile { back-scope.focus(); } }
-    private property <bool> settings-child: selected-page == "history" || selected-page == "authorization" || selected-page == "input" || selected-page == "diagnostics" || selected-page == "about" || selected-page == "plugins" || selected-page == "transfers";
+    // Clipboard page: 0 history, 1 sharing switches.
+    in-out property <int> clipboard-tab: 0;
+    private property <bool> settings-child: selected-page == "permissions" || selected-page == "authorization" || selected-page == "input" || selected-page == "diagnostics" || selected-page == "about" || selected-page == "plugins" || selected-page == "transfers";
     private property <int> tab-index: selected-page == "overview" ? 0 : selected-page == "devices" ? 1 : selected-page == "clipboard" ? 2 : selected-page == "control" ? 3 : 4;
     function go-tab(index: int) {
         let id = index == 0 ? "overview" : index == 1 ? "devices" : index == 2 ? "clipboard" : index == 3 ? "control" : "settings";
@@ -170,7 +173,6 @@ export component AppWindow inherits Window {
                         entries: [
                             { id: "input", icon: @image-url("assets/navigation/input.svg"), label: Translations.tr("navigation-input") },
                             { id: "clipboard", icon: @image-url("assets/navigation/clipboard.svg"), label: Translations.tr("navigation-clipboard") },
-                            { id: "history", icon: @image-url("assets/navigation/history.svg"), label: Translations.tr("history-title") },
                             { id: "transfers", icon: @image-url("assets/navigation/transfers.svg"), label: Translations.tr("navigation-transfers") },
                         ];
                     }
@@ -180,6 +182,7 @@ export component AppWindow inherits Window {
                         selected: root.selected-page;
                         activate(id) => { root.selected-page = id; root.navigate(id); }
                         entries: [
+                            { id: "permissions", icon: @image-url("assets/navigation/authorization.svg"), label: Translations.tr("navigation-permissions") },
                             { id: "settings", icon: @image-url("assets/navigation/settings.svg"), label: Translations.tr("navigation-settings") },
                             { id: "plugins", icon: @image-url("assets/navigation/plugins.svg"), label: Translations.tr("navigation-plugins") },
                             { id: "diagnostics", icon: @image-url("assets/navigation/diagnostics.svg"), label: Translations.tr("navigation-diagnostics") },
@@ -246,7 +249,9 @@ export component AppWindow inherits Window {
                         if self.current-position.x < self.pressed-position.x - self.width / 4 { root.go-tab(root.tab-index + 1); }
                         else if self.current-position.x > self.pressed-position.x + self.width / 4 { root.go-tab(root.tab-index - 1); }
                     }
-                if selected-page == "history": HistoryPage {
+                if selected-page == "clipboard" && root.clipboard-tab == 0: HistoryPage {
+                    y: 52px;
+                    height: parent.height - 52px;
                     records: AppState.history-records;
                     query: AppState.history-query;
                     busy: AppState.history-busy;
@@ -323,7 +328,28 @@ export component AppWindow inherits Window {
                     enable-capture => { AppState.enable-capture(); }
                     enable-emulation => { AppState.enable-emulation(); }
                 }
-                if selected-page == "clipboard": ClipboardPage {
+                if selected-page == "clipboard": SegmentTabs {
+                    y: 0;
+                    height: 52px;
+                    selected <=> root.clipboard-tab;
+                    labels: [Translations.tr("history-title"), Translations.tr("clipboard-sharing")];
+                }
+                if selected-page == "permissions": ClipboardPage {
+                    section: "permissions";
+                    mobile: root.mobile;
+                    flatpak-applications: AppState.flatpak-applications;
+                    flatpak-applications-loading: AppState.flatpak-applications-loading;
+                    flatpak-applications-error: AppState.flatpak-applications-error;
+                    search: AppState.flatpak-search;
+                    search-changed(query) => { AppState.search-flatpak-apps(query); }
+                    status-message: AppState.flatpak-grant-status;
+                    refresh-flatpak-apps => { AppState.refresh-flatpak-apps(); }
+                    grant-flatpak-access(application-id) => { AppState.grant-flatpak-access(application-id); }
+                }
+                if selected-page == "clipboard" && root.clipboard-tab == 1: ClipboardPage {
+                    y: 52px;
+                    height: parent.height - 52px;
+                    section: "sharing";
                     mobile: root.mobile;
                     text-enabled: AppState.clipboard-text-enabled;
                     image-enabled: AppState.clipboard-image-enabled;

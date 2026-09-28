@@ -86,7 +86,6 @@ export component SettingsPage inherits Rectangle {
             alignment: start;
             Text { text: Translations.tr("settings-section-pages"); color: Theme.muted-text; font-size: Theme.caption-size; vertical-stretch: 0; }
             for entry in [
-                { id: "history", icon: @image-url("../assets/navigation/history.svg"), label: Translations.tr("history-title") },
                 { id: "authorization", icon: @image-url("../assets/navigation/authorization.svg"), label: Translations.tr("navigation-authorization") },
                 { id: "transfers", icon: @image-url("../assets/navigation/transfers.svg"), label: Translations.tr("navigation-transfers") },
                 { id: "input", icon: @image-url("../assets/navigation/input.svg"), label: Translations.tr("navigation-input") },
