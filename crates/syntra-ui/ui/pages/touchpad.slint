@@ -1,4 +1,4 @@
-import { LineEdit } from "std-widgets.slint";
+import { LineEdit, Slider } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
 import { Translations } from "../localization.slint";
 import { AppButton } from "../components/controls.slint";
@@ -35,12 +35,34 @@ component MouseButton inherits Rectangle {
     }
 }
 
+// Compact square key with an icon; the label is for screen readers.
+component KeyButton inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> enabled: true;
+    callback pressed();
+    width: 48px;
+    height: 48px;
+    border-radius: Theme.small-radius;
+    background: touch.pressed ? Theme.accent.with-alpha(0.3) : Theme.surface;
+    border-width: 1px;
+    border-color: Theme.border;
+    opacity: root.enabled ? 1 : 0.4;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.pressed(); }
+    Image { source: root.icon; colorize: Theme.text; width: 24px; height: 24px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; }
+    touch := TouchArea { enabled: root.enabled; clicked => { root.pressed(); } }
+}
+
 // The phone as a mouse and keyboard for one of the paired computers.
 // The mouse is drawn as a mouse: two buttons at the top, a wheel between
 // them that turns as you drag it, and the body as the touch surface.
 export component TouchpadPage inherits Rectangle {
     in property <[ClientItem]> clients;
     in-out property <int> target: 0;
+    // Pointer speed multiplier, like a mouse's DPI.
+    in-out property <float> sensitivity: 2.5;
     callback begin(int);
     callback motion(int, float, float);
     callback button(int, int, bool);
@@ -94,6 +116,13 @@ export component TouchpadPage inherits Rectangle {
             }
         }
 
+        if root.has-target: HorizontalLayout {
+            spacing: Theme.small-spacing;
+            vertical-stretch: 0;
+            Text { text: Translations.tr("touchpad-speed"); color: Theme.muted-text; font-size: Theme.caption-size; vertical-alignment: center; }
+            Slider { horizontal-stretch: 1; minimum: 0.5; maximum: 6; value <=> root.sensitivity; }
+            Text { text: round(root.sensitivity * 10) / 10 + "×"; color: Theme.text; font-size: Theme.caption-size; vertical-alignment: center; width: 36px; }
+        }
         if root.has-target && !root.ready: Text {
             text: Translations.tr("touchpad-offline");
             color: Theme.warning;
@@ -232,7 +261,7 @@ export component TouchpadPage inherits Rectangle {
                     if abs(self.mouse-x - mouse.press-x) + abs(self.mouse-y - mouse.press-y) > 8px {
                         mouse.travelled = true;
                     }
-                    root.motion(root.zone, (self.mouse-x - mouse.last-x) / 1px, (self.mouse-y - mouse.last-y) / 1px);
+                    root.motion(root.zone, (self.mouse-x - mouse.last-x) / 1px * root.sensitivity, (self.mouse-y - mouse.last-y) / 1px * root.sensitivity);
                     mouse.last-x = self.mouse-x; mouse.last-y = self.mouse-y;
                 }
             }
@@ -259,8 +288,8 @@ export component TouchpadPage inherits Rectangle {
                 }
                 accepted => { root.enter(root.zone); }
             }
-            AppButton { text: Translations.tr("touchpad-delete"); enabled: root.has-target; clicked => { root.begin(root.zone); root.backspace(root.zone); } }
-            AppButton { text: Translations.tr("touchpad-enter"); enabled: root.has-target; clicked => { root.begin(root.zone); root.enter(root.zone); } }
+            KeyButton { icon: @image-url("../assets/shell/backspace.svg"); label: Translations.tr("touchpad-delete"); enabled: root.has-target; pressed => { root.begin(root.zone); root.backspace(root.zone); } }
+            KeyButton { icon: @image-url("../assets/shell/enter.svg"); label: Translations.tr("touchpad-enter"); enabled: root.has-target; pressed => { root.begin(root.zone); root.enter(root.zone); } }
         }
     }
 }

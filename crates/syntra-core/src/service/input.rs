@@ -60,22 +60,12 @@ impl Service {
                 self.notify_frontend(FrontendEvent::EmulationStatus(self.emulation_status));
             }
             EmulationEvent::EmulationEnabled(backend) => {
-                #[cfg(target_os = "android")]
-                {
-                    // The dummy backend keeps the peer listener active but cannot inject input.
-                    let _ = backend;
-                    self.emulation_status = Status::Disabled;
-                    self.emulation_backend = None;
-                    self.publish_daemon_info();
-                    self.notify_frontend(FrontendEvent::EmulationStatus(self.emulation_status));
-                }
-                #[cfg(not(target_os = "android"))]
-                {
-                    self.emulation_status = Status::Enabled;
-                    self.emulation_backend = Some(backend);
-                    self.publish_daemon_info();
-                    self.notify_frontend(FrontendEvent::EmulationStatus(self.emulation_status));
-                }
+                // Android only reaches this with the accessibility backend:
+                // it never falls back to the dummy one.
+                self.emulation_status = Status::Enabled;
+                self.emulation_backend = Some(backend);
+                self.publish_daemon_info();
+                self.notify_frontend(FrontendEvent::EmulationStatus(self.emulation_status));
             }
             EmulationEvent::ReleaseNotify => self.capture.release(),
             // Consumed by the listen task before it reaches the service.
@@ -322,23 +312,12 @@ impl Service {
                 self.emulation.set_capture_ready(false);
             }
             ICaptureEvent::CaptureEnabled(backend) => {
-                #[cfg(target_os = "android")]
-                {
-                    let _ = backend;
-                    self.capture_status = Status::Disabled;
-                    self.capture_backend = None;
-                    self.publish_daemon_info();
-                    self.notify_frontend(FrontendEvent::CaptureStatus(self.capture_status));
-                    self.emulation.set_capture_ready(false);
-                }
-                #[cfg(not(target_os = "android"))]
-                {
-                    self.capture_status = Status::Enabled;
-                    self.capture_backend = Some(backend);
-                    self.publish_daemon_info();
-                    self.notify_frontend(FrontendEvent::CaptureStatus(self.capture_status));
-                    self.emulation.set_capture_ready(true);
-                }
+                // On Android this is the touchpad backend, which is real.
+                self.capture_status = Status::Enabled;
+                self.capture_backend = Some(backend);
+                self.publish_daemon_info();
+                self.notify_frontend(FrontendEvent::CaptureStatus(self.capture_status));
+                self.emulation.set_capture_ready(true);
             }
             ICaptureEvent::ClientEntered(handle) => {
                 if self.input_sharing {

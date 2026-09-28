@@ -93,6 +93,7 @@ export component AppWindow inherits Window {
         : selected-page == "plugins" ? Translations.tr("navigation-plugins")
         : selected-page == "diagnostics" ? Translations.tr("navigation-diagnostics")
         : Translations.tr("navigation-about");
+    changed selected-page => { if root.mobile { back-scope.focus(); } }
     private property <bool> settings-child: selected-page == "history" || selected-page == "authorization" || selected-page == "input" || selected-page == "diagnostics" || selected-page == "about" || selected-page == "plugins" || selected-page == "transfers";
     private property <int> tab-index: selected-page == "overview" ? 0 : selected-page == "devices" ? 1 : selected-page == "clipboard" ? 2 : selected-page == "control" ? 3 : 4;
     function go-tab(index: int) {
@@ -104,6 +105,8 @@ export component AppWindow inherits Window {
     // to Overview, and only let it close the app from there.
     back-scope := FocusScope {
     init => { if root.mobile { self.focus(); } }
+    // Keep Back handled after focus moved elsewhere (a text field, a tap).
+    changed visible => { if root.mobile { self.focus(); } }
     key-pressed(event) => {
         if event.text != Key.Back { return reject; }
         if root.settings-child { root.go-tab(4); return accept; }
@@ -231,7 +234,10 @@ export component AppWindow inherits Window {
                 vertical-stretch: 1;
                 background: Theme.background;
                 SwipeGestureHandler {
-                    enabled: root.mobile;
+                    // Tab swiping claimed every drag with a sideways drift,
+                    // so real fingers could not scroll pages. Tabs are one
+                    // tap away; scrolling matters more.
+                    enabled: false;
                     handle-swipe-left: root.tab-index < 4 && !root.settings-child && selected-page != "devices" && selected-page != "control";
                     handle-swipe-right: root.tab-index > 0 && !root.settings-child && selected-page != "devices" && selected-page != "control";
                     handle-swipe-up: false;

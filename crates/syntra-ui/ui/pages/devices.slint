@@ -107,7 +107,9 @@ export component DevicesPage inherits Rectangle {
             }
         }
         Text { text: Translations.tr("device-presentation-note"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; vertical-stretch: 0; }
-        PeerMap {
+        // On a phone the device is controlled directly from the Control tab,
+        // so where it sits relative to the others does not apply.
+        if Theme.desktop-platform: PeerMap {
             mobile: root.mobile;
             clients: root.clients;
             zone-depth: root.peer-zone-depth;

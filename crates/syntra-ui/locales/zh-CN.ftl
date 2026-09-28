@@ -425,3 +425,7 @@ overview-mobile-unsupported = 此手机可与电脑配对、共享剪贴板，�
 touchpad-hint = 拖动移动 · 轻点单击 · 长按拖拽
 touchpad-dragging = 正在按住左键 — 抬起手指释放
 touchpad-enter = 回车
+phone-control-on = 此手机可被电脑控制：将指针移过朝向它的屏幕边缘即可。
+phone-control-off = 要从电脑控制此手机，请在“无障碍”中启用“Syntra remote control”。
+phone-control-enable = 打开无障碍设置
+touchpad-speed = 速度

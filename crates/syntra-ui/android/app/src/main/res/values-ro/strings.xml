@@ -2,4 +2,6 @@
     <string name="notification_channel_name">Syntra</string>
     <string name="notification_title">Syntra</string>
     <string name="notification_background_service">Syntra rulează în fundal</string>
+    <string name="accessibility_label">Control de la distanță Syntra</string>
+    <string name="accessibility_description">Permite unui calculator asociat cu Syntra să miște un cursor, să atingă, să deruleze și să scrie pe acest telefon. Doar dispozitivele autorizate de tine în Syntra pot face asta.</string>
 </resources>

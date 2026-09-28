@@ -2,4 +2,6 @@
     <string name="notification_channel_name">Syntra</string>
     <string name="notification_title">Syntra</string>
     <string name="notification_background_service">Syntra is running in the background</string>
+    <string name="accessibility_label">Syntra remote control</string>
+    <string name="accessibility_description">Lets a computer paired with Syntra move a pointer, tap, scroll and type on this phone. Only devices you authorised in Syntra can do this.</string>
 </resources>

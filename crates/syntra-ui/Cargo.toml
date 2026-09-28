@@ -97,6 +97,7 @@ version = "0.4.3"
 syntra-core.workspace = true
 syntra-input-capture.workspace = true
 syntra-input-event.workspace = true
+syntra-input-emulation.workspace = true
 syntra-log.workspace = true
 tokio = { workspace = true, features = ["rt", "time"] }
 jni = "0.21.1"

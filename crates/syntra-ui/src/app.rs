@@ -2634,7 +2634,25 @@ fn bind_app_state_callbacks(
         {
             use crate::touchpad;
             global.on_touchpad_begin(touchpad::begin);
-            global.on_touchpad_motion(|zone, dx, dy| touchpad::motion(zone, dx, dy, 1.6));
+            global.on_open_phone_control_settings(crate::android::open_accessibility_settings);
+            global.set_phone_control_enabled(crate::android::phone_control_enabled());
+            {
+                // Reflect the setting after the user returns from Android
+                // settings; checked cheaply every two seconds.
+                let weak = weak.clone();
+                let timer = Box::leak(Box::new(slint::Timer::default()));
+                timer.start(
+                    slint::TimerMode::Repeated,
+                    std::time::Duration::from_secs(2),
+                    move || {
+                        if let Some(app) = weak.upgrade() {
+                            app.global::<AppState>()
+                                .set_phone_control_enabled(crate::android::phone_control_enabled());
+                        }
+                    },
+                );
+            }
+            global.on_touchpad_motion(|zone, dx, dy| touchpad::motion(zone, dx, dy, 1.0));
             global.on_touchpad_button(touchpad::button);
             global.on_touchpad_scroll(touchpad::scroll);
             global.on_touchpad_type(|zone, text| touchpad::type_text(zone, &text));

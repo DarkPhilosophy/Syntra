@@ -31,9 +31,17 @@ def generatedJni = layout.buildDirectory.dir('generated/jniLibs')
 
 tasks.register('buildRustRelease', Exec) {
     workingDir uiCrateDir
-    commandLine 'cargo', 'ndk', '-t', 'arm64-v8a', '-o', generatedJni.get().asFile, 'build', '--release', '-p', 'syntra-ui'
-    inputs.file uiCrateDir.file('Cargo.toml')
-    inputs.dir uiCrateDir.dir('src')
+    // Debug APKs use the incremental `fast` profile; release APKs the full
+    // optimising one.
+    def profile = gradle.startParameter.taskNames.any { it.toLowerCase().contains('release') } ? 'release' : 'fast'
+    commandLine 'cargo', 'ndk', '-t', 'arm64-v8a', '-o', generatedJni.get().asFile, 'build', '--profile', profile, '-p', 'syntra-ui'
+    // Every crate the app links, including Slint markup and assets, so a
+    // change anywhere triggers a rebuild and nothing else does.
+    def workspace = layout.projectDirectory.dir('../../../..')
+    inputs.files(fileTree(workspace.dir('crates')) { exclude '**/android/**/build/**', '**/target/**' })
+    inputs.files(fileTree(workspace.dir('plugins')))
+    inputs.file workspace.file('Cargo.toml')
+    inputs.file workspace.file('Cargo.lock')
     outputs.dir generatedJni
 }
 

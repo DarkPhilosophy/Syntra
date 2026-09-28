@@ -75,3 +75,13 @@ codegen-units = 1
 lto = "fat"
 strip = true
 panic = "abort"
+
+# Iteration builds (phone APKs, local deploys): optimised, but without fat
+# LTO and single-unit codegen, which made every rebuild take minutes.
+# Release artifacts keep `release`.
+[profile.fast]
+inherits = "release"
+lto = false
+codegen-units = 256
+incremental = true
+panic = "unwind"

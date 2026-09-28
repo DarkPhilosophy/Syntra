@@ -113,6 +113,7 @@ impl Capture {
         let capture_task = CaptureTask {
             active_client: None,
             ack_deadline: None,
+            held_until_ack: Vec::new(),
             backend,
             cancellation_token: cancellation_token.clone(),
             enabled_captures: Default::default(),
@@ -228,6 +229,9 @@ macro_rules! debounce {
 struct CaptureTask {
     active_client: Option<CaptureHandle>,
     ack_deadline: Option<Instant>,
+    /// Clicks and keys pressed before the peer acknowledged entry. They are
+    /// replayed once it does; dropping them lost every first click.
+    held_until_ack: Vec<Event>,
     backend: Option<syntra_input_capture::Backend>,
     cancellation_token: CancellationToken,
     enabled_captures: HashSet<CaptureHandle>,
@@ -515,6 +519,9 @@ impl CaptureTask {
                             log::info!("client {handle} acknowledged entry");
                             self.state = State::Sending;
                             self.ack_deadline = None;
+                            for event in std::mem::take(&mut self.held_until_ack) {
+                                let _ = self.conn.send(ProtoEvent::Input(event), handle).await;
+                            }
                         }
                         ProtoEvent::Pong(false) | ProtoEvent::Leave(_) => {
                             log::info!("releasing capture: remote input unavailable");
@@ -741,8 +748,19 @@ impl CaptureTask {
         let event = match event {
             CaptureEvent::Begin => ProtoEvent::Enter(opposite_pos),
             CaptureEvent::Input(e) => match self.state {
-                // connection not acknowledged, repeat `Enter` event
-                State::WaitingForAck => ProtoEvent::Enter(opposite_pos),
+                // connection not acknowledged, repeat `Enter` event; keep
+                // discrete presses so they still arrive once it is.
+                State::WaitingForAck => {
+                    if matches!(
+                        e,
+                        Event::Pointer(PointerEvent::Button { .. })
+                            | Event::Keyboard(KeyboardEvent::Key { .. })
+                    ) && self.held_until_ack.len() < MAX_HELD_UNTIL_ACK
+                    {
+                        self.held_until_ack.push(e);
+                    }
+                    ProtoEvent::Enter(opposite_pos)
+                }
                 State::Sending => ProtoEvent::Input(e),
             },
             CaptureEvent::Clipboard { .. } => unreachable!("clipboard events return above"),
@@ -758,6 +776,7 @@ impl CaptureTask {
 
     async fn release_capture(&mut self, capture: &mut InputCapture) -> Result<(), CaptureError> {
         self.ack_deadline = None;
+        self.held_until_ack.clear();
         self.state = State::WaitingForAck;
         let Some(handle) = self.active_client.take() else {
             return capture.release().await;
@@ -821,6 +840,9 @@ impl CaptureTask {
         released
     }
 }
+
+/// Presses kept while waiting for the peer to acknowledge entry.
+const MAX_HELD_UNTIL_ACK: usize = 64;
 
 /// Upper bound for sending key-ups and `Leave` to a peer on release. The
 /// peer's own heartbeat watchdog covers anything that does not arrive.
@@ -898,6 +920,7 @@ mod tests {
         let task = CaptureTask {
             active_client: None,
             ack_deadline: None,
+            held_until_ack: Vec::new(),
             backend: None,
             cancellation_token: CancellationToken::new(),
             enabled_captures: HashSet::new(),

@@ -40,6 +40,9 @@ pub enum EmulationCreationError {
     #[cfg(uinput)]
     #[error("uinput: `{0}`")]
     Uinput(#[from] crate::uinput::UinputEmulationCreationError),
+    #[cfg(target_os = "android")]
+    #[error("android: `{0}`")]
+    Android(#[from] crate::android::AndroidEmulationCreationError),
     #[cfg(wlroots)]
     #[error("wlroots backend: `{0}`")]
     Wlroots(#[from] WlrootsEmulationCreationError),

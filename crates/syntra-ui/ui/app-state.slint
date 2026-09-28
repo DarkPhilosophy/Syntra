@@ -232,6 +232,9 @@ export global AppState {
     callback set-independent-pointers(bool);
     callback open-link(string);
     // Phone touchpad: zone is the controlled device's position index.
+    // Phone control from a computer (Android accessibility service).
+    in-out property <bool> phone-control-enabled;
+    callback open-phone-control-settings();
     callback touchpad-begin(int);
     callback touchpad-motion(int, float, float);
     callback touchpad-button(int, int, bool);

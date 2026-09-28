@@ -2,4 +2,6 @@
     <string name="notification_channel_name">Syntra</string>
     <string name="notification_title">Syntra</string>
     <string name="notification_background_service">Syntra läuft im Hintergrund</string>
+    <string name="accessibility_label">Syntra-Fernsteuerung</string>
+    <string name="accessibility_description">Erlaubt einem mit Syntra gekoppelten Computer, auf diesem Telefon einen Zeiger zu bewegen, zu tippen, zu scrollen und zu schreiben. Nur von dir in Syntra autorisierte Geräte können das.</string>
 </resources>

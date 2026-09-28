@@ -46,6 +46,9 @@ pub enum PointerEdge {
 #[cfg(uinput)]
 mod uinput;
 
+#[cfg(target_os = "android")]
+pub mod android;
+
 #[cfg(target_os = "macos")]
 mod macos;
 
@@ -59,6 +62,8 @@ pub type EmulationHandle = u64;
 pub enum Backend {
     #[cfg(uinput)]
     Uinput,
+    #[cfg(target_os = "android")]
+    Android,
     #[cfg(wlroots)]
     Wlroots,
     #[cfg(libei)]
@@ -79,6 +84,8 @@ impl Display for Backend {
         match self {
             #[cfg(uinput)]
             Backend::Uinput => write!(f, "uinput"),
+            #[cfg(target_os = "android")]
+            Backend::Android => write!(f, "android-accessibility"),
             #[cfg(wlroots)]
             Backend::Wlroots => write!(f, "wlroots"),
             #[cfg(libei)]
@@ -110,6 +117,8 @@ impl InputEmulation {
         let mut emulation: Box<dyn Emulation> = match backend {
             #[cfg(uinput)]
             Backend::Uinput => Box::new(uinput::UinputEmulation::new()?),
+            #[cfg(target_os = "android")]
+            Backend::Android => Box::new(android::AndroidEmulation::new()?),
             #[cfg(wlroots)]
             Backend::Wlroots => Box::new(wlroots::WlrootsEmulation::new()?),
             #[cfg(libei)]
@@ -160,6 +169,11 @@ impl InputEmulation {
             Backend::Windows,
             #[cfg(target_os = "macos")]
             Backend::MacOs,
+            #[cfg(target_os = "android")]
+            Backend::Android,
+            // A phone must not pretend it can receive input: with the
+            // accessibility service off, fail so emulation retries later.
+            #[cfg(not(target_os = "android"))]
             Backend::Dummy,
         ] {
             match Self::with_backend(backend).await {

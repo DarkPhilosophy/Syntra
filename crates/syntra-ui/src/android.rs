@@ -137,8 +137,99 @@ pub fn android_main(app: slint::android::AndroidApp) {
     if let Err(error) = worker {
         log::error!("Could not spawn Android service: {error}");
     }
+    spawn_accessibility_watcher();
     slint::android::init(app).expect("failed to initialize Slint Android backend");
     if let Err(error) = crate::app::run_with_startup(crate::app::StartupMode::Window) {
         log::error!("Slint Android UI failed: {error}");
     }
+}
+
+/// Re-enables emulation once the user turns the accessibility service on,
+/// so the phone becomes controllable without restarting the app.
+fn spawn_accessibility_watcher() {
+    let _ = std::thread::Builder::new()
+        .name("syntra-accessibility-watch".into())
+        .spawn(|| {
+            let mut enabled = false;
+            loop {
+                let now = syntra_input_emulation::android::service_enabled();
+                if now && !enabled {
+                    log::info!("accessibility service enabled; starting emulation");
+                    request(r#""EnableEmulation""#);
+                }
+                enabled = now;
+                std::thread::sleep(std::time::Duration::from_secs(2));
+            }
+        });
+}
+
+/// Sends one request to the in-process service over its control socket.
+fn request(json: &str) {
+    use std::io::Write;
+    let Ok(path) = syntra_api::default_socket_path() else {
+        return;
+    };
+    match std::os::unix::net::UnixStream::connect(path) {
+        Ok(mut stream) => {
+            let _ = stream.write_all(format!("{json}\n").as_bytes());
+        }
+        Err(error) => log::warn!("service request failed: {error}"),
+    }
+}
+
+/// Opens the system Accessibility settings, where the user enables
+/// "Syntra remote control".
+pub fn open_accessibility_settings() {
+    use jni::{
+        JavaVM,
+        objects::{JObject, JValue},
+    };
+    let context = ndk_context::android_context();
+    let result = (|| -> jni::errors::Result<()> {
+        // SAFETY: ndk-context is initialised before android_main and the VM
+        // and activity outlive the process.
+        let vm = unsafe { JavaVM::from_raw(context.vm().cast()) }?;
+        let mut env = vm.attach_current_thread()?;
+        let activity = unsafe { JObject::from_raw(context.context().cast()) };
+        let outcome = (|| {
+            let action = env.new_string("android.settings.ACCESSIBILITY_SETTINGS")?;
+            let intent = env.new_object(
+                "android/content/Intent",
+                "(Ljava/lang/String;)V",
+                &[JValue::Object(&action)],
+            )?;
+            // The context ndk-context hands out is the application, not an
+            // activity; starting an activity from it requires a new task.
+            const FLAG_ACTIVITY_NEW_TASK: i32 = 0x1000_0000;
+            env.call_method(
+                &intent,
+                "addFlags",
+                "(I)Landroid/content/Intent;",
+                &[JValue::Int(FLAG_ACTIVITY_NEW_TASK)],
+            )?;
+            env.call_method(
+                &activity,
+                "startActivity",
+                "(Landroid/content/Intent;)V",
+                &[JValue::Object(&intent)],
+            )?;
+            Ok(())
+        })();
+        // A Java exception left pending aborts the process on the next JNI
+        // call; report it and clear it instead.
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_describe();
+            let _ = env.exception_clear();
+        }
+        std::mem::forget(activity);
+        outcome
+    })();
+    if let Err(error) = result {
+        log::warn!("could not open accessibility settings: {error}");
+    }
+}
+
+/// Whether the user has enabled phone control.
+pub fn phone_control_enabled() -> bool {
+    syntra_input_emulation::android::service_enabled()
 }

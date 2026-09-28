@@ -425,3 +425,7 @@ overview-mobile-unsupported = Dieses Telefon koppelt sich mit deinen Computern, 
 touchpad-hint = Ziehen zum Bewegen · Tippen zum Klicken · Halten zum Ziehen
 touchpad-dragging = Linke Taste gehalten — loslassen zum Ablegen
 touchpad-enter = Enter
+phone-control-on = Dieses Telefon kann von deinen Computern gesteuert werden: bewege den Zeiger über den Rand in seine Richtung.
+phone-control-off = Um dieses Telefon vom Computer aus zu steuern, aktiviere „Syntra-Fernsteuerung“ unter Bedienungshilfen.
+phone-control-enable = Bedienungshilfen öffnen
+touchpad-speed = Tempo

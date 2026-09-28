@@ -1,3 +1,4 @@
+import { AppState } from "../app-state.slint";
 import { Theme } from "../theme.slint";
 import { StatusPill } from "../components/status-pill.slint";
 import { AppButton } from "../components/controls.slint";
@@ -73,6 +74,19 @@ export component OverviewPage inherits Rectangle {
                     padding: Theme.spacing; spacing: Theme.small-spacing;
                     Text { text: Translations.tr("overview-service-title"); color: Theme.text; font-size: Theme.body-size; font-weight: 600; }
                     if !Theme.desktop-platform : Text { text: Translations.tr("overview-mobile-unsupported"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
+                    // Controlling this phone from a computer needs the
+                    // accessibility service; offer it right where it matters.
+                    if !Theme.desktop-platform : Text {
+                        text: AppState.phone-control-enabled ? Translations.tr("phone-control-on") : Translations.tr("phone-control-off");
+                        color: AppState.phone-control-enabled ? Theme.success : Theme.warning;
+                        font-size: Theme.body-size;
+                        wrap: word-wrap;
+                    }
+                    if !Theme.desktop-platform && !AppState.phone-control-enabled : AppButton {
+                        text: Translations.tr("phone-control-enable");
+                        primary: true;
+                        clicked => { AppState.open-phone-control-settings(); }
+                    }
                     if Theme.desktop-platform && !root.daemon-known : Text { text: Translations.tr("overview-service-disconnected"); color: Theme.warning; font-size: Theme.caption-size; wrap: word-wrap; }
                     // Without this the dashboard is a dead end once the
                     // service is stopped or uninstalled: nothing in the
@@ -125,7 +139,7 @@ export component OverviewPage inherits Rectangle {
                         Text { text: Translations.tr("overview-service-capture") + ": " + (root.daemon-capture-backend != "" ? root.daemon-capture-backend : Translations.tr("overview-service-unavailable")); color: Theme.text; font-size: Theme.caption-size; overflow: elide; }
                         Text { text: Translations.tr("overview-service-emulation") + ": " + (root.daemon-emulation-backend != "" ? root.daemon-emulation-backend : Translations.tr("overview-service-unavailable")); color: Theme.text; font-size: Theme.caption-size; overflow: elide; }
                     }
-                    HorizontalLayout {
+                    if Theme.desktop-platform : HorizontalLayout {
                         AppButton {
                             text: Translations.tr(root.input-sharing ? "action-stop" : "action-start");
                             enabled: root.input-sharing-known;
@@ -136,7 +150,7 @@ export component OverviewPage inherits Rectangle {
                     }
                 }
             }
-            if root.connected && root.input-sharing && (!root.capture-enabled || !root.emulation-enabled): HorizontalLayout {
+            if Theme.desktop-platform && root.connected && root.input-sharing && (!root.capture-enabled || !root.emulation-enabled): HorizontalLayout {
                 spacing: Theme.spacing;
                 Text {
                     text: Translations.tr("input-permissions-description");
