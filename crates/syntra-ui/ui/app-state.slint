@@ -68,6 +68,7 @@ export global AppState {
     in-out property <bool> clipboard-image-enabled;
     in-out property <bool> clipboard-files-enabled;
     in-out property <bool> independent-pointers-enabled;
+    in-out property <bool> hop-bypass-enabled;
     in-out property <bool> clipboard-files-supported;
     in-out property <[FlatpakApplication]> flatpak-applications;
     in-out property <[FlatpakApplication]> flatpak-all-applications;
@@ -230,6 +231,7 @@ export global AppState {
     callback set-clipboard-image(bool);
     callback set-clipboard-files(bool);
     callback set-independent-pointers(bool);
+    callback set-hop-bypass(bool);
     callback open-link(string);
     // Phone touchpad: zone is the controlled device's position index.
     // Phone control from a computer (Android accessibility service).

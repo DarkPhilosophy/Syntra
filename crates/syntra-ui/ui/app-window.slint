@@ -325,6 +325,8 @@ export component AppWindow inherits Window {
                     emulation-supported: AppState.emulation-supported;
                     independent-pointers-enabled: AppState.independent-pointers-enabled;
                     independent-pointers-toggled(value) => { AppState.set-independent-pointers(value); }
+                    hop-bypass-enabled: AppState.hop-bypass-enabled;
+                    hop-bypass-toggled(value) => { AppState.set-hop-bypass(value); }
                     enable-capture => { AppState.enable-capture(); }
                     enable-emulation => { AppState.enable-emulation(); }
                 }

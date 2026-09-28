@@ -260,7 +260,7 @@ pub enum ProtocolError {
     InvalidProfile(&'static str),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, TryFromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum Position {
     Left,
@@ -287,6 +287,14 @@ impl Display for Position {
 pub enum ProtoEvent {
     Enter(Position),
     Leave(u32),
+    /// Multi-hop: the pointer this peer received was pushed past its edge
+    /// towards the device with certificate `target`. The capturing machine
+    /// takes the pointer back and enters `target` from `side` directly.
+    /// Peers that predate it reject the event id and nothing happens.
+    Handoff {
+        target: String,
+        side: Position,
+    },
     Ack(u32),
     Input(InputEvent),
     Ping,
@@ -456,6 +464,7 @@ impl Display for ProtoEvent {
                 write!(f, "ProfileRequest({request_id})")
             }
             Self::ProfileChanged => write!(f, "ProfileChanged"),
+            Self::Handoff { side, .. } => write!(f, "Handoff({side})"),
             Self::ProfileStart {
                 request_id,
                 width,
@@ -670,6 +679,7 @@ pub enum EventType {
     ManualFileComplete,
     ManualFileResult,
     ManualFileCancel,
+    Handoff,
 }
 
 impl ProtoEvent {
@@ -708,6 +718,7 @@ impl ProtoEvent {
             Self::HistoryClearAck { .. } => EventType::HistoryClearAck,
             Self::Enter(_) => EventType::Enter,
             Self::Leave(_) => EventType::Leave,
+            Self::Handoff { .. } => EventType::Handoff,
             Self::Ack(_) => EventType::Ack,
             Self::Hello { .. } => EventType::Hello,
             Self::ClipboardStart { .. } => EventType::ClipboardStart,
@@ -864,6 +875,12 @@ impl ProtoEvent {
             Self::Pong(alive) => buf.push(u8::from(alive)),
             Self::Enter(position) => buf.push(position as u8),
             Self::Leave(serial) | Self::Ack(serial) => put_u32(&mut buf, serial),
+            Self::Handoff { target, side } => {
+                buf.push(side as u8);
+                let bytes = target.as_bytes();
+                put_u16(&mut buf, bytes.len().min(MAX_HANDOFF_TARGET) as u16);
+                buf.extend_from_slice(&bytes[..bytes.len().min(MAX_HANDOFF_TARGET)]);
+            }
             Self::Hello { commit } => buf.extend_from_slice(&commit),
             Self::ProfileRequest { request_id } => {
                 if request_id == 0 {
@@ -1158,6 +1175,16 @@ impl ProtoEvent {
             EventType::Pong => Self::Pong(get_u8(&mut buf)? != 0),
             EventType::Enter => Self::Enter(get_u8(&mut buf)?.try_into()?),
             EventType::Leave => Self::Leave(get_u32(&mut buf)?),
+            EventType::Handoff => {
+                let side = get_u8(&mut buf)?.try_into()?;
+                let len = get_u16(&mut buf)? as usize;
+                if len > MAX_HANDOFF_TARGET {
+                    return Err(ProtocolError::Truncated);
+                }
+                let target = String::from_utf8(take(&mut buf, len)?.to_vec())
+                    .map_err(|_| ProtocolError::Truncated)?;
+                Self::Handoff { target, side }
+            }
             EventType::Ack => Self::Ack(get_u32(&mut buf)?),
             EventType::Hello => {
                 let mut commit = [0; 8];
@@ -1793,6 +1820,9 @@ fn get_bool(buf: &mut &[u8]) -> Result<bool, ProtocolError> {
         value => Err(ProtocolError::InvalidBoolean(value)),
     }
 }
+
+/// A certificate fingerprint is 95 characters; anything longer is invalid.
+const MAX_HANDOFF_TARGET: usize = 128;
 
 fn put_u16(buf: &mut Vec<u8>, value: u16) {
     buf.extend_from_slice(&value.to_be_bytes());
@@ -2788,5 +2818,30 @@ mod tests {
         assert_eq!(EventType::ManualFileComplete as u8, 38);
         assert_eq!(EventType::ManualFileResult as u8, 39);
         assert_eq!(EventType::ManualFileCancel as u8, 40);
+        assert_eq!(EventType::Handoff as u8, 41);
+    }
+
+    /// A handoff names the next device and the edge it was reached through;
+    /// both must survive the wire, and oversized targets must be rejected.
+    #[test]
+    fn handoff_round_trips_and_rejects_oversized_targets() {
+        let target = "ab:".repeat(31) + "cd";
+        let bytes = ProtoEvent::Handoff {
+            target: target.clone(),
+            side: Position::Right,
+        }
+        .encode()
+        .unwrap();
+        match ProtoEvent::decode(&bytes).unwrap() {
+            ProtoEvent::Handoff { target: t, side } => {
+                assert_eq!(t, target);
+                assert_eq!(side, Position::Right);
+            }
+            other => panic!("decoded {other:?}"),
+        }
+        let mut forged = vec![EventType::Handoff as u8, Position::Left as u8];
+        forged.extend_from_slice(&((MAX_HANDOFF_TARGET + 1) as u16).to_be_bytes());
+        forged.extend(std::iter::repeat_n(b'a', MAX_HANDOFF_TARGET + 1));
+        assert!(ProtoEvent::decode(&forged).is_err());
     }
 }

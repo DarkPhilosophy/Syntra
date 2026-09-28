@@ -431,3 +431,5 @@ phone-control-enable = Bedienungshilfen öffnen
 touchpad-speed = Tempo
 clipboard-sharing = Freigabe
 navigation-permissions = Berechtigungen
+input-hop-bypass = Steuerung ohne Kopplung weitergeben
+input-hop-bypass-description = Normalerweise kann ein Computer, der dieses Gerät steuert, nur zu Geräten weiter, mit denen er selbst gekoppelt ist. Aktiviert trägt dieses Gerät seinen Zeiger zu den eigenen gekoppelten Geräten weiter, auch wenn diese dem Computer nicht vertrauen. Vorerst nur auf dem Telefon.

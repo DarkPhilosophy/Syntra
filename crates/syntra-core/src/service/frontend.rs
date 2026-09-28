@@ -132,6 +132,12 @@ impl Service {
                 self.save_config();
                 self.notify_frontend(FrontendEvent::IndependentPointers(enabled));
             }
+            FrontendRequest::SetHopBypass(enabled) => {
+                self.config.set_hop_bypass(enabled);
+                self.emulation.set_hop_bypass(enabled);
+                self.save_config();
+                self.notify_frontend(FrontendEvent::HopBypass(enabled));
+            }
             FrontendRequest::Enumerate() => self.enumerate(),
             FrontendRequest::UpdateFixIps(handle, fix_ips) => {
                 self.update_fix_ips(handle, fix_ips);
@@ -500,7 +506,8 @@ impl Service {
     /// on, so entering pointers follow this machine's layout.
     pub(super) fn publish_peer_sides(&self) {
         let mut sides = std::collections::HashMap::new();
-        for (_, config, state) in self.client_manager.get_client_states() {
+        let mut beyond = std::collections::HashMap::new();
+        for (handle, config, state) in self.client_manager.get_client_states() {
             let side = match config.pos {
                 syntra_api::Position::Left => syntra_proto::Position::Left,
                 syntra_api::Position::Right => syntra_proto::Position::Right,
@@ -510,8 +517,11 @@ impl Service {
             for ip in config.fix_ips.iter().chain(state.ips.iter()) {
                 sides.insert(*ip, side);
             }
+            if let Some(fingerprint) = self.client_manager.peer_fingerprint(handle) {
+                beyond.insert(side, fingerprint);
+            }
         }
-        self.emulation.set_peer_sides(sides);
+        self.emulation.set_peer_sides(sides, beyond);
     }
 
     pub(super) fn save_config(&mut self) {
@@ -581,6 +591,7 @@ impl Service {
         self.notify_frontend(FrontendEvent::IndependentPointers(
             self.config.independent_pointers(),
         ));
+        self.notify_frontend(FrontendEvent::HopBypass(self.config.hop_bypass()));
         self.notify_frontend(FrontendEvent::ClipboardSettings(self.clipboard_settings));
         self.notify_frontend(FrontendEvent::PortChanged(self.port, None));
         self.notify_frontend(FrontendEvent::PublicKeyFingerprint(

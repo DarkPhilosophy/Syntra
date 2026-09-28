@@ -176,6 +176,11 @@ impl SyntraConnection {
 
     /// The destination explicitly confirmed that both receiving input and
     /// returning control are currently available.
+    /// Certificate the configured client presented, once authenticated.
+    pub(crate) fn client_fingerprint(&self, handle: ClientHandle) -> Option<String> {
+        self.shared.client_manager.peer_fingerprint(handle)
+    }
+
     pub(crate) fn remote_ready(&self, handle: ClientHandle) -> bool {
         self.peer_connected(handle) && self.shared.client_manager.remote_ready(handle)
     }

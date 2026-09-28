@@ -118,6 +118,8 @@ struct ConfigToml {
     clipboard_files: Option<bool>,
     /// Give each peer its own local cursor (uinput pen-tablet pointers).
     independent_pointers: Option<bool>,
+    /// Carry a controlling device's pointer on to devices it is not paired with.
+    hop_bypass: Option<bool>,
     #[serde(default)]
     file_receive: Option<FileReceiveToml>,
 }
@@ -593,6 +595,21 @@ impl Config {
             .as_ref()
             .and_then(|c| c.independent_pointers)
             .unwrap_or(false)
+    }
+
+    /// Whether multi-hop may pass control to devices the controller is not
+    /// paired with. Off by default: pairing is the trust boundary.
+    pub fn hop_bypass(&self) -> bool {
+        self.config_toml
+            .as_ref()
+            .and_then(|c| c.hop_bypass)
+            .unwrap_or(false)
+    }
+
+    pub fn set_hop_bypass(&mut self, enabled: bool) {
+        self.config_toml
+            .get_or_insert_with(Default::default)
+            .hop_bypass = Some(enabled);
     }
 
     pub fn set_independent_pointers(&mut self, enabled: bool) {

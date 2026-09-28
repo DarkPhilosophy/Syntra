@@ -828,6 +828,9 @@ pub enum FrontendEvent {
     InputSharing(bool),
     /// Whether each peer drives its own local cursor.
     IndependentPointers(bool),
+    /// Whether a controlling device may reach devices it is not paired with
+    /// through this one.
+    HopBypass(bool),
     /// A replacement certificate was saved; active sessions change only on restart.
     IdentityRegenerated {
         /// Carries the fingerprint for this protocol variant.
@@ -932,6 +935,9 @@ pub enum FrontendRequest {
     ///
     /// Supported by the uinput backend; other backends keep one pointer.
     SetIndependentPointers(bool),
+    /// Let a device controlling this one pass on to this one's other paired
+    /// devices even when it is not paired with them itself.
+    SetHopBypass(bool),
     /// Explicitly confirmed replacement of the certificate used on the next restart.
     RegenerateIdentity,
     /// This variant reports or requests the sendfiles protocol state.

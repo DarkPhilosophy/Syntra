@@ -7,6 +7,7 @@
 //! and the peer protocol are shared unchanged.
 
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::task::{Context, Poll};
 
@@ -49,6 +50,15 @@ impl TouchpadSender {
     pub fn input(&self, position: Position, event: syntra_input_event::Event) {
         let _ = self.0.send((position, CaptureEvent::Input(event)));
     }
+}
+
+/// Set while a device is being controlled through this backend, cleared
+/// when capture is released (the controlled device handed control back).
+static ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Whether a device is currently being controlled from this phone.
+pub fn is_active() -> bool {
+    ACTIVE.load(Ordering::Acquire)
 }
 
 /// Returns the process-wide touchpad input handle.
@@ -105,6 +115,7 @@ impl Capture for TouchpadInputCapture {
 
     async fn release(&mut self) -> Result<(), CaptureError> {
         self.active = None;
+        ACTIVE.store(false, Ordering::Release);
         Ok(())
     }
 
@@ -126,6 +137,7 @@ impl Stream for TouchpadInputCapture {
                     continue;
                 }
                 self.active = Some(position);
+                ACTIVE.store(true, Ordering::Release);
             }
             return Poll::Ready(Some(Ok((position, event))));
         }

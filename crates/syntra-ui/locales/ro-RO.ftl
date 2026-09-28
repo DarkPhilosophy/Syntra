@@ -431,3 +431,5 @@ phone-control-enable = Deschide setările Accesibilitate
 touchpad-speed = Viteză
 clipboard-sharing = Partajare
 navigation-permissions = Permisiuni
+input-hop-bypass = Transmite controlul fără asociere
+input-hop-bypass-description = În mod normal, un calculator care controlează acest dispozitiv poate trece mai departe doar pe dispozitivele asociate cu el. Activat, acest dispozitiv îi duce cursorul mai departe pe propriile dispozitive asociate, chiar dacă acestea nu au încredere în acel calculator. Deocamdată doar pe telefon.

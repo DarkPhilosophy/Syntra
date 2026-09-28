@@ -10,6 +10,8 @@ export component InputPage inherits Rectangle {
     in property <bool> emulation-supported: true;
     in property <bool> independent-pointers-enabled: false;
     callback independent-pointers-toggled(bool);
+    in property <bool> hop-bypass-enabled: false;
+    callback hop-bypass-toggled(bool);
     callback enable-capture();
     callback enable-emulation();
     background: Theme.background;
@@ -42,6 +44,12 @@ export component InputPage inherits Rectangle {
             description: Translations.tr("input-independent-pointers-description");
             enabled: root.independent-pointers-enabled;
             toggled(value) => { root.independent-pointers-toggled(value); }
+        }
+        SettingRow {
+            title: Translations.tr("input-hop-bypass");
+            description: Translations.tr("input-hop-bypass-description");
+            enabled: root.hop-bypass-enabled;
+            toggled(value) => { root.hop-bypass-toggled(value); }
         }
         Rectangle { vertical-stretch: 1; }
     }

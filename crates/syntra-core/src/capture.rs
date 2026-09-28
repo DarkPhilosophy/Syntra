@@ -527,6 +527,9 @@ impl CaptureTask {
                             log::info!("releasing capture: remote input unavailable");
                             self.release_capture(capture).await?;
                         }
+                        ProtoEvent::Handoff { target, side } if self.state == State::Sending => {
+                            self.handoff(capture, handle, &target, side).await?;
+                        }
                         _ => {}
                     }
                     self.sync_captures(capture).await?;
@@ -771,6 +774,74 @@ impl CaptureTask {
             debounce!(PREV_LOG, DUR, log::warn!("releasing capture: {e}"));
             self.release_capture(capture).await?;
         }
+        Ok(())
+    }
+
+    /// Multi-hop: the device we control pushed our pointer on to the device
+    /// with certificate `target`. Enter that device directly if we trust it
+    /// (or trust-through-hops is allowed); otherwise take the pointer home.
+    async fn handoff(
+        &mut self,
+        capture: &mut InputCapture,
+        from: CaptureHandle,
+        target: &str,
+        side: syntra_proto::Position,
+    ) -> Result<(), CaptureError> {
+        let next = self
+            .captures
+            .iter()
+            .find(|(handle, _, kind)| {
+                *kind == CaptureType::Default
+                    && *handle != from
+                    && self.conn.client_fingerprint(*handle).as_deref() == Some(target)
+            })
+            .map(|(handle, ..)| *handle);
+        let Some(next) = next else {
+            // Pairing is the trust boundary: never enter a device this
+            // machine has not authorised. The middle device keeps the
+            // pointer (or carries it on itself if its user allowed that).
+            log::warn!(
+                "handoff from client {from} refused: the next device is not paired with this one"
+            );
+            let _ = self
+                .conn
+                .send(
+                    ProtoEvent::Handoff {
+                        target: target.to_owned(),
+                        side,
+                    },
+                    from,
+                )
+                .await;
+            return Ok(());
+        };
+        if !self.conn.remote_ready(next) {
+            log::warn!("handoff from client {from} refused: client {next} cannot accept input");
+            let _ = self
+                .conn
+                .send(
+                    ProtoEvent::Handoff {
+                        target: target.to_owned(),
+                        side,
+                    },
+                    from,
+                )
+                .await;
+            return Ok(());
+        }
+        log::info!("handing off from client {from} to client {next}");
+        // Clean up the device we are leaving without giving up the capture.
+        let _ = self.conn.send(ProtoEvent::Leave(0), from).await;
+        self.state = State::WaitingForAck;
+        self.ack_deadline = Some(Instant::now() + Duration::from_millis(750));
+        self.held_until_ack.clear();
+        self.active_client = Some(next);
+        self.event_tx
+            .send(ICaptureEvent::ClientEntered(next))
+            .expect("channel closed");
+        // The receiver places the pointer on the side its own map gives us.
+        let enter = to_proto_pos(self.get_pos(next).opposite());
+        let _ = self.conn.send(ProtoEvent::Enter(enter), next).await;
         Ok(())
     }
 

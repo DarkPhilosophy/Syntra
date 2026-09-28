@@ -252,6 +252,7 @@ impl Service {
         #[cfg(not(target_os = "linux"))]
         let independent = config.independent_pointers();
         emulation.set_independent_pointers(independent);
+        emulation.set_hop_bypass(config.hop_bypass());
         let legacy_clipboard = !match config.emulation_backend() {
             #[cfg(libei_emulation)]
             Some(EmulationBackend::Libei) => true,

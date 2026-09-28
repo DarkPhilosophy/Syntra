@@ -31,6 +31,16 @@ pub(crate) struct Emulation {
     event_rx: Receiver<EmulationEvent>,
 }
 
+#[cfg(target_os = "android")]
+fn capture_pos(side: Position) -> syntra_input_capture::Position {
+    match side {
+        Position::Left => syntra_input_capture::Position::Left,
+        Position::Right => syntra_input_capture::Position::Right,
+        Position::Top => syntra_input_capture::Position::Top,
+        Position::Bottom => syntra_input_capture::Position::Bottom,
+    }
+}
+
 /// Whether leaving through `edge` returns towards a peer that entered
 /// from `entered`: `Enter` carries the side of this screen the peer is on.
 fn edge_matches(entered: Position, edge: syntra_input_emulation::PointerEdge) -> bool {
@@ -135,8 +145,14 @@ enum EmulationRequest {
     CaptureReady(bool),
     SetInputSharing(bool),
     SetIndependentPointers(bool),
-    /// Where each configured peer sits on this screen, by address.
-    SetPeerSides(HashMap<std::net::IpAddr, Position>),
+    /// Allow carrying a controlling device's pointer on to unpaired devices.
+    SetHopBypass(bool),
+    /// Where each configured peer sits on this screen, by address, and
+    /// which certificate sits on each side.
+    SetPeerSides(
+        HashMap<std::net::IpAddr, Position>,
+        HashMap<Position, String>,
+    ),
     SendProto {
         addr: SocketAddr,
         event: ProtoEvent,
@@ -167,6 +183,10 @@ impl Emulation {
             active_inputs: HashSet::new(),
             entered_from: HashMap::new(),
             peer_sides: HashMap::new(),
+            peer_beyond: HashMap::new(),
+            peer_fingerprints: HashMap::new(),
+            hop_bypass: false,
+            relay: None,
         };
         let task = spawn_local(emulation_task.run());
         Self {
@@ -203,9 +223,19 @@ impl Emulation {
     /// Updates where each configured peer sits on this screen. An entering
     /// peer's pointer appears on, and leaves through, the side configured
     /// here: the other machine's own map may disagree.
-    pub(crate) fn set_peer_sides(&self, sides: HashMap<std::net::IpAddr, Position>) {
+    pub(crate) fn set_peer_sides(
+        &self,
+        sides: HashMap<std::net::IpAddr, Position>,
+        beyond: HashMap<Position, String>,
+    ) {
         self.request_tx
-            .send(EmulationRequest::SetPeerSides(sides))
+            .send(EmulationRequest::SetPeerSides(sides, beyond))
+            .expect("channel closed");
+    }
+
+    pub(crate) fn set_hop_bypass(&self, enabled: bool) {
+        self.request_tx
+            .send(EmulationRequest::SetHopBypass(enabled))
             .expect("channel closed");
     }
 
@@ -270,6 +300,16 @@ struct ListenTask {
     entered_from: HashMap<SocketAddr, Position>,
     /// Side of this screen each configured peer sits on, from local config.
     peer_sides: HashMap<std::net::IpAddr, Position>,
+    /// Certificate of the configured device on each side of this screen.
+    peer_beyond: HashMap<Position, String>,
+    /// Allow a device controlling this one to reach the next device through
+    /// this one even when the two are not paired (off by default).
+    hop_bypass: bool,
+    /// Bypass in progress: input from this peer is carried on through the
+    /// given edge by this device.
+    relay: Option<(SocketAddr, Position)>,
+    /// Certificate of each connected peer, for telling a return from a hop.
+    peer_fingerprints: HashMap<SocketAddr, String>,
 }
 
 #[derive(Debug)]
@@ -339,6 +379,95 @@ impl ListenTask {
     /// hand the shared pointer back; an independent pointer returns control
     /// through its own edges, so a capture backend that is still starting or
     /// re-initialising must not bounce the peer out mid-movement.
+    /// Multi-hop: the pointer of `addr` was pushed past `edge` of this
+    /// screen towards another configured device. Ask the machine that owns
+    /// the pointer to take it back and enter that device directly; it checks
+    /// that it trusts the target itself.
+    async fn start_handoff(
+        &mut self,
+        addr: SocketAddr,
+        edge: syntra_input_emulation::PointerEdge,
+    ) -> bool {
+        use syntra_input_emulation::PointerEdge;
+        let side = match edge {
+            PointerEdge::Left => Position::Left,
+            PointerEdge::Right => Position::Right,
+            PointerEdge::Top => Position::Top,
+            PointerEdge::Bottom => Position::Bottom,
+        };
+        if !self.active_inputs.contains(&addr) {
+            return false;
+        }
+        let Some(target) = self.peer_beyond.get(&side).cloned() else {
+            return false;
+        };
+        if self.peer_fingerprints.get(&addr) == Some(&target) {
+            // That side is the pointer's own machine: a normal return.
+            return false;
+        }
+        log::info!("handing the pointer of {addr} on through the {side} edge");
+        self.active_inputs.remove(&addr);
+        self.entered_from.remove(&addr);
+        self.emulation_proxy.remove(addr);
+        // The target sees the pointer arrive from the side this device
+        // occupies in its own layout; the owner resolves that.
+        self.listener
+            .reply(addr, ProtoEvent::Handoff { target, side })
+            .await;
+        true
+    }
+
+    /// Called when the owner answers our handoff with its own `Handoff`:
+    /// it does not trust the next device. With the bypass enabled a phone
+    /// carries the pointer on through its own touchpad capture; otherwise
+    /// the pointer comes back here.
+    fn handoff_refused(&mut self, addr: SocketAddr, target: &str, side: Position) {
+        let _ = target;
+        #[cfg(target_os = "android")]
+        if self.hop_bypass && self.relay.is_none() {
+            log::info!(
+                "carrying the pointer of {addr} on through the {side} edge (pairing bypass)"
+            );
+            self.active_inputs.insert(addr);
+            self.relay = Some((addr, side));
+            syntra_input_capture::touchpad::sender().begin(capture_pos(side));
+            return;
+        }
+        log::info!("pointer of {addr} stays here: the next device is not paired with it");
+        self.active_inputs.insert(addr);
+        self.entered_from.insert(
+            addr,
+            self.peer_sides.get(&addr.ip()).copied().unwrap_or(side),
+        );
+        self.emulation_proxy.place_pointer(side);
+    }
+
+    /// Forwards input while carrying a pointer on; false means move ours.
+    fn relay_input(&mut self, addr: SocketAddr, event: Event) -> bool {
+        #[cfg(target_os = "android")]
+        {
+            let Some((source, side)) = self.relay else {
+                return false;
+            };
+            if source != addr {
+                return false;
+            }
+            if !syntra_input_capture::touchpad::is_active() {
+                log::info!("pointer of {addr} came back through the {side} edge");
+                self.relay = None;
+                self.emulation_proxy.place_pointer(side);
+                return false;
+            }
+            syntra_input_capture::touchpad::sender().input(capture_pos(side), event);
+            true
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = (addr, event);
+            false
+        }
+    }
+
     fn accepts_input(&self) -> bool {
         input_accepted(
             self.input_sharing,
@@ -400,9 +529,15 @@ impl ListenTask {
                                 self.listener.reply(addr, ProtoEvent::Ack(0)).await;
                             }
                             ProtoEvent::Input(event) => {
-                                if self.input_sharing && self.active_inputs.contains(&addr) {
+                                if self.input_sharing && self.active_inputs.contains(&addr) && !self.relay_input(addr, event) {
                                     self.emulation_proxy.consume(event, addr);
                                 }
+                            }
+                            // The owner could not enter the next device (not
+                            // paired): carry the pointer on ourselves if the
+                            // user allowed it, otherwise it stays here.
+                            ProtoEvent::Handoff { target, side } => {
+                                self.handoff_refused(addr, &target, side);
                             }
                             ProtoEvent::Ping => {
                                 self.listener
@@ -523,6 +658,7 @@ impl ListenTask {
                     }
                     Some(ListenEvent::Accept { addr, fingerprint }) => {
                         last_response.insert(addr, Instant::now());
+                        self.peer_fingerprints.insert(addr, fingerprint.clone());
                         self.event_tx.send(EmulationEvent::Connected { addr, fingerprint }).expect("channel closed");
                     }
                     Some(ListenEvent::Rejected { fingerprint }) => {
@@ -535,6 +671,9 @@ impl ListenTask {
                 }}
                 event = self.emulation_proxy.event() => {
                     if let EmulationEvent::PointerEdge { addr, edge } = event {
+                        if self.start_handoff(addr, edge).await {
+                            continue;
+                        }
                         // An independent cursor is invisible to local
                         // capture, so its edges must hand control back here.
                         if self.active_inputs.contains(&addr)
@@ -566,8 +705,12 @@ impl ListenTask {
                         self.independent_pointers = enabled;
                         self.emulation_proxy.set_independent_pointers(enabled);
                     }
-                    EmulationRequest::SetPeerSides(sides) => {
+                    EmulationRequest::SetHopBypass(enabled) => {
+                        self.hop_bypass = enabled;
+                    }
+                    EmulationRequest::SetPeerSides(sides, beyond) => {
                         self.peer_sides = sides;
+                        self.peer_beyond = beyond;
                     }
                     EmulationRequest::SetInputSharing(enabled) => {
                         self.input_sharing = enabled;
@@ -606,6 +749,10 @@ impl ListenTask {
                         log::warn!("releasing keys: {addr} not responding!");
                         let was_active = self.active_inputs.remove(&addr);
                         self.entered_from.remove(&addr);
+                        self.peer_fingerprints.remove(&addr);
+                        if self.relay.is_some_and(|(source, _)| source == addr) {
+                            self.relay = None;
+                        }
                         self.emulation_proxy.remove(addr);
                         self.event_tx.send(EmulationEvent::Disconnected { addr }).expect("channel closed");
                         // Its input is ignored from now on; if it is still
