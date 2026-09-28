@@ -26,6 +26,7 @@ pub enum UiIntent {
     SetClipboardFiles(bool),
     SetIndependentPointers(bool),
     SetHopBypass(bool),
+    SetMultiHop(bool),
     CancelTransfer(ClipboardTransferId),
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +78,7 @@ impl UiIntent {
             SetClipboardFiles(v) => FrontendRequest::SetClipboardFiles(v),
             SetIndependentPointers(v) => FrontendRequest::SetIndependentPointers(v),
             SetHopBypass(v) => FrontendRequest::SetHopBypass(v),
+            SetMultiHop(v) => FrontendRequest::SetMultiHop(v),
             CancelTransfer(0) => return Err(IntentError::InvalidTransferId),
             CancelTransfer(id) => FrontendRequest::CancelClipboardTransfer(id),
         })

@@ -433,3 +433,5 @@ clipboard-sharing = Sharing
 navigation-permissions = Permissions
 input-hop-bypass = Pass control on without pairing
 input-hop-bypass-description = Normally a computer controlling this device can only move on to devices it is paired with itself. When on, this device carries its pointer on to its own paired devices even if they do not trust that computer. Phone only for now.
+input-multi-hop = Pass the pointer on through devices (experimental)
+input-multi-hop-description = Lets the pointer continue from a controlled device to the next one (for example computer → phone → laptop). Turn it on on every device in the chain.

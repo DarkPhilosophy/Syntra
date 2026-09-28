@@ -85,3 +85,9 @@ lto = false
 codegen-units = 256
 incremental = true
 panic = "unwind"
+# Most of the build time is dependencies; keep them optimised but let our
+# own crates compile at a lower level so small edits relink quickly.
+opt-level = 2
+
+[profile.fast.package."*"]
+opt-level = 3

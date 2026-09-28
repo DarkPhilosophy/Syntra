@@ -203,6 +203,11 @@ impl InputEmulation {
         self.emulation.set_independent_pointers(enabled);
     }
 
+    /// See [`Emulation::step_inside`].
+    pub fn step_inside(&mut self, edge: PointerEdge) {
+        self.emulation.step_inside(edge);
+    }
+
     /// See [`Emulation::place_pointer`].
     pub fn place_pointer(&mut self, edge: PointerEdge) {
         self.emulation.place_pointer(edge);
@@ -345,6 +350,9 @@ trait Emulation: Send {
     /// from that side appears. Backends driving the shared system pointer
     /// leave it where it is.
     fn place_pointer(&mut self, _edge: PointerEdge) {}
+    /// Moves the shared pointer a little inside from `edge` so it no longer
+    /// touches it. Backends that cannot move the pointer do nothing.
+    fn step_inside(&mut self, _edge: PointerEdge) {}
     fn take_clipboard_receiver(&mut self) -> Option<mpsc::Receiver<(String, Vec<u8>)>> {
         None
     }

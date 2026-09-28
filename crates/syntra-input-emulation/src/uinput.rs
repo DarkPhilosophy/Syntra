@@ -578,6 +578,43 @@ impl Emulation for UinputEmulation {
         self.independent = enabled;
     }
 
+    /// Moves the shared pointer next to the edge the peer entered from, so
+    /// it does not start wherever it was left, possibly against another
+    /// edge that would bounce it straight on. uinput is relative only: slam
+    /// it against the edge, then step back inside in a separate report.
+    fn place_pointer(&mut self, edge: PointerEdge) {
+        if self.independent {
+            return;
+        }
+        let (code, towards) = match edge {
+            PointerEdge::Left => (REL_X, -1),
+            PointerEdge::Right => (REL_X, 1),
+            PointerEdge::Top => (REL_Y, -1),
+            PointerEdge::Bottom => (REL_Y, 1),
+        };
+        let _ = self
+            .device
+            .write_events(&[raw(EV_REL, code, towards * 20_000)]);
+        let _ = self
+            .device
+            .write_events(&[raw(EV_REL, code, -towards * ENTRY_INSET)]);
+    }
+
+    fn step_inside(&mut self, edge: PointerEdge) {
+        let (code, inward) = match edge {
+            PointerEdge::Left => (REL_X, 1),
+            PointerEdge::Right => (REL_X, -1),
+            PointerEdge::Top => (REL_Y, 1),
+            PointerEdge::Bottom => (REL_Y, -1),
+        };
+        if let Err(error) = self
+            .device
+            .write_events(&[raw(EV_REL, code, inward * STEP_INSIDE)])
+        {
+            log::warn!("could not move the pointer off the edge: {error}");
+        }
+    }
+
     fn take_pointer_edge(&mut self, handle: EmulationHandle) -> Option<PointerEdge> {
         self.pointers.get_mut(&handle)?.pen.edge.take()
     }
@@ -614,6 +651,12 @@ impl Emulation for UinputEmulation {
         self.idle.clear();
     }
 }
+
+/// Distance from the entry edge the shared pointer lands at, in pixels.
+const ENTRY_INSET: i32 = 40;
+
+/// How far the pointer is moved off an edge after a refused hand-off, in px.
+const STEP_INSIDE: i32 = 60;
 
 /// Idle pen devices kept for reuse; more peers than this simply recreate.
 const MAX_IDLE_POINTERS: usize = 4;

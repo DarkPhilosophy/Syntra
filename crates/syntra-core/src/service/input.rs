@@ -20,6 +20,10 @@ impl Service {
                     self.emulation.send_leave_event(addr);
                     return;
                 }
+                self.capture.set_controller(Some((
+                    fingerprint.clone(),
+                    crate::capture::capture_pos(pos),
+                )));
                 // check if already registered
                 if !self.incoming_conns.contains(&addr) {
                     self.add_incoming(addr, pos, fingerprint.clone());
@@ -68,6 +72,7 @@ impl Service {
                 self.notify_frontend(FrontendEvent::EmulationStatus(self.emulation_status));
             }
             EmulationEvent::ReleaseNotify => self.capture.release(),
+            EmulationEvent::NoLongerControlled => self.capture.set_controller(None),
             // Consumed by the listen task before it reaches the service.
             EmulationEvent::PointerEdge { .. } => {}
             EmulationEvent::Connected { addr, fingerprint } => {
@@ -249,6 +254,8 @@ impl Service {
                             .set_peer_fingerprint(handle, fingerprint.clone());
                         self.save_config();
                     }
+                    // Multi-hop needs to know which certificate sits on each side.
+                    self.publish_peer_sides();
                     self.notify_frontend(FrontendEvent::ClientFingerprint {
                         handle,
                         fingerprint: fingerprint.clone(),
@@ -299,6 +306,7 @@ impl Service {
                     self.history_peer_lost(Peer::Capture(handle));
                 }
             }
+            ICaptureEvent::StepInside(edge) => self.emulation.step_inside(edge),
             ICaptureEvent::CaptureBegin(handle) => {
                 // The shared pointer a peer controls here touched one of our
                 // edges. Towards the peer itself: hand control back. Towards
@@ -306,11 +314,16 @@ impl Service {
                 // (multi-hop); it checks it is paired with that device.
                 if let Some(incoming) = self.incoming_conn_info.get(&handle) {
                     let addr = incoming.addr;
+                    // The pointer leaves this screen either way: we are no
+                    // longer controlled by that device.
+                    self.capture.set_controller(None);
                     let peer_fingerprint = incoming.fingerprint.clone();
                     let pos = self.capture_position(handle);
                     let beyond = pos.and_then(|pos| self.fingerprint_at(pos));
                     match (pos, beyond) {
-                        (Some(pos), Some(target)) if target != peer_fingerprint => {
+                        (Some(pos), Some(target))
+                            if self.config.multi_hop() && target != peer_fingerprint =>
+                        {
                             log::info!("handing the pointer of {addr} on through the {pos} edge");
                             self.emulation.send_proto(
                                 addr,

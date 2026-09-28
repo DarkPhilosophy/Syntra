@@ -120,6 +120,8 @@ struct ConfigToml {
     independent_pointers: Option<bool>,
     /// Carry a controlling device's pointer on to devices it is not paired with.
     hop_bypass: Option<bool>,
+    /// Pass the pointer on through chains of devices.
+    multi_hop: Option<bool>,
     #[serde(default)]
     file_receive: Option<FileReceiveToml>,
 }
@@ -604,6 +606,21 @@ impl Config {
             .as_ref()
             .and_then(|c| c.hop_bypass)
             .unwrap_or(false)
+    }
+
+    /// Whether the pointer may travel on through chains of devices. Off by
+    /// default: the direct device-to-device path stays exactly as before.
+    pub fn multi_hop(&self) -> bool {
+        self.config_toml
+            .as_ref()
+            .and_then(|c| c.multi_hop)
+            .unwrap_or(false)
+    }
+
+    pub fn set_multi_hop(&mut self, enabled: bool) {
+        self.config_toml
+            .get_or_insert_with(Default::default)
+            .multi_hop = Some(enabled);
     }
 
     pub fn set_hop_bypass(&mut self, enabled: bool) {

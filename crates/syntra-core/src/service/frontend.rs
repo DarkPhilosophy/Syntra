@@ -132,6 +132,13 @@ impl Service {
                 self.save_config();
                 self.notify_frontend(FrontendEvent::IndependentPointers(enabled));
             }
+            FrontendRequest::SetMultiHop(enabled) => {
+                self.config.set_multi_hop(enabled);
+                self.capture.set_multi_hop(enabled);
+                self.emulation.set_multi_hop(enabled);
+                self.save_config();
+                self.notify_frontend(FrontendEvent::MultiHop(enabled));
+            }
             FrontendRequest::SetHopBypass(enabled) => {
                 self.config.set_hop_bypass(enabled);
                 self.emulation.set_hop_bypass(enabled);
@@ -592,6 +599,7 @@ impl Service {
             self.config.independent_pointers(),
         ));
         self.notify_frontend(FrontendEvent::HopBypass(self.config.hop_bypass()));
+        self.notify_frontend(FrontendEvent::MultiHop(self.config.multi_hop()));
         self.notify_frontend(FrontendEvent::ClipboardSettings(self.clipboard_settings));
         self.notify_frontend(FrontendEvent::PortChanged(self.port, None));
         self.notify_frontend(FrontendEvent::PublicKeyFingerprint(

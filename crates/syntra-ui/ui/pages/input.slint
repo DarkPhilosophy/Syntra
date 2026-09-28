@@ -11,6 +11,8 @@ export component InputPage inherits Rectangle {
     in property <bool> independent-pointers-enabled: false;
     callback independent-pointers-toggled(bool);
     in property <bool> hop-bypass-enabled: false;
+    in property <bool> multi-hop-enabled: false;
+    callback multi-hop-toggled(bool);
     callback hop-bypass-toggled(bool);
     callback enable-capture();
     callback enable-emulation();
@@ -44,6 +46,12 @@ export component InputPage inherits Rectangle {
             description: Translations.tr("input-independent-pointers-description");
             enabled: root.independent-pointers-enabled;
             toggled(value) => { root.independent-pointers-toggled(value); }
+        }
+        SettingRow {
+            title: Translations.tr("input-multi-hop");
+            description: Translations.tr("input-multi-hop-description");
+            enabled: root.multi-hop-enabled;
+            toggled(value) => { root.multi-hop-toggled(value); }
         }
         SettingRow {
             title: Translations.tr("input-hop-bypass");

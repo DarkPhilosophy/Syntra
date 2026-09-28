@@ -286,8 +286,30 @@ impl HistoryStore {
             return Ok(MergeOutcome::Suppressed);
         }
         insert_event(&transaction, &event)?;
+        prune_unpinned(&transaction)?;
         transaction.commit()?;
         Ok(MergeOutcome::Inserted)
+    }
+
+    /// Whether the newest visible record already holds this content: copying
+    /// the same thing again (or a clipboard that echoes between devices)
+    /// must not grow the history.
+    pub fn is_latest(&self, content: &HistoryContent) -> Result<bool, HistoryError> {
+        let (text, image, _media_type, _width, _height, files_json) = encode_content(content)?;
+        let latest: Option<(Option<String>, Option<Vec<u8>>, Option<String>)> = self
+            .connection
+            .query_row(
+                "SELECT e.text_payload, e.image_payload, e.files_json
+                 FROM history_events e
+                 LEFT JOIN history_local_state s USING(origin_device_id, origin_sequence)
+                 WHERE COALESCE(s.dismissed, 0) = 0
+                 ORDER BY e.created_at_ms DESC, e.origin_sequence DESC
+                 LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        Ok(latest.is_some_and(|(t, i, f)| t == text && i == image && f == files_json))
     }
 
     /// Returns visible records newest first. Locally dismissed events are excluded.
@@ -568,6 +590,27 @@ impl HistoryStore {
         }
         Ok(records)
     }
+}
+
+/// Unpinned records kept at most; older ones are dropped as new ones arrive.
+const MAX_UNPINNED_RECORDS: i64 = 1000;
+
+/// Keeps the history bounded: drops the oldest unpinned records beyond
+/// [`MAX_UNPINNED_RECORDS`]. Pinned records are never removed.
+fn prune_unpinned(transaction: &Transaction<'_>) -> Result<(), HistoryError> {
+    transaction.execute(
+        "DELETE FROM history_events
+         WHERE (origin_device_id, origin_sequence) IN (
+             SELECT e.origin_device_id, e.origin_sequence
+             FROM history_events e
+             LEFT JOIN history_local_state s USING(origin_device_id, origin_sequence)
+             WHERE COALESCE(s.pinned, 0) = 0
+             ORDER BY e.created_at_ms DESC, e.origin_sequence DESC
+             LIMIT -1 OFFSET ?1
+         )",
+        params![MAX_UNPINNED_RECORDS],
+    )?;
+    Ok(())
 }
 
 fn insert_event(

@@ -126,6 +126,8 @@ pub struct AppViewState {
     pub independent_pointers: bool,
     /// Controlling devices may pass on to devices they are not paired with.
     pub hop_bypass: bool,
+    /// The pointer may travel on through chains of devices.
+    pub multi_hop: bool,
     pub clipboard: ClipboardSettings,
     pub history_page: Option<syntra_api::HistoryPage>,
     pub history_query: String,
@@ -404,6 +406,7 @@ impl AppViewState {
             FrontendEvent::InputSharing(enabled) => self.input_sharing = Some(enabled),
             FrontendEvent::IndependentPointers(enabled) => self.independent_pointers = enabled,
             FrontendEvent::HopBypass(enabled) => self.hop_bypass = enabled,
+            FrontendEvent::MultiHop(enabled) => self.multi_hop = enabled,
             FrontendEvent::EmulationStatus(s) => self.input_health.emulation = bool::from(s),
             FrontendEvent::AuthorizedUpdated(a) => self.authorization = a,
             FrontendEvent::PublicKeyFingerprint(k) => self.public_key_fingerprint = Some(k),

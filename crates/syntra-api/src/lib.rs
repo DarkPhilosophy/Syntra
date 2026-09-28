@@ -831,6 +831,8 @@ pub enum FrontendEvent {
     /// Whether a controlling device may reach devices it is not paired with
     /// through this one.
     HopBypass(bool),
+    /// Whether the pointer may travel on through chains of devices.
+    MultiHop(bool),
     /// A replacement certificate was saved; active sessions change only on restart.
     IdentityRegenerated {
         /// Carries the fingerprint for this protocol variant.
@@ -938,6 +940,8 @@ pub enum FrontendRequest {
     /// Let a device controlling this one pass on to this one's other paired
     /// devices even when it is not paired with them itself.
     SetHopBypass(bool),
+    /// Let the pointer travel on through chains of devices (experimental).
+    SetMultiHop(bool),
     /// Explicitly confirmed replacement of the certificate used on the next restart.
     RegenerateIdentity,
     /// This variant reports or requests the sendfiles protocol state.

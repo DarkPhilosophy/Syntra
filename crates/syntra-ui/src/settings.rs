@@ -227,6 +227,11 @@ impl Default for PresentationSettings {
     }
 }
 pub fn presentation_settings_path() -> Option<PathBuf> {
+    // Android has no HOME or XDG directories; the app points this at its own
+    // files directory before starting. Desktops may override it as well.
+    if let Some(dir) = std::env::var_os("SYNTRA_CONFIG_DIR").filter(|d| !d.is_empty()) {
+        return Some(PathBuf::from(dir).join("presentation.json"));
+    }
     #[cfg(target_os = "windows")]
     let base = std::env::var_os("APPDATA").map(PathBuf::from)?;
     #[cfg(target_os = "macos")]

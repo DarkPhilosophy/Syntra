@@ -30,6 +30,8 @@ pub(crate) struct Capture {
 }
 
 pub(crate) enum ICaptureEvent {
+    /// Move the local pointer a little inside from this edge.
+    StepInside(Position),
     Clipboard {
         handle: CaptureHandle,
         fingerprint: String,
@@ -78,6 +80,11 @@ pub(crate) enum CaptureType {
 enum CaptureRequest {
     /// capture must release the mouse
     Release,
+    /// The device controlling this one: its certificate and the edge of this
+    /// screen its pointer entered through. `None` when nobody controls it.
+    SetController(Option<(String, Position)>),
+    /// Turn multi-hop on or off.
+    SetMultiHop(bool),
     /// add a capture client
     Create(CaptureHandle, Position, CaptureType),
     /// destory a capture client
@@ -115,6 +122,8 @@ impl Capture {
             ack_deadline: None,
             held_until_ack: Vec::new(),
             entering_via: None,
+            controller: None,
+            multi_hop: Default::default(),
             backend,
             cancellation_token: cancellation_token.clone(),
             enabled_captures: Default::default(),
@@ -141,6 +150,17 @@ impl Capture {
             .expect("channel closed");
     }
 
+    pub(crate) fn set_multi_hop(&self, enabled: bool) {
+        let _ = self.request_tx.send(CaptureRequest::SetMultiHop(enabled));
+    }
+
+    /// Tells capture which device's pointer is on this screen, if any.
+    pub(crate) fn set_controller(&self, controller: Option<(String, Position)>) {
+        let _ = self
+            .request_tx
+            .send(CaptureRequest::SetController(controller));
+    }
+
     pub(crate) fn set_input_sharing(&self, enabled: bool) {
         self.request_tx
             .send(CaptureRequest::SetInputSharing(enabled))
@@ -161,7 +181,7 @@ impl Capture {
         pos: syntra_api::Position,
         capture_type: CaptureType,
     ) {
-        let pos = to_capture_pos(pos);
+        let pos = capture_pos(pos);
         self.request_tx
             .send(CaptureRequest::Create(handle, pos, capture_type))
             .expect("channel closed");
@@ -230,6 +250,12 @@ macro_rules! debounce {
 struct CaptureTask {
     active_client: Option<CaptureHandle>,
     ack_deadline: Option<Instant>,
+    /// Set while another device controls this one (its pointer is here).
+    /// Only then does an edge shared with that device mean "hand off"
+    /// instead of "enter the device on this side".
+    controller: Option<(String, Position)>,
+    /// Multi-hop enabled (off by default until proven on every route).
+    multi_hop: Rc<std::cell::Cell<bool>>,
     /// After a handoff: certificate of the device the pointer came through,
     /// named in every enter until the new peer acknowledges.
     entering_via: Option<String>,
@@ -257,11 +283,34 @@ impl CaptureTask {
         self.captures.retain(|&(h, ..)| handle != h);
     }
 
-    /// Whether an incoming peer's barrier shares this edge.
-    fn incoming_at(&self, pos: Position) -> bool {
-        self.captures
-            .iter()
-            .any(|&(_, p, t)| p == pos && t == CaptureType::EnterOnly)
+    /// Whether a `Begin` on `handle` must be left to the controlling peer's
+    /// multi-hop hand-off instead of entering the device here. Only while
+    /// multi-hop is on, another device controls this screen, and the edge
+    /// faces a device known to be another than that controller. Towards the
+    /// controller itself, or a device not identified yet, this is a normal
+    /// entry: an unknown certificate must never block direct switching.
+    /// Whether input comes from the phone's own touchpad screen.
+    fn is_touchpad(&self) -> bool {
+        #[cfg(target_os = "android")]
+        {
+            self.backend == Some(syntra_input_capture::Backend::Touchpad)
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            false
+        }
+    }
+
+    fn defer_to_handoff(&self, handle: CaptureHandle) -> bool {
+        let Some((controller, entered)) = self.controller.as_ref() else {
+            return false;
+        };
+        // Only the controller's own edge: barriers left by devices that
+        // controlled this screen earlier must not swallow the pointer.
+        self.multi_hop.get()
+            && self.active_client.is_none()
+            && self.get_pos(handle) == *entered
+            && matches!(self.conn.client_fingerprint(handle), Some(fingerprint) if fingerprint != *controller)
     }
 
     fn is_default_capture_at(&self, pos: Position) -> bool {
@@ -315,6 +364,8 @@ impl CaptureTask {
             }
             CaptureRequest::Destroy(handle) => self.remove_capture(handle),
             CaptureRequest::Release => {}
+            CaptureRequest::SetController(controller) => self.controller = controller,
+            CaptureRequest::SetMultiHop(enabled) => self.multi_hop.set(enabled),
             CaptureRequest::SetInputSharing(enabled) => self.input_sharing = enabled,
             CaptureRequest::SetReleaseBind(bind) => {
                 self.release_bind.borrow_mut().clone_from(&bind);
@@ -539,8 +590,25 @@ impl CaptureTask {
                             log::info!("releasing capture: remote input unavailable");
                             self.release_capture(capture).await?;
                         }
-                        ProtoEvent::Handoff { target, side } if self.state == State::Sending => {
+                        ProtoEvent::Handoff { target, side }
+                            if self.state == State::Sending && self.multi_hop.get() =>
+                        {
                             self.handoff(capture, handle, &target, side).await?;
+                        }
+                        // A hand-off this machine cannot follow (multi-hop off
+                        // here, or entry not confirmed yet): the device in the
+                        // middle has already let go, so bring the pointer home
+                        // instead of leaving it on no screen at all.
+                        ProtoEvent::Handoff { .. } => {
+                            log::info!("hand-off from client {handle} refused; taking the pointer home");
+                            let edge = self.get_pos(handle);
+                            self.release_capture(capture).await?;
+                            // The local pointer still rests on the edge that
+                            // led to that device: step it back inside, or it
+                            // re-enters at once and loops.
+                            self.event_tx
+                                .send(ICaptureEvent::StepInside(edge))
+                                .expect("channel closed");
                         }
                         _ => {}
                     }
@@ -560,6 +628,8 @@ impl CaptureTask {
                 e = self.request_rx.recv() => match e.expect("channel closed") {
                     CaptureRequest::Reenable => { /* already active */ },
                     CaptureRequest::Release => self.release_capture(capture).await?,
+                    CaptureRequest::SetController(controller) => self.controller = controller,
+                    CaptureRequest::SetMultiHop(enabled) => self.multi_hop.set(enabled),
                     CaptureRequest::SetInputSharing(enabled) => {
                         self.input_sharing = enabled;
                         if !enabled {
@@ -752,10 +822,10 @@ impl CaptureTask {
         // edge towards another device, the peer enters that device itself
         // (multi-hop Handoff); taking the pointer over here as well would
         // enter it twice.
-        if event == CaptureEvent::Begin
-            && self.active_client.is_none()
-            && self.incoming_at(self.get_pos(handle))
-        {
+        // The phone's own touchpad is this device's input, never a peer's
+        // pointer passing through: it is not deferred.
+        if event == CaptureEvent::Begin && !self.is_touchpad() && self.defer_to_handoff(handle) {
+            log::info!("deferring client {handle}: waiting for the controller's hand-off");
             capture.release().await?;
             return Ok(());
         }
@@ -987,7 +1057,7 @@ enum State {
     Sending,
 }
 
-fn to_capture_pos(pos: syntra_api::Position) -> syntra_input_capture::Position {
+pub(crate) fn capture_pos(pos: syntra_api::Position) -> syntra_input_capture::Position {
     match pos {
         syntra_api::Position::Left => syntra_input_capture::Position::Left,
         syntra_api::Position::Right => syntra_input_capture::Position::Right,
@@ -1040,6 +1110,8 @@ mod tests {
             ack_deadline: None,
             held_until_ack: Vec::new(),
             entering_via: None,
+            controller: None,
+            multi_hop: Default::default(),
             backend: None,
             cancellation_token: CancellationToken::new(),
             enabled_captures: HashSet::new(),
@@ -1155,5 +1227,102 @@ mod tests {
         );
         assert!(!task.input_sharing);
         assert_eq!(*release_bind.borrow(), vec![scancode::Linux::KeyLeftCtrl]);
+    }
+
+    /// Capture task whose connection knows `peers` as configured clients
+    /// with the given certificates.
+    fn capture_task_with_peers(peers: &[&str]) -> (CaptureTask, Vec<CaptureHandle>) {
+        let (mut task, _requests, _events) = capture_task();
+        let manager = ClientManager::default();
+        let handles = peers
+            .iter()
+            .map(|fingerprint| {
+                let handle = manager.add_client();
+                manager.set_peer_fingerprint(handle, (*fingerprint).to_owned());
+                handle
+            })
+            .collect();
+        task.conn = SyntraConnection::new(
+            Certificate::generate_self_signed(["ignored".to_owned()]).unwrap(),
+            manager,
+        );
+        (task, handles)
+    }
+
+    /// Direct switching must never wait for a hand-off: a device that was
+    /// controlled by its neighbour enters that neighbour again at the shared
+    /// edge, with multi-hop on or off, and once nobody controls it.
+    #[test]
+    fn returning_to_the_controlling_device_is_never_deferred() {
+        let (mut task, handles) = capture_task_with_peers(&["phone"]);
+        let phone = handles[0];
+        task.add_capture(phone, Position::Right, CaptureType::Default);
+        task.add_capture(
+            crate::client::ENTER_HANDLE_BEGIN,
+            Position::Right,
+            CaptureType::EnterOnly,
+        );
+        task.controller = Some(("phone".into(), Position::Right));
+
+        task.multi_hop.set(false);
+        assert!(!task.defer_to_handoff(phone), "multi-hop off: never defer");
+        task.multi_hop.set(true);
+        assert!(
+            !task.defer_to_handoff(phone),
+            "the controller itself: return"
+        );
+        task.controller = None;
+        assert!(
+            !task.defer_to_handoff(phone),
+            "not controlled: enter directly"
+        );
+    }
+
+    /// A device whose certificate is not known yet (its outgoing connection
+    /// has not authenticated) must still be entered directly: blocking on an
+    /// unknown identity is what froze switching.
+    #[test]
+    fn an_unidentified_device_is_entered_directly() {
+        let (mut task, _requests, _events) = capture_task();
+        let manager = ClientManager::default();
+        let phone = manager.add_client();
+        task.conn = SyntraConnection::new(
+            Certificate::generate_self_signed(["ignored".to_owned()]).unwrap(),
+            manager,
+        );
+        task.add_capture(phone, Position::Right, CaptureType::Default);
+        task.add_capture(
+            crate::client::ENTER_HANDLE_BEGIN,
+            Position::Right,
+            CaptureType::EnterOnly,
+        );
+        task.controller = Some(("phone".into(), Position::Right));
+        task.multi_hop.set(true);
+        assert!(!task.defer_to_handoff(phone));
+    }
+
+    /// With multi-hop on and a different device in control, only the edge the
+    /// controller entered through waits for its hand-off. A device on any
+    /// other edge (even one that controlled this screen earlier and left a
+    /// barrier there) is entered directly, as without multi-hop.
+    #[test]
+    fn only_the_controllers_edge_waits_for_its_handoff() {
+        let (mut task, handles) = capture_task_with_peers(&["hp", "phone"]);
+        let (hp, phone) = (handles[0], handles[1]);
+        task.add_capture(hp, Position::Left, CaptureType::Default);
+        task.add_capture(phone, Position::Right, CaptureType::Default);
+        // The phone controlled this screen earlier: its barrier stays.
+        task.add_capture(
+            crate::client::ENTER_HANDLE_BEGIN,
+            Position::Right,
+            CaptureType::EnterOnly,
+        );
+        // MSI now controls it, entered through the left edge.
+        task.controller = Some(("msi".into(), Position::Left));
+        task.multi_hop.set(true);
+        assert!(task.defer_to_handoff(hp), "controller's edge: its hand-off");
+        assert!(!task.defer_to_handoff(phone), "other edge: enter directly");
+        task.multi_hop.set(false);
+        assert!(!task.defer_to_handoff(hp));
     }
 }

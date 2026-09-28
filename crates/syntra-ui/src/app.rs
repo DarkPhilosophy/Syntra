@@ -1668,6 +1668,7 @@ fn project_app_state(app: &AppWindow, state: &AppViewState, settings: &Presentat
     global.set_clipboard_files_enabled(state.clipboard.files);
     global.set_independent_pointers_enabled(state.independent_pointers);
     global.set_hop_bypass_enabled(state.hop_bypass);
+    global.set_multi_hop_enabled(state.multi_hop);
     global.set_clipboard_files_supported(state.capabilities.clipboard_files);
     global.set_listen_port(i32::from(state.diagnostics.port));
     global.set_locale(app.global::<Translations>().get_locale());
@@ -2844,6 +2845,14 @@ fn bind_app_state_callbacks(
         &state,
         UiIntent::SetHopBypass,
         |g, callback| g.on_set_hop_bypass(callback),
+    );
+    bind_bool(
+        &global,
+        tx.clone(),
+        &weak,
+        &state,
+        UiIntent::SetMultiHop,
+        |g, callback| g.on_set_multi_hop(callback),
     );
     {
         let tx = tx.clone();

@@ -16,10 +16,14 @@ pub async fn pick_image() -> io::Result<Option<PathBuf>> {
 
 #[cfg(target_os = "android")]
 pub async fn pick_image() -> io::Result<Option<PathBuf>> {
-    Ok(crate::android_picker::pick("image/*", false)
-        .await?
-        .into_iter()
-        .next())
+    let picked = crate::android_picker::pick("image/*", false).await?;
+    let mut picked = picked.into_iter();
+    let first = picked.next();
+    // Only the first image is used; the picker's other copies are not needed.
+    for extra in picked {
+        let _ = fs::remove_file(extra);
+    }
+    Ok(first)
 }
 use crate::settings::{
     DevicePresentation, PresentationSettings, identity_images_path, presentation_settings_path,
@@ -183,7 +187,10 @@ impl IdentityStore {
         fs::create_dir_all(dir)?;
         let ext = source.extension().and_then(|x| x.to_str()).unwrap_or("img");
         let target = dir.join(format!("identity-{}.{ext}", unique_suffix()));
-        fs::copy(source, &target)?;
+        fs::copy(&source, &target)?;
+        // The Android picker hands over a temporary copy in the app cache.
+        #[cfg(target_os = "android")]
+        let _ = fs::remove_file(&source);
         Ok(target)
     }
 

@@ -32,6 +32,8 @@ class SyntraAccessibilityService : AccessibilityService() {
     private var params: WindowManager.LayoutParams? = null
     @Volatile private var x = 0f
     @Volatile private var y = 0f
+    /** Distance pushed past the edge so far, reset when moving back in. */
+    private var push = 0f
     private var pressedAt: Pair<Float, Float>? = null
     private var dragPath: Path? = null
 
@@ -101,7 +103,7 @@ class SyntraAccessibilityService : AccessibilityService() {
         val maxY = metrics.heightPixels - 1f
         val tx = x + dx
         val ty = y + dy
-        val edge = when {
+        val outside = when {
             tx < 0f -> 1
             tx > maxX -> 2
             ty < 0f -> 3
@@ -110,7 +112,16 @@ class SyntraAccessibilityService : AccessibilityService() {
         }
         x = tx.coerceIn(0f, maxX)
         y = ty.coerceIn(0f, maxY)
-        return edge
+        // Hand control back only after a deliberate push past the edge, as
+        // on a desktop: a pointer resting against it stays here.
+        if (outside == 0) {
+            push = 0f
+            return 0
+        }
+        push += kotlin.math.abs(if (outside <= 2) dx else dy)
+        if (push < EXIT_PUSH * resources.displayMetrics.density) return 0
+        push = 0f
+        return outside
     }
 
     private fun onMotion() {
@@ -189,6 +200,8 @@ class SyntraAccessibilityService : AccessibilityService() {
     }
 
     companion object {
+        /** Push past an edge needed to leave, in dp. */
+        private const val EXIT_PUSH = 24f
         @Volatile private var instance: SyntraAccessibilityService? = null
 
         private fun run(block: SyntraAccessibilityService.() -> Unit) {
@@ -217,13 +230,19 @@ class SyntraAccessibilityService : AccessibilityService() {
             val metrics = service.resources.displayMetrics
             val w = metrics.widthPixels.toFloat()
             val h = metrics.heightPixels.toFloat()
+            // Land a little inside the edge: exactly on it, the first small
+            // motion back would leave straight away and the pointer would
+            // seem to vanish.
+            val inset = 48f * metrics.density
             synchronized(service) {
                 when (side) {
-                    1 -> { service.x = 2f; service.y = h / 2 }
-                    2 -> { service.x = w - 3f; service.y = h / 2 }
-                    3 -> { service.x = w / 2; service.y = 2f }
-                    else -> { service.x = w / 2; service.y = h - 3f }
+                    1 -> { service.x = inset; service.y = h / 2 }
+                    2 -> { service.x = w - inset; service.y = h / 2 }
+                    3 -> { service.x = w / 2; service.y = inset }
+                    else -> { service.x = w / 2; service.y = h - inset }
                 }
+                // Leaving requires pushing against the edge, not brushing it.
+                service.push = 0f
             }
             service.main.post { service.showPointer(); service.movePointer() }
         }

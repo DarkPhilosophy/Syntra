@@ -243,6 +243,7 @@ impl Service {
         // input capture + emulation
         let capture_backend = config.capture_backend().map(|b| b.into());
         let capture = Capture::new(capture_backend, conn, config.release_bind());
+        capture.set_multi_hop(config.multi_hop());
         let emulation_backend = config.emulation_backend().map(|b| b.into());
         let emulation = Emulation::new(emulation_backend, listener);
         // Never start pen cursors into a session where they crash GNOME.
@@ -253,6 +254,7 @@ impl Service {
         let independent = config.independent_pointers();
         emulation.set_independent_pointers(independent);
         emulation.set_hop_bypass(config.hop_bypass());
+        emulation.set_multi_hop(config.multi_hop());
         let legacy_clipboard = !match config.emulation_backend() {
             #[cfg(libei_emulation)]
             Some(EmulationBackend::Libei) => true,
@@ -408,6 +410,9 @@ impl Service {
     }
 
     pub async fn run(&mut self) -> Result<(), ServiceError> {
+        // Layout and known certificates from the saved config, before any
+        // peer enters.
+        self.publish_peer_sides();
         let active = self.client_manager.active_clients();
         for handle in active.iter() {
             // small hack: `activate_client()` checks, if the client

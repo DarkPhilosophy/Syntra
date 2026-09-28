@@ -433,3 +433,5 @@ clipboard-sharing = 共享
 navigation-permissions = 权限
 input-hop-bypass = 无需配对即可转交控制
 input-hop-bypass-description = 通常，控制此设备的电脑只能继续进入与它自己配对的设备。开启后，此设备会把它的指针带到自己已配对的设备上，即使这些设备不信任那台电脑。目前仅限手机。
+input-multi-hop = 通过设备继续传递指针（实验）
+input-multi-hop-description = 允许指针从受控设备继续进入下一台设备（例如电脑 → 手机 → 笔记本）。请在链中每台设备上开启。

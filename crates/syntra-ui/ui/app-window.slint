@@ -327,6 +327,8 @@ export component AppWindow inherits Window {
                     independent-pointers-toggled(value) => { AppState.set-independent-pointers(value); }
                     hop-bypass-enabled: AppState.hop-bypass-enabled;
                     hop-bypass-toggled(value) => { AppState.set-hop-bypass(value); }
+                    multi-hop-enabled: AppState.multi-hop-enabled;
+                    multi-hop-toggled(value) => { AppState.set-multi-hop(value); }
                     enable-capture => { AppState.enable-capture(); }
                     enable-emulation => { AppState.enable-emulation(); }
                 }
