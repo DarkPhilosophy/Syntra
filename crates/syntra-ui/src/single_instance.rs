@@ -116,18 +116,34 @@ where
         .open(lock_path)
         .map_err(SingleInstanceError::Lock)?;
 
-    match ownership.try_lock_exclusive() {
-        Ok(()) => start_primary(endpoint, ownership, on_activate),
-        // Windows reports a held lock as ERROR_LOCK_VIOLATION, not WouldBlock.
-        Err(error)
-            if error.kind() == io::ErrorKind::WouldBlock
-                || error.raw_os_error() == fs2::lock_contended_error().raw_os_error() =>
-        {
-            notify_with_retry(&endpoint).map_err(SingleInstanceError::Activation)?;
-            Ok(InstanceOutcome::Existing)
+    let mut attempts = 0;
+    loop {
+        match ownership.try_lock_exclusive() {
+            Ok(()) => return start_primary(endpoint, ownership, on_activate),
+            // Windows reports a held lock as ERROR_LOCK_VIOLATION, not WouldBlock.
+            Err(error)
+                if error.kind() == io::ErrorKind::WouldBlock
+                    || error.raw_os_error() == fs2::lock_contended_error().raw_os_error() =>
+            {
+                match notify_with_retry(&endpoint) {
+                    Ok(()) => return Ok(InstanceOutcome::Existing),
+                    // The owner exited between the lock check and the
+                    // notification: its endpoint is gone and the lock is
+                    // free again, so try to become the owner instead.
+                    Err(error) if attempts < RETRIES && endpoint_gone(&error) => attempts += 1,
+                    Err(error) => return Err(SingleInstanceError::Activation(error)),
+                }
+            }
+            Err(error) => return Err(SingleInstanceError::Lock(error)),
         }
-        Err(error) => Err(SingleInstanceError::Lock(error)),
     }
+}
+
+fn endpoint_gone(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+    )
 }
 
 fn start_primary<F>(
@@ -265,7 +281,9 @@ fn notify(endpoint: &Endpoint) -> io::Result<()> {
     // Stay connected until the primary has read the byte and hung up: a
     // client closing at once can take unread data with it (Windows named
     // pipes), and the activation is then silently lost.
-    stream.set_recv_timeout(Some(ACTIVATION_ACK_TIMEOUT))?;
+    // Windows pipes support no timeout; the primary hangs up right after
+    // reading, so the read ends there too.
+    let _ = stream.set_recv_timeout(Some(ACTIVATION_ACK_TIMEOUT));
     let _ = stream.read(&mut [0]);
     Ok(())
 }
