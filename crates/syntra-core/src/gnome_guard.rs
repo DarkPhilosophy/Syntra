@@ -81,5 +81,22 @@ fn install_drop_in() -> std::io::Result<()> {
              # unless direct scanout is disabled. Remove this file to undo.\n\
              MUTTER_DEBUG_PAINT={FLAG}\n"
         ),
-    )
+    )?;
+    // environment.d is read only when the systemd user manager starts. With
+    // lingering it outlives logouts, so a re-login alone never applied the
+    // file: set the variable in the running manager too, for the next
+    // GNOME Shell it starts.
+    let status = std::process::Command::new("systemctl")
+        .args([
+            "--user",
+            "set-environment",
+            &format!("MUTTER_DEBUG_PAINT={FLAG}"),
+        ])
+        .status()?;
+    if !status.success() {
+        return Err(std::io::Error::other(format!(
+            "systemctl set-environment failed: {status}"
+        )));
+    }
+    Ok(())
 }

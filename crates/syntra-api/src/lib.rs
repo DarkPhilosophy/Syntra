@@ -521,6 +521,18 @@ pub struct DaemonInfo {
     pub capture_backend: Option<String>,
     /// Emulation backend actually selected, or `None` when unavailable.
     pub emulation_backend: Option<String>,
+    /// Capture backends this daemon was built with, by configuration name.
+    #[serde(default)]
+    pub capture_backends: Vec<String>,
+    /// Emulation backends this daemon was built with.
+    #[serde(default)]
+    pub emulation_backends: Vec<String>,
+    /// Capture backend chosen in the configuration; `None` is automatic.
+    #[serde(default)]
+    pub capture_backend_choice: Option<String>,
+    /// Emulation backend chosen in the configuration; `None` is automatic.
+    #[serde(default)]
+    pub emulation_backend_choice: Option<String>,
     /// Port the daemon listens on for peers.
     pub port: u16,
     /// Build the daemon was compiled from.
@@ -942,6 +954,10 @@ pub enum FrontendRequest {
     SetHopBypass(bool),
     /// Let the pointer travel on through chains of devices (experimental).
     SetMultiHop(bool),
+    /// Switch the capture backend now; `None` picks one automatically.
+    SetCaptureBackend(Option<String>),
+    /// Switch the emulation backend now; `None` picks one automatically.
+    SetEmulationBackend(Option<String>),
     /// Explicitly confirmed replacement of the certificate used on the next restart.
     RegenerateIdentity,
     /// This variant reports or requests the sendfiles protocol state.

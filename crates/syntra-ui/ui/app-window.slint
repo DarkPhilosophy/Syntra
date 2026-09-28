@@ -290,23 +290,18 @@ export component AppWindow inherits Window {
                     capture-enabled: AppState.capture-enabled;
                     emulation-enabled: AppState.emulation-enabled;
                     set-input-sharing(enabled) => { AppState.set-input-sharing(enabled); }
+                    open-permissions => { root.selected-page = "permissions"; }
+                    open-clipboard-sharing => { root.selected-page = "clipboard"; root.clipboard-tab = 1; }
                     clients: AppState.clients;
                     service-known: AppState.service-known;
                     service-installed: AppState.service-installed;
                     service-running: AppState.service-running;
-                    clipboard-text-enabled: AppState.clipboard-text-enabled;
                     daemon-starting: AppState.daemon-starting;
                     daemon-start-error: AppState.daemon-start-error;
                     unreachable-daemons: AppState.unreachable-daemons;
                     stop-unreachable => { AppState.stop-unreachable-daemons(); }
                     start-service => { AppState.start-daemon(); }
-                    clipboard-image-enabled: AppState.clipboard-image-enabled;
-                    clipboard-files-enabled: AppState.clipboard-files-enabled;
-                    clipboard-files-supported: AppState.clipboard-files-supported;
                     activate(handle, enabled) => { AppState.activate-client(handle, enabled); }
-                    toggle-text(enabled) => { AppState.set-clipboard-text(enabled); }
-                    toggle-image(enabled) => { AppState.set-clipboard-image(enabled); }
-                    toggle-files(enabled) => { AppState.set-clipboard-files(enabled); }
                 }
                 if selected-page == "control": TouchpadPage {
                     clients: AppState.clients;
@@ -319,18 +314,18 @@ export component AppWindow inherits Window {
                     enter(zone) => { AppState.touchpad-enter(zone); }
                 }
                 if selected-page == "input": InputPage {
-                    capture-enabled: AppState.capture-enabled;
-                    emulation-enabled: AppState.emulation-enabled;
-                    capture-supported: AppState.capture-supported;
-                    emulation-supported: AppState.emulation-supported;
                     independent-pointers-enabled: AppState.independent-pointers-enabled;
                     independent-pointers-toggled(value) => { AppState.set-independent-pointers(value); }
                     hop-bypass-enabled: AppState.hop-bypass-enabled;
                     hop-bypass-toggled(value) => { AppState.set-hop-bypass(value); }
                     multi-hop-enabled: AppState.multi-hop-enabled;
                     multi-hop-toggled(value) => { AppState.set-multi-hop(value); }
-                    enable-capture => { AppState.enable-capture(); }
-                    enable-emulation => { AppState.enable-emulation(); }
+                    capture-backends: AppState.capture-backends;
+                    emulation-backends: AppState.emulation-backends;
+                    capture-backend-choice: AppState.capture-backend-choice;
+                    emulation-backend-choice: AppState.emulation-backend-choice;
+                    capture-backend-changed(name) => { AppState.set-capture-backend(name); }
+                    emulation-backend-changed(name) => { AppState.set-emulation-backend(name); }
                 }
                 if selected-page == "clipboard": SegmentTabs {
                     y: 0;
@@ -341,6 +336,12 @@ export component AppWindow inherits Window {
                 if selected-page == "permissions": ClipboardPage {
                     section: "permissions";
                     mobile: root.mobile;
+                    capture-enabled: AppState.capture-enabled;
+                    emulation-enabled: AppState.emulation-enabled;
+                    capture-supported: AppState.capture-supported;
+                    emulation-supported: AppState.emulation-supported;
+                    enable-capture => { AppState.enable-capture(); }
+                    enable-emulation => { AppState.enable-emulation(); }
                     flatpak-applications: AppState.flatpak-applications;
                     flatpak-applications-loading: AppState.flatpak-applications-loading;
                     flatpak-applications-error: AppState.flatpak-applications-error;
@@ -467,6 +468,7 @@ export component AppWindow inherits Window {
                 }
                 }
                 if selected-page == "diagnostics": DiagnosticsPage {
+                    compact: root.mobile;
                     entries: AppState.diagnostics;
                     text-filter: AppState.diagnostics-text;
                     paused: AppState.diagnostics-paused;

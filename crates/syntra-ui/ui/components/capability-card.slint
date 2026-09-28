@@ -1,0 +1,41 @@
+import { Theme } from "../theme.slint";
+import { Translations } from "../localization.slint";
+import { StatusPill } from "status-pill.slint";
+import { AppButton } from "controls.slint";
+
+/// Capture or emulation status. On narrow screens the status and its button
+/// go on a line of their own, so neither is pushed off the edge.
+export component CapabilityCard inherits Rectangle {
+    in property <bool> compact;
+    in property <string> title;
+    in property <string> detail;
+    in property <bool> on;
+    in property <bool> supported;
+    in property <string> action;
+    callback activate();
+    height: card.preferred-height;
+    vertical-stretch: 0;
+    background: Theme.surface;
+    border-radius: Theme.corner-radius;
+    card := VerticalLayout {
+        padding: Theme.card-padding;
+        spacing: Theme.small-spacing;
+        HorizontalLayout {
+            spacing: Theme.spacing;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: Theme.small-spacing;
+                Text { text: root.title; color: Theme.text; font-size: Theme.body-size; wrap: word-wrap; }
+                Text { text: root.detail; color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
+            }
+            if !root.compact: StatusPill { label: root.on ? Translations.tr("status-enabled") : Translations.tr("status-disabled"); tone: root.on ? Theme.success : Theme.warning; }
+            if !root.compact: AppButton { text: root.action; enabled: root.supported && !root.on; clicked => { root.activate(); } }
+        }
+        if root.compact: HorizontalLayout {
+            spacing: Theme.spacing;
+            StatusPill { label: root.on ? Translations.tr("status-enabled") : Translations.tr("status-disabled"); tone: root.on ? Theme.success : Theme.warning; }
+            Rectangle { horizontal-stretch: 1; }
+            AppButton { text: root.action; enabled: root.supported && !root.on; clicked => { root.activate(); } }
+        }
+    }
+}

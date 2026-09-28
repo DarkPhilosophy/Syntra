@@ -6,6 +6,8 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+  # The release workflow reuses this build to attach the APK.
+  workflow_call:
 
 concurrency:
   group: android-${{ github.workflow }}-${{ github.ref }}

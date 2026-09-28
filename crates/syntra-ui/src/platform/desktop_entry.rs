@@ -45,6 +45,15 @@ fn applications_directory() -> Result<PathBuf, DesktopEntryError> {
         .ok_or(DesktopEntryError::DirectoryNotFound)
 }
 
+/// The application icon, installed under the name the entry refers to.
+const ICON: &[u8] = include_bytes!("../../ui/assets/shell/syntra.svg");
+
+fn icon_path() -> Result<PathBuf, DesktopEntryError> {
+    dirs::data_dir()
+        .map(|base| base.join(format!("icons/hicolor/scalable/apps/{APPLICATION_ID}.svg")))
+        .ok_or(DesktopEntryError::DirectoryNotFound)
+}
+
 fn entry_path() -> Result<PathBuf, DesktopEntryError> {
     Ok(applications_directory()?.join(format!("{APPLICATION_ID}.desktop")))
 }
@@ -66,6 +75,13 @@ pub fn status() -> Result<DesktopEntryStatus, DesktopEntryError> {
 pub fn install(executable: &Path) -> Result<PathBuf, DesktopEntryError> {
     let directory = applications_directory()?;
     fs::create_dir_all(&directory)?;
+    // The entry names its icon by application id; without that file the
+    // launcher and task switcher show a generic icon.
+    let icon = icon_path()?;
+    if let Some(parent) = icon.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&icon, ICON)?;
     let path = entry_path()?;
     fs::write(&path, entry_contents(executable))?;
     refresh_database(&directory);
@@ -77,6 +93,9 @@ pub fn install(executable: &Path) -> Result<PathBuf, DesktopEntryError> {
 /// Removing an entry that is already absent succeeds: the caller asked for a
 /// state, not for an event.
 pub fn uninstall() -> Result<(), DesktopEntryError> {
+    if let Ok(icon) = icon_path() {
+        let _ = fs::remove_file(icon);
+    }
     let path = entry_path()?;
     match fs::remove_file(&path) {
         Ok(()) => {}

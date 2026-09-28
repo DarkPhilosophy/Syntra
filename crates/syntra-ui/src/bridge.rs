@@ -27,6 +27,8 @@ pub enum UiIntent {
     SetIndependentPointers(bool),
     SetHopBypass(bool),
     SetMultiHop(bool),
+    SetCaptureBackend(Option<String>),
+    SetEmulationBackend(Option<String>),
     CancelTransfer(ClipboardTransferId),
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,6 +81,8 @@ impl UiIntent {
             SetIndependentPointers(v) => FrontendRequest::SetIndependentPointers(v),
             SetHopBypass(v) => FrontendRequest::SetHopBypass(v),
             SetMultiHop(v) => FrontendRequest::SetMultiHop(v),
+            SetCaptureBackend(v) => FrontendRequest::SetCaptureBackend(v),
+            SetEmulationBackend(v) => FrontendRequest::SetEmulationBackend(v),
             CancelTransfer(0) => return Err(IntentError::InvalidTransferId),
             CancelTransfer(id) => FrontendRequest::CancelClipboardTransfer(id),
         })

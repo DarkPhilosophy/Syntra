@@ -200,6 +200,15 @@ impl InputCapture {
         self.capture.release().await
     }
 
+    /// Release the mouse and leave the pointer just inside `landing`: the
+    /// pointer comes back through that edge, not the one it left through.
+    /// Returns whether the backend placed the pointer itself.
+    pub async fn release_at(&mut self, landing: Position) -> Result<bool, CaptureError> {
+        self.pressed_keys.clear();
+        self.pressed_buttons.clear();
+        self.capture.release_at(landing).await
+    }
+
     /// Drain every pointer button forwarded as down-but-not-up.
     pub fn take_pressed_buttons(&mut self) -> HashSet<u32> {
         std::mem::take(&mut self.pressed_buttons)
@@ -332,6 +341,13 @@ trait Capture: Stream<Item = Result<(Position, CaptureEvent), CaptureError>> + U
 
     /// release mouse
     async fn release(&mut self) -> Result<(), CaptureError>;
+
+    /// Release the mouse with the pointer placed inside `landing`. Backends
+    /// that cannot position the pointer on release just release it and
+    /// return `false`.
+    async fn release_at(&mut self, _landing: Position) -> Result<bool, CaptureError> {
+        self.release().await.map(|()| false)
+    }
 
     /// destroy the input capture
     async fn terminate(&mut self) -> Result<(), CaptureError>;

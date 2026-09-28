@@ -1,0 +1,19 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+
+/// Scrollable page body shared by every page: vertical scrolling only, the
+/// content pinned to the visible width so nothing runs off a narrow screen,
+/// and drag-to-scroll wherever touch is the input.
+export component PageScroll inherits ScrollView {
+    in property <length> content-padding: Theme.content-gap;
+    in property <length> content-spacing: Theme.spacing;
+    mouse-drag-pan-enabled: Theme.touch-input-active || !Theme.desktop-platform;
+    viewport-width: self.visible-width;
+    VerticalLayout {
+        width: root.visible-width;
+        padding: root.content-padding;
+        spacing: root.content-spacing;
+        alignment: start;
+        @children
+    }
+}

@@ -118,6 +118,12 @@ pub fn config_dir() -> Result<PathBuf, PathError> {
         .ok_or(PathError::ConfigDirNotFound)
 }
 
+/// Serializes tests that change process-wide environment variables: run in
+/// parallel they overwrite each other's value (a listener test then resolves
+/// the socket from the platform default, which CI sandboxes do not have).
+#[cfg(test)]
+pub(crate) static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,6 +132,7 @@ mod tests {
     /// and sandboxes can relocate the endpoint without a rebuild.
     #[test]
     fn environment_override_replaces_default_socket() {
+        let _env = ENV_LOCK.blocking_lock();
         // SAFETY: single-threaded test, restored before returning.
         let previous = env::var_os(ENV_DAEMON_SOCKET);
         unsafe { env::set_var(ENV_DAEMON_SOCKET, "/tmp/custom-syntra.sock") };

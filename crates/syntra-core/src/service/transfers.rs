@@ -171,6 +171,21 @@ impl Service {
                             Ok(Vec::new())
                         }
                     }
+                    // Another application copied text: read it now rather
+                    // than when the pointer next crosses to another device.
+                    AdapterMessage::ClipboardData { mime_type, .. }
+                        if adapter == crate::adapter_manager::AdapterId::Gtk
+                            && mime_type.starts_with("text/") =>
+                    {
+                        log::info!(
+                            "local text copy noticed; reading the clipboard (legacy={})",
+                            self.legacy_clipboard
+                        );
+                        if self.legacy_clipboard {
+                            self.clipboard.read_once();
+                        }
+                        Ok(Vec::new())
+                    }
                     AdapterMessage::Hello { .. }
                     | AdapterMessage::Error { .. }
                     | AdapterMessage::PasteDestination(_)

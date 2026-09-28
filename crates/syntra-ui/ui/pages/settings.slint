@@ -2,6 +2,7 @@ import { ComboBox, LineEdit, ScrollView, Slider } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
 import { AppButton, AppSwitch } from "../components/controls.slint";
 import { ColorPicker } from "../components/color-picker.slint";
+import { SettingRow } from "../components/setting-row.slint";
 import { Translations } from "../localization.slint";
 import { ServiceControls } from "../components/service-controls.slint";
 import { UpdateControls } from "../components/update-controls.slint";
@@ -110,11 +111,12 @@ export component SettingsPage inherits Rectangle {
                 TouchArea { clicked => { root.navigate("plugins"); } }
             }
             Text { text: Translations.tr("manual-transfer-settings-title"); color: Theme.muted-text; font-size: Theme.caption-size; vertical-stretch: 0; }
-            Rectangle { height: 52px; background: Theme.surface; border-radius: Theme.small-radius;
-                HorizontalLayout { padding: Theme.spacing; spacing: Theme.spacing;
-                    Text { text: Translations.tr("manual-transfer-auto-accept"); color: Theme.text; font-size: Theme.body-size; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
-                    AppSwitch { checked: root.file-auto-accept; enabled: root.file-receive-known && !root.file-receive-busy; a11y-label: Translations.tr("manual-transfer-auto-accept"); toggled(value) => { root.file-auto-accept = value; root.file-receive-dirty = true; root.save-file-receive-settings(); } }
-                }
+            // Long labels wrap instead of being cut off on narrow screens.
+            SettingRow {
+                title: Translations.tr("manual-transfer-auto-accept");
+                enabled: root.file-auto-accept;
+                interactive: root.file-receive-known && !root.file-receive-busy;
+                toggled(value) => { root.file-auto-accept = value; root.file-receive-dirty = true; root.save-file-receive-settings(); }
             }
             Rectangle { height: 92px; background: Theme.surface; border-radius: Theme.small-radius;
                 VerticalLayout { padding: Theme.small-spacing; spacing: Theme.small-spacing;
@@ -129,11 +131,10 @@ export component SettingsPage inherits Rectangle {
             if !root.file-receive-known && root.file-receive-error == "": Text { text: Translations.tr("manual-transfer-service-offline"); color: Theme.warning; font-size: Theme.caption-size; vertical-stretch: 0; }
             if root.file-receive-dirty: AppButton { text: Translations.tr("manual-transfer-unsaved"); enabled: root.file-receive-known && !root.file-receive-busy && root.download-directory != ""; clicked => { root.save-file-receive-settings(); } }
             Text { text: Translations.tr("settings-section-general"); color: Theme.muted-text; font-size: Theme.caption-size; vertical-stretch: 0; }
-            Rectangle { height: 52px; background: Theme.surface; border-radius: Theme.small-radius;
-                HorizontalLayout { padding: Theme.spacing; spacing: Theme.spacing;
-                    Text { text: Translations.tr("settings-suppress-popups"); color: Theme.text; font-size: Theme.body-size; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
-                    AppSwitch { checked: root.suppress-popups; a11y-label: Translations.tr("settings-suppress-popups"); toggled(value) => { root.change-suppress-popups(value); } }
-                }
+            SettingRow {
+                title: Translations.tr("settings-suppress-popups");
+                enabled: root.suppress-popups;
+                toggled(value) => { root.change-suppress-popups(value); }
             }
             Rectangle { height: 52px; background: Theme.surface; border-radius: Theme.small-radius;
                 HorizontalLayout { padding: Theme.spacing; spacing: Theme.spacing;

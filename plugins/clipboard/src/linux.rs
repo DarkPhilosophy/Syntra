@@ -339,6 +339,9 @@ pub fn main() {
             .collect();
         if mimes.is_empty() {
             *last_seen.lock() = None;
+            if let Some(notice) = text_change_notice(names.iter().map(|name| name.as_str())) {
+                emit(&notice);
+            }
             return;
         }
         let clipboard = clipboard.clone();
@@ -394,8 +397,36 @@ pub fn main() {
     loop_.run();
 }
 
+/// Tells the daemon that another application copied text. The daemon reads
+/// the selection itself; without this it only noticed when the pointer next
+/// crossed to another device, so a copy could wait minutes before syncing.
+fn text_change_notice<'a>(formats: impl IntoIterator<Item = &'a str>) -> Option<Message> {
+    let mime = formats
+        .into_iter()
+        .find(|mime| mime.starts_with("text/plain") || *mime == "UTF8_STRING")?;
+    Some(Message::ClipboardData {
+        transfer_id: "selection-changed".into(),
+        mime_type: mime.into(),
+        value: String::new(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
+    use super::text_change_notice;
+    use syntra_plugin_api::Message;
+
+    #[test]
+    fn copied_text_is_announced_and_other_formats_are_not() {
+        let notice = text_change_notice(["TARGETS", "text/plain;charset=utf-8"]);
+        assert!(matches!(
+            notice,
+            Some(Message::ClipboardData { ref mime_type, .. }) if mime_type == "text/plain;charset=utf-8"
+        ));
+        assert!(text_change_notice(["image/png"]).is_none());
+        assert!(text_change_notice([]).is_none());
+    }
+
     use super::*;
     use std::io::Write;
     use std::os::unix::net::UnixStream;

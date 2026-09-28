@@ -1,3 +1,4 @@
+import { PageScroll } from "../components/page-scroll.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Translations } from "../localization.slint";
 import { Theme } from "../theme.slint";
@@ -79,148 +80,138 @@ export component AboutPage inherits Rectangle {
     private property <bool> compact: self.width < Theme.compact-breakpoint;
     background: Theme.background;
 
-    ScrollView {
-        mouse-drag-pan-enabled: Theme.touch-input-active || !Theme.desktop-platform;
-        viewport-width: self.visible-width;
-        VerticalLayout {
-            // Fit the page to the window: without this the content takes its
-            // preferred width and runs off the right edge on narrow screens.
-            width: root.width;
-            padding: Theme.content-gap;
-            spacing: Theme.large-spacing;
-            alignment: start;
-
-            // Identity card.
-            Rectangle {
-                height: identity.preferred-height;
-                border-radius: 20px;
-                background: Theme.surface;
-                identity := VerticalLayout {
-                    padding: Theme.large-spacing;
-                    spacing: Theme.spacing;
-                    HorizontalLayout {
-                        spacing: Theme.large-spacing;
-                        Image {
-                            source: @image-url("../assets/shell/syntra.svg");
-                            width: root.compact ? 64px : 96px;
-                            height: self.width;
-                        }
-                        VerticalLayout {
-                            alignment: center;
-                            spacing: 4px;
-                            Wordmark { size: root.compact ? 26px : 34px; }
-                            Text { text: Translations.tr("welcome-motto"); color: Theme.muted-text; font-size: Theme.body-size; wrap: word-wrap; }
-                            Text {
-                                text: Translations.tr("about-version") + " " + root.app-version + " · GPL-3.0-or-later";
-                                color: Theme.muted-text;
-                                font-size: Theme.caption-size;
-                                wrap: word-wrap;
-                            }
+    PageScroll {
+        content-padding: Theme.content-gap;
+        content-spacing: Theme.large-spacing;
+        Rectangle {
+            height: identity.preferred-height;
+            border-radius: 20px;
+            background: Theme.surface;
+            identity := VerticalLayout {
+                padding: Theme.large-spacing;
+                spacing: Theme.spacing;
+                HorizontalLayout {
+                    spacing: Theme.large-spacing;
+                    Image {
+                        source: @image-url("../assets/shell/syntra.svg");
+                        width: root.compact ? 64px : 96px;
+                        height: self.width;
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 4px;
+                        Wordmark { size: root.compact ? 26px : 34px; }
+                        Text { text: Translations.tr("welcome-motto"); color: Theme.muted-text; font-size: Theme.body-size; wrap: word-wrap; }
+                        Text {
+                            text: Translations.tr("about-version") + " " + root.app-version + " · GPL-3.0-or-later";
+                            color: Theme.muted-text;
+                            font-size: Theme.caption-size;
+                            wrap: word-wrap;
                         }
                     }
-                    // Side by side when there is room, stacked on narrow windows
-                    // so no link is ever clipped.
-                    if !root.compact: HorizontalLayout {
-                        alignment: start;
-                        spacing: Theme.small-spacing;
-                        AppButton { text: Translations.tr("about-source"); clicked => { root.open-link("https://github.com/DarkPhilosophy/Syntra"); } }
-                        AppButton { text: Translations.tr("about-issues"); clicked => { root.open-link("https://github.com/DarkPhilosophy/Syntra/issues"); } }
-                        AppButton { text: Translations.tr("about-license"); clicked => { root.open-link("https://www.gnu.org/licenses/gpl-3.0.html"); } }
-                        AppButton { text: Translations.tr("about-disclaimer"); clicked => { root.open-link("https://github.com/DarkPhilosophy/Syntra/blob/main/.github/DISCLAIMER.md"); } }
-                    }
-                    if root.compact: VerticalLayout {
-                        spacing: Theme.small-spacing;
-                        AppButton { text: Translations.tr("about-source"); clicked => { root.open-link("https://github.com/DarkPhilosophy/Syntra"); } }
-                        AppButton { text: Translations.tr("about-issues"); clicked => { root.open-link("https://github.com/DarkPhilosophy/Syntra/issues"); } }
-                        AppButton { text: Translations.tr("about-license"); clicked => { root.open-link("https://www.gnu.org/licenses/gpl-3.0.html"); } }
-                        AppButton { text: Translations.tr("about-disclaimer"); clicked => { root.open-link("https://github.com/DarkPhilosophy/Syntra/blob/main/.github/DISCLAIMER.md"); } }
-                    }
+                }
+                // Side by side when there is room, stacked on narrow windows
+                // so no link is ever clipped.
+                if !root.compact: HorizontalLayout {
+                    alignment: start;
+                    spacing: Theme.small-spacing;
+                    AppButton { text: Translations.tr("about-source"); clicked => { root.open-link("https://github.com/DarkPhilosophy/Syntra"); } }
+                    AppButton { text: Translations.tr("about-issues"); clicked => { root.open-link("https://github.com/DarkPhilosophy/Syntra/issues"); } }
+                    AppButton { text: Translations.tr("about-license"); clicked => { root.open-link("https://www.gnu.org/licenses/gpl-3.0.html"); } }
+                    AppButton { text: Translations.tr("about-disclaimer"); clicked => { root.open-link("https://github.com/DarkPhilosophy/Syntra/blob/main/.github/DISCLAIMER.md"); } }
+                }
+                if root.compact: VerticalLayout {
+                    spacing: Theme.small-spacing;
+                    AppButton { text: Translations.tr("about-source"); clicked => { root.open-link("https://github.com/DarkPhilosophy/Syntra"); } }
+                    AppButton { text: Translations.tr("about-issues"); clicked => { root.open-link("https://github.com/DarkPhilosophy/Syntra/issues"); } }
+                    AppButton { text: Translations.tr("about-license"); clicked => { root.open-link("https://www.gnu.org/licenses/gpl-3.0.html"); } }
+                    AppButton { text: Translations.tr("about-disclaimer"); clicked => { root.open-link("https://github.com/DarkPhilosophy/Syntra/blob/main/.github/DISCLAIMER.md"); } }
                 }
             }
+        }
 
-            // The warranty disclaimer, stated where people look for it.
-            Rectangle {
-                height: warranty.preferred-height + 2 * Theme.spacing;
-                border-radius: Theme.corner-radius;
-                background: Theme.warning.with-alpha(0.08);
-                border-width: 1px;
-                border-color: Theme.warning.with-alpha(0.35);
-                warranty := Text {
-                    x: Theme.spacing;
-                    width: parent.width - 2 * Theme.spacing;
-                    y: Theme.spacing;
-                    text: Translations.tr("about-warranty");
-                    color: Theme.text;
-                    font-size: Theme.body-size;
-                    wrap: word-wrap;
-                }
-            }
-            Text {
-                text: Translations.tr("about-credits-intro");
-                color: Theme.muted-text;
+        // The warranty disclaimer, stated where people look for it.
+        Rectangle {
+            height: warranty.preferred-height + 2 * Theme.spacing;
+            border-radius: Theme.corner-radius;
+            background: Theme.warning.with-alpha(0.08);
+            border-width: 1px;
+            border-color: Theme.warning.with-alpha(0.35);
+            warranty := Text {
+                x: Theme.spacing;
+                width: parent.width - 2 * Theme.spacing;
+                y: Theme.spacing;
+                text: Translations.tr("about-warranty");
+                color: Theme.text;
                 font-size: Theme.body-size;
                 wrap: word-wrap;
             }
+        }
+        Text {
+            text: Translations.tr("about-credits-intro");
+            color: Theme.muted-text;
+            font-size: Theme.body-size;
+            wrap: word-wrap;
+        }
 
-            CreditSection {
-                title: Translations.tr("about-section-interface");
-                open(url) => { root.open-link(url); }
-                credits: [
-                    { name: "Slint", role: "about-role-slint", url: "https://slint.dev" },
-                    { name: "Fluent", role: "about-role-fluent", url: "https://projectfluent.org" },
-                    { name: "rfd", role: "about-role-rfd", url: "https://github.com/PolyMeilex/rfd" },
-                    { name: "ksni", role: "about-role-ksni", url: "https://github.com/iovxw/ksni" },
-                    { name: "image", role: "about-role-image", url: "https://github.com/image-rs/image" },
-                ];
-            }
-            CreditSection {
-                title: Translations.tr("about-section-runtime");
-                open(url) => { root.open-link(url); }
-                credits: [
-                    { name: "Rust", role: "about-role-rust", url: "https://www.rust-lang.org" },
-                    { name: "Tokio", role: "about-role-tokio", url: "https://tokio.rs" },
-                    { name: "Serde", role: "about-role-serde", url: "https://serde.rs" },
-                    { name: "TOML", role: "about-role-toml", url: "https://github.com/toml-rs/toml" },
-                ];
-            }
-            CreditSection {
-                title: Translations.tr("about-section-network");
-                open(url) => { root.open-link(url); }
-                credits: [
-                    { name: "rustls", role: "about-role-rustls", url: "https://github.com/rustls/rustls" },
-                    { name: "webrtc-dtls", role: "about-role-dtls", url: "https://github.com/webrtc-rs/webrtc" },
-                    { name: "mdns-sd", role: "about-role-mdns", url: "https://github.com/keepsimple1/mdns-sd" },
-                    { name: "reqwest", role: "about-role-reqwest", url: "https://github.com/seanmonstar/reqwest" },
-                ];
-            }
-            CreditSection {
-                title: Translations.tr("about-section-input");
-                open(url) => { root.open-link(url); }
-                credits: [
-                    { name: "uinput", role: "about-role-uinput", url: "https://docs.kernel.org/input/uinput.html" },
-                    { name: "libei · reis", role: "about-role-libei", url: "https://gitlab.freedesktop.org/libinput/libei" },
-                    { name: "wayland-rs", role: "about-role-wayland", url: "https://github.com/Smithay/wayland-rs" },
-                    { name: "x11rb", role: "about-role-x11", url: "https://github.com/psychon/x11rb" },
-                ];
-            }
-            CreditSection {
-                title: Translations.tr("about-section-data");
-                open(url) => { root.open-link(url); }
-                credits: [
-                    { name: "SQLite", role: "about-role-sqlite", url: "https://sqlite.org" },
-                    { name: "rusqlite", role: "about-role-rusqlite", url: "https://github.com/rusqlite/rusqlite" },
-                    { name: "fuser", role: "about-role-fuser", url: "https://github.com/cberner/fuser" },
-                    { name: "GTK 4", role: "about-role-gtk", url: "https://gtk-rs.org" },
-                    { name: "arboard", role: "about-role-arboard", url: "https://github.com/1Password/arboard" },
-                ];
-            }
-            CreditSection {
-                title: Translations.tr("about-section-inspiration");
-                open(url) => { root.open-link(url); }
-                credits: [
-                    { name: "Sunshine", role: "about-role-sunshine", url: "https://github.com/LizardByte/Sunshine" },
-                ];
-            }
+        CreditSection {
+            title: Translations.tr("about-section-interface");
+            open(url) => { root.open-link(url); }
+            credits: [
+                { name: "Slint", role: "about-role-slint", url: "https://slint.dev" },
+                { name: "Fluent", role: "about-role-fluent", url: "https://projectfluent.org" },
+                { name: "rfd", role: "about-role-rfd", url: "https://github.com/PolyMeilex/rfd" },
+                { name: "ksni", role: "about-role-ksni", url: "https://github.com/iovxw/ksni" },
+                { name: "image", role: "about-role-image", url: "https://github.com/image-rs/image" },
+            ];
+        }
+        CreditSection {
+            title: Translations.tr("about-section-runtime");
+            open(url) => { root.open-link(url); }
+            credits: [
+                { name: "Rust", role: "about-role-rust", url: "https://www.rust-lang.org" },
+                { name: "Tokio", role: "about-role-tokio", url: "https://tokio.rs" },
+                { name: "Serde", role: "about-role-serde", url: "https://serde.rs" },
+                { name: "TOML", role: "about-role-toml", url: "https://github.com/toml-rs/toml" },
+            ];
+        }
+        CreditSection {
+            title: Translations.tr("about-section-network");
+            open(url) => { root.open-link(url); }
+            credits: [
+                { name: "rustls", role: "about-role-rustls", url: "https://github.com/rustls/rustls" },
+                { name: "webrtc-dtls", role: "about-role-dtls", url: "https://github.com/webrtc-rs/webrtc" },
+                { name: "mdns-sd", role: "about-role-mdns", url: "https://github.com/keepsimple1/mdns-sd" },
+                { name: "reqwest", role: "about-role-reqwest", url: "https://github.com/seanmonstar/reqwest" },
+            ];
+        }
+        CreditSection {
+            title: Translations.tr("about-section-input");
+            open(url) => { root.open-link(url); }
+            credits: [
+                { name: "uinput", role: "about-role-uinput", url: "https://docs.kernel.org/input/uinput.html" },
+                { name: "libei · reis", role: "about-role-libei", url: "https://gitlab.freedesktop.org/libinput/libei" },
+                { name: "wayland-rs", role: "about-role-wayland", url: "https://github.com/Smithay/wayland-rs" },
+                { name: "x11rb", role: "about-role-x11", url: "https://github.com/psychon/x11rb" },
+            ];
+        }
+        CreditSection {
+            title: Translations.tr("about-section-data");
+            open(url) => { root.open-link(url); }
+            credits: [
+                { name: "SQLite", role: "about-role-sqlite", url: "https://sqlite.org" },
+                { name: "rusqlite", role: "about-role-rusqlite", url: "https://github.com/rusqlite/rusqlite" },
+                { name: "fuser", role: "about-role-fuser", url: "https://github.com/cberner/fuser" },
+                { name: "GTK 4", role: "about-role-gtk", url: "https://gtk-rs.org" },
+                { name: "arboard", role: "about-role-arboard", url: "https://github.com/1Password/arboard" },
+            ];
+        }
+        CreditSection {
+            title: Translations.tr("about-section-inspiration");
+            open(url) => { root.open-link(url); }
+            credits: [
+                { name: "Sunshine", role: "about-role-sunshine", url: "https://github.com/LizardByte/Sunshine" },
+            ];
         }
     }
 }

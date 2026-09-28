@@ -149,6 +149,13 @@ export global AppState {
     in-out property <string> daemon-uptime;
     in-out property <string> daemon-origin;
     in-out property <string> daemon-capture-backend;
+    // Backend choice: names the service was built with; "" is automatic.
+    in-out property <[string]> capture-backends;
+    in-out property <[string]> emulation-backends;
+    in-out property <string> capture-backend-choice;
+    in-out property <string> emulation-backend-choice;
+    callback set-capture-backend(string);
+    callback set-emulation-backend(string);
     in-out property <string> daemon-emulation-backend;
     in-out property <int> daemon-port;
     /// True when the service was built from different sources than this

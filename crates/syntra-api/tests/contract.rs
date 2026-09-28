@@ -138,6 +138,12 @@ fn profile_bound_counts_bytes_not_characters() {
 /// look like "the service is not running".
 #[test]
 fn endpoints_are_distinct_and_absolute() {
+    // Build sandboxes (nix, containers) have no session runtime directory;
+    // the contract under test is resolution, not the host's session.
+    if std::env::var_os("XDG_RUNTIME_DIR").is_none() && cfg!(unix) {
+        // SAFETY: no other test in this binary reads the environment.
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", std::env::temp_dir()) };
+    }
     let daemon = paths::daemon_socket().expect("a runtime directory is available");
     let diagnostics = paths::diagnostics_socket().expect("a runtime directory is available");
 

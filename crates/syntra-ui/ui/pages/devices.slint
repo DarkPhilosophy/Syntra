@@ -67,7 +67,7 @@ export component DevicesPage inherits Rectangle {
 
     background: Theme.background;
     ScrollView {
-        mouse-drag-pan-enabled: Theme.touch-input-active || !Theme.desktop-platform;
+        mouse-drag-pan-enabled: (Theme.touch-input-active || !Theme.desktop-platform) && !peer-map.dragging;
         viewport-width: self.visible-width;
     VerticalLayout {
         // Fit the page to the window: without this the content takes its
@@ -109,7 +109,7 @@ export component DevicesPage inherits Rectangle {
         Text { text: Translations.tr("device-presentation-note"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; vertical-stretch: 0; }
         // Placement matters on phones too: the pointer of a computer that
         // controls this phone leaves through the edge facing it.
-        PeerMap {
+        peer-map := PeerMap {
             mobile: root.mobile;
             clients: root.clients;
             zone-depth: root.peer-zone-depth;
@@ -151,6 +151,7 @@ export component DevicesPage inherits Rectangle {
             spacing: Theme.spacing;
             for client in root.clients : ClientRow {
                 client: client;
+                compact: root.mobile;
                 label-edit: root.edit-label;
                 label-cancel: root.cancel-label;
                 label-delete: root.delete-label;

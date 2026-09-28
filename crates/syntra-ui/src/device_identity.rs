@@ -1,7 +1,7 @@
 use std::fs;
 use std::io;
 use std::net::IpAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use syntra_api::Position;
 
@@ -185,7 +185,10 @@ impl IdentityStore {
             io::Error::new(io::ErrorKind::NotFound, "config directory unavailable")
         })?;
         fs::create_dir_all(dir)?;
-        let ext = source.extension().and_then(|x| x.to_str()).unwrap_or("img");
+        // The decoder goes by extension; pickers may name a JPEG `.png`.
+        let ext = sniffed_extension(&source)
+            .or_else(|| source.extension().and_then(|x| x.to_str()))
+            .unwrap_or("img");
         let target = dir.join(format!("identity-{}.{ext}", unique_suffix()));
         fs::copy(&source, &target)?;
         // The Android picker hands over a temporary copy in the app cache.
@@ -260,6 +263,29 @@ fn remove_owned(path: &str, images_path: Option<&std::path::Path>) -> io::Result
     Ok(())
 }
 
+/// Extension matching the image's actual format, from its first bytes.
+fn sniffed_extension(path: &Path) -> Option<&'static str> {
+    use std::io::Read;
+    let mut head = [0u8; 12];
+    let read = fs::File::open(path).ok()?.read(&mut head).ok()?;
+    image_extension(&head[..read])
+}
+
+fn image_extension(head: &[u8]) -> Option<&'static str> {
+    if head.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("png")
+    } else if head.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some("jpg")
+    } else if head.starts_with(b"GIF87a") || head.starts_with(b"GIF89a") {
+        Some("gif")
+    } else if head.len() >= 12 && &head[..4] == b"RIFF" && &head[8..12] == b"WEBP" {
+        Some("webp")
+    } else if head.starts_with(b"BM") {
+        Some("bmp")
+    } else {
+        None
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,5 +407,15 @@ mod tests {
                 .is_empty()
         );
         assert!(previous.is_dir());
+    }
+
+    /// A JPEG handed over as `.png` must be stored as `.jpg`, or it never loads.
+    #[test]
+    fn image_extension_follows_content() {
+        assert_eq!(image_extension(&[0xff, 0xd8, 0xff, 0xe0]), Some("jpg"));
+        assert_eq!(image_extension(b"\x89PNG\r\n\x1a\n...."), Some("png"));
+        assert_eq!(image_extension(b"GIF89a"), Some("gif"));
+        assert_eq!(image_extension(b"RIFF\0\0\0\0WEBP"), Some("webp"));
+        assert_eq!(image_extension(b"hello"), None);
     }
 }

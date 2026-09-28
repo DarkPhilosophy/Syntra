@@ -70,6 +70,10 @@ rustPlatform.buildRustPackage {
 
   # Set Environment Variables
   RUST_BACKTRACE = "full";
+  # The sandbox has no session: socket paths resolve from XDG_RUNTIME_DIR.
+  preCheck = ''
+    export XDG_RUNTIME_DIR=$(mktemp -d)
+  '';
   postInstall = ''
     ${lib.optionalString stdenv.isLinux ''
       test -x $out/bin/syntra-plugin-clipboard
@@ -77,7 +81,7 @@ rustPlatform.buildRustPackage {
     ''}
     test -x $out/bin/syntra-daemon
     install -Dm444 *.desktop -t $out/share/applications
-    install -Dm444 crates/syntra-ui/ui/assets/shell/syntra.svg $out/share/icons/hicolor/scalable/apps/syntra.svg
+    install -Dm444 crates/syntra-ui/ui/assets/shell/syntra.svg $out/share/icons/hicolor/scalable/apps/io.syntra.Syntra.svg
   '';
 
   meta = with lib; {

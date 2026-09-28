@@ -102,6 +102,9 @@ struct ReleaseSignal {
     capturing: Arc<AtomicBool>,
     /// Raised once the session has actually let go.
     completed: Arc<Notify>,
+    /// Edge to leave the pointer at on the next release, instead of the
+    /// edge the capture began on.
+    landing: Arc<std::sync::Mutex<Option<Position>>>,
 }
 
 impl ReleaseSignal {
@@ -118,6 +121,14 @@ impl ReleaseSignal {
     /// Resolves when a release has been requested.
     fn requested(&self) -> impl std::future::Future<Output = ()> + '_ {
         self.requested.notified()
+    }
+
+    fn set_landing(&self, landing: Option<Position>) {
+        *self.landing.lock().expect("landing lock") = landing;
+    }
+
+    fn landing(&self) -> Option<Position> {
+        *self.landing.lock().expect("landing lock")
     }
 
     /// Marks the pointer released and wakes whoever is waiting.
@@ -159,8 +170,23 @@ pub struct LibeiInputCapture {
 
 /// returns (start pos, end pos), inclusive
 fn pos_to_barrier(r: &Region, pos: Position) -> (i32, i32, i32, i32) {
-    let (x, y) = (r.x_offset(), r.y_offset());
-    let (w, h) = (r.width() as i32, r.height() as i32);
+    barrier_line(
+        (
+            r.x_offset(),
+            r.y_offset(),
+            r.width() as i32,
+            r.height() as i32,
+        ),
+        pos,
+    )
+}
+
+#[cfg(test)]
+fn pos_to_barrier_for_test(screen: (i32, i32, i32, i32), pos: Position) -> (i32, i32, i32, i32) {
+    barrier_line(screen, pos)
+}
+
+fn barrier_line((x, y, w, h): (i32, i32, i32, i32), pos: Position) -> (i32, i32, i32, i32) {
     match pos {
         Position::Left => (x, y, x, y + h - 1),
         Position::Right => (x + w, y, x + w, y + h - 1),
@@ -703,7 +729,10 @@ async fn do_capture_session(
                     let release_result = if compositor_released {
                         Ok(())
                     } else {
-                        let result = release_capture(syntra_input_capture, session, &activated, pos).await;
+                        let landing = release
+                            .landing()
+                            .and_then(|edge| landing_point(&barriers, &pos_for_barrier_id, edge, activated.cursor_position()?));
+                        let result = release_capture(syntra_input_capture, session, &activated, pos, landing).await;
                         if let Err(error) = result {
                             // Release can race a compositor-initiated deactivation.
                             // Only an authoritative signal for this activation can
@@ -771,6 +800,7 @@ async fn release_capture(
     session: &Session<InputCapture>,
     activated: &Activated,
     current_pos: Position,
+    landing: Option<(f64, f64)>,
 ) -> Result<(), CaptureError> {
     if let Some(activation_id) = activated.activation_id() {
         log::debug!("releasing input capture {activation_id}");
@@ -786,8 +816,10 @@ async fn release_capture(
         Position::Top => (0., 1.),
         Position::Bottom => (0., -1.),
     };
-    // release 1px to the right of the entered zone
-    let cursor_position = (x as f64 + dx, y as f64 + dy);
+    // release 1px to the right of the entered zone, unless the pointer comes
+    // back through another edge
+    let cursor_position = landing.unwrap_or((x as f64 + dx, y as f64 + dy));
+    log::debug!("releasing the pointer at {cursor_position:?}");
     let release_options = ReleaseOptions::default()
         .set_activation_id(activated.activation_id())
         .set_cursor_position(Some(cursor_position));
@@ -795,6 +827,43 @@ async fn release_capture(
         .release(session, release_options)
         .await?;
     Ok(())
+}
+
+/// A point just inside `landing`, level with `cursor`. Multi-monitor setups
+/// have a barrier per output; the outermost one is the desktop's edge, and
+/// among those the one nearest the cursor.
+fn landing_point(
+    barriers: &[ICBarrier],
+    pos_for_barrier_id: &HashMap<BarrierID, Position>,
+    landing: Position,
+    cursor: (f32, f32),
+) -> Option<(f64, f64)> {
+    let (cx, cy) = (cursor.0 as f64, cursor.1 as f64);
+    barriers
+        .iter()
+        .filter(|b| pos_for_barrier_id.get(&b.barrier_id) == Some(&landing))
+        .map(|b| {
+            let (x1, y1, x2, y2) = b.position;
+            let (x1, y1, x2, y2) = (x1 as f64, y1 as f64, x2 as f64, y2 as f64);
+            // Same insets as a normal release: barriers on the right and
+            // bottom sit one pixel outside the screen.
+            let point = match landing {
+                Position::Left => (x1 + 1., cy.clamp(y1, y2)),
+                Position::Right => (x1 - 2., cy.clamp(y1, y2)),
+                Position::Top => (cx.clamp(x1, x2), y1 + 1.),
+                Position::Bottom => (cx.clamp(x1, x2), y1 - 2.),
+            };
+            let outward = match landing {
+                Position::Left => -x1,
+                Position::Right => x1,
+                Position::Top => -y1,
+                Position::Bottom => y1,
+            };
+            let distance = (point.0 - cx).powi(2) + (point.1 - cy).powi(2);
+            (point, outward, distance)
+        })
+        .max_by(|a, b| a.1.total_cmp(&b.1).then(b.2.total_cmp(&a.2)))
+        .map(|(point, ..)| point)
 }
 
 fn find_corresponding_client(barriers: &[ICBarrier], pos: (f32, f32)) -> BarrierID {
@@ -894,6 +963,13 @@ impl SyntraInputCapture for LibeiInputCapture {
         Ok(())
     }
 
+    async fn release_at(&mut self, landing: Position) -> Result<bool, CaptureError> {
+        self.release.set_landing(Some(landing));
+        let result = self.release().await;
+        self.release.set_landing(None);
+        result.map(|()| true)
+    }
+
     async fn release(&mut self) -> Result<(), CaptureError> {
         if !self.release.release(RELEASE_TIMEOUT).await {
             // A session that will not hand the pointer back would strand the
@@ -945,8 +1021,56 @@ impl Stream for LibeiInputCapture {
 
 #[cfg(test)]
 mod tests {
-    use super::ReleaseSignal;
+    use super::{ICBarrier, ReleaseSignal, landing_point, pos_to_barrier_for_test};
+    use crate::Position;
+    use std::collections::HashMap;
+    use std::num::NonZeroU32;
     use std::time::Duration;
+
+    /// Two 1920x1080 outputs side by side, barriers on both outer edges.
+    fn layout() -> (Vec<ICBarrier>, HashMap<NonZeroU32, Position>) {
+        let screens = [(0, 0, 1920, 1080), (1920, 0, 1920, 1080)];
+        let mut barriers = vec![];
+        let mut ids = HashMap::new();
+        let mut next = 1u32;
+        for pos in [Position::Left, Position::Right] {
+            for screen in screens {
+                let id = NonZeroU32::new(next).unwrap();
+                next += 1;
+                barriers.push(ICBarrier::new(id, pos_to_barrier_for_test(screen, pos)));
+                ids.insert(id, pos);
+            }
+        }
+        (barriers, ids)
+    }
+
+    /// The owner's pointer left through the left edge and comes home through
+    /// the right one: it must land inside the right edge, at the same height.
+    #[test]
+    fn coming_home_through_another_edge_lands_on_that_edge() {
+        let (barriers, ids) = layout();
+        let exit_point = (0.0, 400.0);
+        let (x, y) = landing_point(&barriers, &ids, Position::Right, exit_point).unwrap();
+        assert_eq!(y, 400.0);
+        assert!(x > 3800.0 && x < 3840.0, "inside the right edge, got {x}");
+        let (x, _) = landing_point(&barriers, &ids, Position::Left, (3839.0, 400.0)).unwrap();
+        assert!((0.0..10.0).contains(&x), "inside the left edge, got {x}");
+    }
+
+    /// No barrier on that edge (no device there): keep the normal release.
+    #[test]
+    fn no_barrier_on_the_landing_edge_keeps_the_normal_release() {
+        let (barriers, ids) = layout();
+        assert!(landing_point(&barriers, &ids, Position::Top, (10.0, 10.0)).is_none());
+    }
+
+    #[test]
+    fn landing_is_cleared_by_default() {
+        let signal = ReleaseSignal::default();
+        assert_eq!(signal.landing(), None);
+        signal.set_landing(Some(Position::Right));
+        assert_eq!(signal.landing(), Some(Position::Right));
+    }
 
     #[tokio::test]
     async fn release_request_survives_begin_delivery_before_session_waits() {

@@ -39,10 +39,15 @@ jobs:
         test -x syntra-daemon-linux-x86_64
         test -x syntra-plugin-fuse-linux-x86_64
         test -x syntra-plugin-clipboard-linux-x86_64
-    - name: Install cargo bundle
-      run: cargo install cargo-bundle
+    - name: Install packagers
+      run: cargo install cargo-bundle cargo-generate-rpm cargo-deb --locked
     - name: Bundle
-      run: cargo bundle --release -p syntra-app
+      run: |
+        cargo bundle --release -p syntra-app
+        # Full packages: dashboard, daemon and plugins, desktop entry, icon.
+        cargo deb -p syntra-app --no-build --no-strip -o target/release/bundle/deb/
+        cargo generate-rpm -p crates/syntra-app -o target/release/bundle/rpm/
+        ls target/release/bundle/*/
     - name: Upload build artifact
       uses: actions/upload-artifact@v6
       with:
@@ -53,6 +58,7 @@ jobs:
           syntra-plugin-fuse-linux-x86_64
           syntra-plugin-clipboard-linux-x86_64
           target/release/bundle/deb/syntra_*.deb
+          target/release/bundle/rpm/syntra-*.rpm
           target/release/bundle/appimage/syntra_*.AppImage
 
   linux-arm64-release-build:
@@ -103,10 +109,34 @@ jobs:
         if (!(Test-Path syntra-windows\syntra.exe)) { throw "Missing syntra.exe" }
         if (!(Test-Path syntra-windows\syntra-daemon.exe)) { throw "Missing syntra-daemon.exe" }
         Compress-Archive -Path syntra-windows\* -DestinationPath syntra-windows-x86_64.zip
+    - name: Build MSI
+      run: |
+        dotnet tool install --global wix --version 5.0.2
+        $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages | Where-Object name -eq "syntra-app" | Select-Object -ExpandProperty version
+        wix build build-aux/windows/syntra.wxs -d Version=$version -d BinDir=target\release -arch x64 -o syntra-windows-x86_64.msi
+        if (!(Test-Path syntra-windows-x86_64.msi)) { throw "Missing MSI" }
     - uses: actions/upload-artifact@v6
       with:
         name: syntra-windows-x86_64
-        path: syntra-windows-x86_64.zip
+        path: |
+          syntra-windows-x86_64.zip
+          syntra-windows-x86_64.msi
+
+  flatpak-release-build:
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-48
+      options: --privileged
+    steps:
+    - uses: actions/checkout@v6
+    - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+      with:
+        bundle: syntra-x86_64.flatpak
+        manifest-path: build-aux/io.syntra.Syntra.yml
+        cache-key: flatpak-${{ github.sha }}
+
+  android-release-build:
+    uses: ./.github/workflows/android.yml
 
   macos-release-build:
     runs-on: macos-15-intel
@@ -184,7 +214,7 @@ jobs:
 
   release:
     name: "Release"
-    needs: [windows-release-build, linux-release-build, linux-arm64-release-build, macos-release-build, macos-arm64-release-build]
+    needs: [windows-release-build, linux-release-build, linux-arm64-release-build, macos-release-build, macos-arm64-release-build, flatpak-release-build, android-release-build]
     runs-on: "ubuntu-latest"
     steps:
     - name: Download build artifacts
@@ -217,6 +247,10 @@ jobs:
           syntra-macos-intel/syntra-macos-intel.zip
           syntra-macos-arm64/syntra-macos-arm64.zip
           syntra-windows-x86_64/syntra-windows-x86_64.zip
+          syntra-linux-x86_64/target/release/bundle/rpm/syntra-*.rpm
+          syntra-windows-x86_64/syntra-windows-x86_64.msi
+          syntra-x86_64.flatpak/syntra-x86_64.flatpak
+          syntra-android-debug/*.apk
     - name: Create Tagged Release
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v2
@@ -240,3 +274,7 @@ jobs:
           syntra-macos-intel/syntra-macos-intel.zip
           syntra-macos-arm64/syntra-macos-arm64.zip
           syntra-windows-x86_64/syntra-windows-x86_64.zip
+          syntra-linux-x86_64/target/release/bundle/rpm/syntra-*.rpm
+          syntra-windows-x86_64/syntra-windows-x86_64.msi
+          syntra-x86_64.flatpak/syntra-x86_64.flatpak
+          syntra-android-debug/*.apk

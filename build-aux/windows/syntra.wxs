@@ -1,0 +1,27 @@
+<!-- Windows installer for Syntra. Built by the release workflow with WiX 5:
+     wix build build-aux/windows/syntra.wxs -d Version=X.Y.Z -d BinDir=target\release -arch x64 -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Syntra" Manufacturer="Syntra contributors" Version="$(Version)"
+           UpgradeCode="6f1d3a52-8c4b-4f5e-9a7e-2b1c0d9e4a31" Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Syntra is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Syntra">
+        <Component Id="Dashboard">
+          <File Source="$(BinDir)\syntra.exe" KeyPath="yes">
+            <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="Syntra"
+                      WorkingDirectory="INSTALLFOLDER" Advertise="yes" />
+          </File>
+        </Component>
+        <Component Id="Daemon">
+          <File Source="$(BinDir)\syntra-daemon.exe" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+    <Feature Id="Main" Title="Syntra">
+      <ComponentRef Id="Dashboard" />
+      <ComponentRef Id="Daemon" />
+    </Feature>
+  </Package>
+</Wix>

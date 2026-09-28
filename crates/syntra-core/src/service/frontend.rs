@@ -139,6 +139,49 @@ impl Service {
                 self.save_config();
                 self.notify_frontend(FrontendEvent::MultiHop(enabled));
             }
+            FrontendRequest::SetCaptureBackend(name) => {
+                let backend = match name.as_deref().map(CaptureBackend::from_name) {
+                    Some(None) => {
+                        self.notify_frontend(FrontendEvent::Error(format!(
+                            "unknown capture backend {}",
+                            name.unwrap_or_default()
+                        )));
+                        return false;
+                    }
+                    Some(backend) => backend,
+                    None => None,
+                };
+                log::info!(
+                    "capture backend chosen: {}",
+                    name.as_deref().unwrap_or("automatic")
+                );
+                self.config.set_capture_backend(backend);
+                self.save_config();
+                self.capture.set_backend(backend.map(Into::into));
+                self.publish_daemon_info();
+            }
+            FrontendRequest::SetEmulationBackend(name) => {
+                let backend = match name.as_deref().map(EmulationBackend::from_name) {
+                    Some(None) => {
+                        self.notify_frontend(FrontendEvent::Error(format!(
+                            "unknown emulation backend {}",
+                            name.unwrap_or_default()
+                        )));
+                        return false;
+                    }
+                    Some(backend) => backend,
+                    None => None,
+                };
+                log::info!(
+                    "emulation backend chosen: {}",
+                    name.as_deref().unwrap_or("automatic")
+                );
+                self.config.set_emulation_backend(backend);
+                self.save_config();
+                self.legacy_clipboard = uses_desktop_clipboard(backend);
+                self.emulation.set_backend(backend.map(Into::into));
+                self.publish_daemon_info();
+            }
             FrontendRequest::SetHopBypass(enabled) => {
                 self.config.set_hop_bypass(enabled);
                 self.emulation.set_hop_bypass(enabled);
@@ -503,6 +546,10 @@ impl Service {
             origin: daemon_origin(),
             capture_backend: self.capture_backend.clone(),
             emulation_backend: self.emulation_backend.clone(),
+            capture_backends: CaptureBackend::choices(),
+            emulation_backends: EmulationBackend::choices(),
+            capture_backend_choice: self.config.capture_backend().map(BackendName::name),
+            emulation_backend_choice: self.config.emulation_backend().map(BackendName::name),
             port: self.port,
             build_fingerprint: syntra_api::BUILD_FINGERPRINT.to_owned(),
         };

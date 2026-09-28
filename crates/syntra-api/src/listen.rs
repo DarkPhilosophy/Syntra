@@ -168,7 +168,7 @@ mod tests {
     /// Both tests point the daemon socket at their own path through one
     /// process-wide environment variable; run in parallel they overwrite
     /// each other's value and see the other test's socket.
-    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    use crate::paths::ENV_LOCK;
 
     /// can reach: the process keeps running and every dashboard reports "no
     /// service is reachable" for as long as it lives.

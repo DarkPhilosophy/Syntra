@@ -165,12 +165,14 @@ pub fn parse_record(line: &str) -> Option<LiveDiagnostic> {
     let stage = metadata_value(&message, "stage")
         .unwrap_or_else(|| classify_stage(target, &message))
         .to_ascii_lowercase();
+    // Most log lines carry no key=value metadata: infer both from the text,
+    // or the Direction and Event columns stay empty.
     let direction = metadata_value(&message, "direction")
         .map(normalize_direction)
-        .unwrap_or_default();
+        .unwrap_or_else(|| classify_direction(&message));
     let correlation = metadata_value(&message, "correlation")
         .or_else(|| metadata_value(&message, "transfer"))
-        .unwrap_or_default();
+        .unwrap_or_else(|| classify_event(&message));
     Some(LiveDiagnostic {
         timestamp: timestamp.to_owned(),
         level,
@@ -196,6 +198,63 @@ fn metadata_value(message: &str, key: &str) -> Option<String> {
             None
         }
     })
+}
+
+fn classify_direction(message: &str) -> String {
+    let text = message.to_ascii_lowercase();
+    let has = |words: &[&str]| words.iter().any(|word| text.contains(word));
+    if has(&[
+        "[route] in ",
+        "[route] home",
+        "accepting",
+        "received",
+        "receiving",
+        "incoming",
+        "from client",
+        " from ",
+    ]) {
+        "incoming".into()
+    } else if has(&[
+        "[route] out",
+        "[route] hop",
+        "[route] pass",
+        "[route] back",
+        "sending",
+        "entering client",
+        "handing",
+        "sharing",
+        " to client",
+        "publishing",
+    ]) {
+        "outgoing".into()
+    } else {
+        String::new()
+    }
+}
+
+/// A short name for what happened: the route step, or the peer involved.
+fn classify_event(message: &str) -> String {
+    if let Some(step) = message
+        .strip_prefix("[route] ")
+        .and_then(|rest| rest.split_whitespace().next())
+    {
+        return step.to_owned();
+    }
+    let words: Vec<&str> = message.split_whitespace().collect();
+    if let Some(index) = words.iter().position(|word| *word == "client") {
+        if let Some(handle) = words.get(index + 1) {
+            let handle = handle.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+            if !handle.is_empty() {
+                return format!("client {handle}");
+            }
+        }
+    }
+    words
+        .iter()
+        .map(|word| word.trim_matches(|c: char| ",;()[]".contains(c)))
+        .find(|word| word.parse::<std::net::SocketAddr>().is_ok())
+        .map(str::to_owned)
+        .unwrap_or_default()
 }
 
 fn normalize_direction(value: String) -> String {
@@ -413,6 +472,31 @@ impl LiveDiagnosticReceiver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Lines without key=value metadata still fill Direction and Event.
+    #[test]
+    fn direction_and_event_are_inferred_from_plain_log_lines() {
+        let route =
+            parse_record("[t][INFO][syntra::capture] [route] HOP client 0 (Left edge) -> client 1")
+                .unwrap();
+        assert_eq!(
+            (route.direction.as_str(), route.correlation.as_str()),
+            ("outgoing", "HOP")
+        );
+        let entry = parse_record("[t][INFO][syntra::emulation] accepting entry from 10.0.0.3:4242")
+            .unwrap();
+        assert_eq!(
+            (entry.direction.as_str(), entry.correlation.as_str()),
+            ("incoming", "10.0.0.3:4242")
+        );
+        let ack = parse_record("[t][INFO][syntra::capture] client 1 acknowledged entry").unwrap();
+        assert_eq!(ack.correlation, "client 1");
+        let plain = parse_record("[t][INFO][syntra] service started").unwrap();
+        assert_eq!(
+            (plain.direction.as_str(), plain.correlation.as_str()),
+            ("", "")
+        );
+    }
 
     #[test]
     fn parses_logger_record_and_preserves_source_metadata() {

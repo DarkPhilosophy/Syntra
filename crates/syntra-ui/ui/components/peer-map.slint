@@ -11,6 +11,8 @@ export component PeerMap inherits Rectangle {
     in property <image> local-image;
     in property <bool> has-local-image;
     callback move-peer(string, int);
+    // A device is being dragged: the page must not scroll under the finger.
+    out property <bool> dragging: false;
     // Keep the diagram readable at a glance while leaving room for names.
     private property <length> avatar-size: root.mobile ? 32px : 56px;
     private property <length> header-height: root.mobile ? 20px : 28px;
@@ -65,9 +67,9 @@ export component PeerMap inherits Rectangle {
     }
     // Handle of the device picked up by a tap on phones ("" when none).
     in-out property <string> picked: "";
-    // Drop zones for a picked device: tap one to move it there.
+    // Drop zones for a picked or dragged device.
     for zone[index] in [0, 1, 2, 3]: Rectangle {
-        visible: !Theme.desktop-platform && root.picked != "";
+        visible: !Theme.desktop-platform && (root.picked != "" || root.dragging);
         x: zone == 0 ? 0px : zone == 1 ? 2 * root.width / 3 : root.width / 3;
         y: zone == 2 ? 0px : zone == 3 ? 2 * root.lane : root.lane;
         width: root.width / 3;
@@ -83,7 +85,7 @@ export component PeerMap inherits Rectangle {
             }
         }
     }
-    for peer in root.clients: Rectangle {
+    for peer in root.clients: card := Rectangle {
         // The direction label occupies a band at the top of every zone, so
         // the peers below it are centred within what remains. Without this
         // the stack sat flush under the label and read as too low.
@@ -96,13 +98,27 @@ export component PeerMap inherits Rectangle {
             + peer.zone-index * root.row-height;
         private property <length> press-x;
         private property <length> press-y;
+        // Phones: holding a device picks it up for dragging; a quick swipe
+        // stays the page scroll, a tap picks it for tap-to-move.
+        private property <bool> held: false;
+        private property <bool> moved: false;
+        hold := Timer {
+            interval: 250ms;
+            running: false;
+            triggered => {
+                self.running = false;
+                parent.held = true;
+                root.dragging = true;
+                root.picked = "";
+            }
+        }
         x: home-x;
         y: home-y;
         width: root.width / 3 - Theme.small-spacing;
         height: root.row-height;
-        background: drag.pressed ? Theme.selection : transparent;
+        background: drag.pressed && (Theme.desktop-platform || self.held) ? Theme.selection : transparent;
         border-radius: Theme.small-radius;
-        border-width: drag.pressed ? 1px : 0px;
+        border-width: drag.pressed && (Theme.desktop-platform || self.held) ? 1px : 0px;
         border-color: Theme.accent;
         // Identical treatment to the centre card: the avatar is centred with
         // the name directly below it, the pair centred as a group.
@@ -127,13 +143,6 @@ export component PeerMap inherits Rectangle {
             text: peer.display-name; color: Theme.text;
             horizontal-alignment: center; vertical-alignment: center; overflow: elide;
         }
-        // Phones: a drag is the page scroll, so tap a device to pick it up,
-        // then tap the zone it should move to.
-        if !Theme.desktop-platform: TouchArea {
-            clicked => {
-                root.picked = root.picked == peer.handle ? "" : peer.handle;
-            }
-        }
         if !Theme.desktop-platform && root.picked == peer.handle: Rectangle {
             border-width: 2px;
             border-color: Theme.accent;
@@ -141,17 +150,33 @@ export component PeerMap inherits Rectangle {
             background: Theme.accent.with-alpha(0.12);
         }
         drag := TouchArea {
-            enabled: Theme.desktop-platform;
             pointer-event(event) => {
                 if event.kind == PointerEventKind.down {
                     parent.press-x = self.mouse-x;
                     parent.press-y = self.mouse-y;
+                    parent.moved = false;
+                    if !Theme.desktop-platform { hold.running = true; }
                 }
-                if event.kind == PointerEventKind.up {
+                if event.kind == PointerEventKind.move
+                    && abs(self.mouse-x - parent.press-x) + abs(self.mouse-y - parent.press-y) > 10px {
+                    parent.moved = true;
+                    // Moving before the hold completes is a scroll, not a drag.
+                    if !parent.held { hold.running = false; }
+                }
+                if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel {
+                    hold.running = false;
+                    let was-held = parent.held;
+                    parent.held = false;
+                    root.dragging = false;
+                    if event.kind == PointerEventKind.cancel { return; }
+                    if !Theme.desktop-platform && !was-held && !parent.moved {
+                        root.picked = root.picked == peer.handle ? "" : peer.handle;
+                        return;
+                    }
                     // Coordinates stay relative to the stable card, not the drag preview.
                     let px = parent.home-x + self.mouse-x;
                     let py = parent.home-y + self.mouse-y;
-                    if abs(self.mouse-x - parent.press-x) + abs(self.mouse-y - parent.press-y) > 6px {
+                    if (Theme.desktop-platform || was-held) && abs(self.mouse-x - parent.press-x) + abs(self.mouse-y - parent.press-y) > 6px {
                         if px >= 0px && px < root.width && py >= 0px && py < root.height {
                             if py < root.lane && px >= root.width / 3 && px < 2 * root.width / 3 { root.move-peer(peer.handle, 2); }
                             else if py >= 2 * root.lane && px >= root.width / 3 && px < 2 * root.width / 3 { root.move-peer(peer.handle, 3); }
@@ -162,7 +187,7 @@ export component PeerMap inherits Rectangle {
                 }
             }
         }
-        if drag.pressed: Rectangle {
+        if drag.pressed && (Theme.desktop-platform || card.held): Rectangle {
             x: drag.mouse-x - parent.press-x;
             y: drag.mouse-y - parent.press-y;
             width: parent.width;

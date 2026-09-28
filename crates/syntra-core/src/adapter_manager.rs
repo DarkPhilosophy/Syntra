@@ -650,6 +650,7 @@ fn validate_inbound(
                         | Message::Cancelled(_)
                         | Message::Released(_)
                         | Message::Error { .. }
+                        | Message::ClipboardData { .. }
                 ) =>
             {
                 return Err("unexpected message from GTK adapter".into());

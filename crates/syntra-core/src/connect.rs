@@ -121,6 +121,11 @@ pub(crate) struct SyntraConnection {
 }
 
 impl SyntraConnection {
+    /// This machine's own certificate fingerprint.
+    pub(crate) fn own_fingerprint(&self) -> String {
+        crate::crypto::certificate_fingerprint(&self.cert)
+    }
+
     pub(crate) fn new(cert: Certificate, client_manager: ClientManager) -> Self {
         let (recv_tx, recv_rx) = channel();
         Self {

@@ -111,8 +111,6 @@ struct ConfigToml {
     port: Option<u16>,
     release_bind: Option<Vec<scancode::Linux>>,
     cert_path: Option<PathBuf>,
-    clients: Option<Vec<TomlClient>>,
-    authorized_fingerprints: Option<HashMap<String, String>>,
     clipboard_text: Option<bool>,
     clipboard_image: Option<bool>,
     clipboard_files: Option<bool>,
@@ -122,6 +120,10 @@ struct ConfigToml {
     hop_bypass: Option<bool>,
     /// Pass the pointer on through chains of devices.
     multi_hop: Option<bool>,
+    // Tables last: a plain key written after a table belongs to that table,
+    // which broke the whole file (and every pairing) after a toggle.
+    clients: Option<Vec<TomlClient>>,
+    authorized_fingerprints: Option<HashMap<String, String>>,
     #[serde(default)]
     file_receive: Option<FileReceiveToml>,
 }
@@ -230,6 +232,32 @@ impl Display for CaptureBackend {
         }
     }
 }
+
+/// Backend names as written in the configuration file, and back.
+pub trait BackendName: Sized + Copy + ValueEnum + Serialize + for<'de> Deserialize<'de> {
+    fn name(self) -> String {
+        match toml::Value::try_from(self) {
+            Ok(toml::Value::String(name)) => name,
+            _ => String::new(),
+        }
+    }
+
+    fn from_name(name: &str) -> Option<Self> {
+        Self::deserialize(toml::Value::String(name.to_owned())).ok()
+    }
+
+    /// Every backend a user may choose (the test-only dummy excluded).
+    fn choices() -> Vec<String> {
+        Self::value_variants()
+            .iter()
+            .map(|backend| backend.name())
+            .filter(|name| name != "dummy")
+            .collect()
+    }
+}
+
+impl BackendName for CaptureBackend {}
+impl BackendName for EmulationBackend {}
 
 impl From<CaptureBackend> for syntra_input_capture::Backend {
     fn from(backend: CaptureBackend) -> Self {
@@ -608,13 +636,29 @@ impl Config {
             .unwrap_or(false)
     }
 
-    /// Whether the pointer may travel on through chains of devices. Off by
-    /// default: the direct device-to-device path stays exactly as before.
+    /// Whether the pointer may travel on through chains of devices, each
+    /// hop checked against pairing. On by default (multiple control).
     pub fn multi_hop(&self) -> bool {
         self.config_toml
             .as_ref()
             .and_then(|c| c.multi_hop)
-            .unwrap_or(false)
+            .unwrap_or(true)
+    }
+
+    /// Chooses the capture backend; `None` picks one automatically.
+    pub fn set_capture_backend(&mut self, backend: Option<CaptureBackend>) {
+        self.args.capture_backend = None;
+        self.config_toml
+            .get_or_insert_with(Default::default)
+            .capture_backend = backend;
+    }
+
+    /// Chooses the emulation backend; `None` picks one automatically.
+    pub fn set_emulation_backend(&mut self, backend: Option<EmulationBackend>) {
+        self.args.emulation_backend = None;
+        self.config_toml
+            .get_or_insert_with(Default::default)
+            .emulation_backend = backend;
     }
 
     pub fn set_multi_hop(&mut self, enabled: bool) {
@@ -744,5 +788,44 @@ impl Config {
         let _ = self.watch();
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Names shown to the user are the ones the configuration file accepts.
+    #[test]
+    fn backend_names_round_trip() {
+        for name in CaptureBackend::choices() {
+            assert_eq!(
+                CaptureBackend::from_name(&name).map(BackendName::name),
+                Some(name)
+            );
+        }
+        for name in EmulationBackend::choices() {
+            assert_eq!(
+                EmulationBackend::from_name(&name).map(BackendName::name),
+                Some(name)
+            );
+        }
+        assert!(!CaptureBackend::choices().contains(&"dummy".to_owned()));
+        assert!(CaptureBackend::from_name("no-such-backend").is_none());
+    }
+
+    /// Toggles saved next to paired devices must still read back.
+    #[test]
+    fn settings_saved_after_pairing_read_back() {
+        let config = ConfigToml {
+            authorized_fingerprints: Some(HashMap::from([("aa:bb".into(), "HP".into())])),
+            multi_hop: Some(true),
+            hop_bypass: Some(false),
+            independent_pointers: Some(true),
+            ..Default::default()
+        };
+        let text = toml_edit::ser::to_string_pretty(&config).unwrap();
+        let back: ConfigToml = toml::from_str(&text).unwrap();
+        assert_eq!(back, config);
     }
 }

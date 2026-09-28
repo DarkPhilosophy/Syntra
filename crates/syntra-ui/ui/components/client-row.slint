@@ -40,8 +40,28 @@ component EditField inherits VerticalLayout {
     @children
 }
 
+/// Start/stop, edit and delete. Beside the name on wide screens, on a line of
+/// their own on narrow ones.
+component ClientActions inherits HorizontalLayout {
+    in property <bool> active;
+    in property <bool> editing;
+    in property <string> label-start;
+    in property <string> label-stop;
+    in property <string> label-edit;
+    in property <string> label-delete;
+    callback start-stop();
+    callback edit();
+    callback remove();
+    spacing: 10px;
+    AppButton { text: root.active ? root.label-stop : root.label-start; enabled: !root.editing; clicked => { root.start-stop(); } }
+    AppButton { text: root.editing ? Translations.tr("action-close") : root.label-edit; clicked => { root.edit(); } }
+    AppButton { text: root.label-delete; enabled: !root.editing; clicked => { root.remove(); } }
+}
+
 export component ClientRow inherits Rectangle {
     in property <ClientItem> client;
+    /// Narrow screen: controls wrap below the text instead of overflowing.
+    in property <bool> compact;
     in property <string> label-edit: Translations.tr("action-edit");
     in property <string> label-cancel: Translations.tr("action-cancel");
     in property <string> label-delete: Translations.tr("action-delete");
@@ -83,6 +103,18 @@ export component ClientRow inherits Rectangle {
     private property <string> draft-port: client.port > 0 ? "\{client.port}" : "";
     private property <int> draft-position: client.position;
     function schedule-save() { save-timer.start(); save-timer.restart(); }
+    function toggle-edit() {
+        if (root.editing) {
+            save-timer.triggered();
+        } else {
+            root.draft-display-name = client.display-name;
+            root.draft-hostname = client.hostname;
+            root.draft-fixed-ips = client.fixed-ips;
+            root.draft-port = client.port > 0 ? "\{client.port}" : "";
+            root.draft-position = client.position;
+        }
+        root.editing = !root.editing;
+    }
     save-timer := Timer {
         interval: 650ms;
         running: false;
@@ -134,31 +166,21 @@ export component ClientRow inherits Rectangle {
                 label: client.alive ? (client.remote-ready ? root.label-ready : root.label-connected) : root.label-offline;
                 tone: client.alive ? (client.remote-ready ? Theme.success : Theme.warning) : Theme.muted-text;
             }
-            AppButton {
-                text: client.active ? root.label-stop : root.label-start;
-                enabled: !root.editing;
-                clicked => { root.activate(client.handle, !client.active); }
+            if !root.compact: ClientActions {
+                active: client.active; editing: root.editing;
+                label-start: root.label-start; label-stop: root.label-stop; label-edit: root.label-edit; label-delete: root.label-delete;
+                start-stop => { root.activate(client.handle, !client.active); }
+                edit => { root.toggle-edit(); }
+                remove => { root.delete-client(client.handle); }
             }
-            AppButton {
-                text: root.editing ? Translations.tr("action-close") : root.label-edit;
-                clicked => {
-                    if (root.editing) {
-                        save-timer.triggered();
-                    } else {
-                        root.draft-display-name = client.display-name;
-                        root.draft-hostname = client.hostname;
-                        root.draft-fixed-ips = client.fixed-ips;
-                        root.draft-port = client.port > 0 ? "\{client.port}" : "";
-                        root.draft-position = client.position;
-                    }
-                    root.editing = !root.editing;
-                }
-            }
-            AppButton {
-                text: root.label-delete;
-                enabled: !root.editing;
-                clicked => { root.delete-client(client.handle); }
-            }
+        }
+        if root.compact: ClientActions {
+            alignment: end;
+            active: client.active; editing: root.editing;
+            label-start: root.label-start; label-stop: root.label-stop; label-edit: root.label-edit; label-delete: root.label-delete;
+            start-stop => { root.activate(client.handle, !client.active); }
+            edit => { root.toggle-edit(); }
+            remove => { root.delete-client(client.handle); }
         }
         if !root.editing : Text {
             text: client.hostname;
@@ -168,9 +190,16 @@ export component ClientRow inherits Rectangle {
             vertical-stretch: 0;
         }
 
+        if !root.editing && root.compact : Text {
+            text: client.active-address != "" ? client.active-address : (client.ips != "" ? client.ips : client.fixed-ips);
+            color: Theme.muted-text;
+            font-size: Theme.body-size;
+            overflow: elide;
+        }
         if !root.editing : HorizontalLayout {
             spacing: Theme.spacing;
-            Text {
+            if root.compact: Rectangle { horizontal-stretch: 1; }
+            if !root.compact: Text {
                 horizontal-stretch: 1;
                 text: client.active-address != "" ? client.active-address : (client.ips != "" ? client.ips : client.fixed-ips);
                 color: Theme.muted-text;
@@ -189,10 +218,16 @@ export component ClientRow inherits Rectangle {
             }
         }
 
+        if !root.editing && client.fingerprint != "" && root.compact : Text {
+            text: root.label-fingerprint + ": " + client.fingerprint;
+            color: Theme.muted-text;
+            font-size: Theme.caption-size;
+            overflow: elide;
+        }
         if !root.editing && client.fingerprint != "" : HorizontalLayout {
             spacing: 10px;
-            Text { text: root.label-fingerprint + ":"; color: Theme.muted-text; font-size: Theme.body-size; vertical-alignment: center; }
-            Text { horizontal-stretch: 1; text: client.fingerprint; color: Theme.text; font-size: Theme.body-size; overflow: elide; vertical-alignment: center; }
+            if !root.compact: Text { text: root.label-fingerprint + ":"; color: Theme.muted-text; font-size: Theme.body-size; vertical-alignment: center; }
+            Text { horizontal-stretch: 1; text: root.compact ? "" : client.fingerprint; color: Theme.text; font-size: Theme.body-size; overflow: elide; vertical-alignment: center; }
             StatusPill {
                 label: client.authorized ? root.label-authorized : root.label-authorization-required;
                 tone: client.authorized ? Theme.success : Theme.warning;
@@ -235,7 +270,15 @@ export component ClientRow inherits Rectangle {
             Rectangle { height: 1px; background: Theme.elevated-surface; }
 
             // Connection: where the device is reached and where it sits.
-            HorizontalLayout {
+            if root.compact: EditField {
+                label: root.label-hostname;
+                LineEdit { height: Theme.control-height; placeholder-text: "host.local"; text <=> root.draft-hostname; edited(value) => { root.schedule-save(); } }
+            }
+            if root.compact: EditField {
+                label: root.label-ip-addresses;
+                LineEdit { height: Theme.control-height; placeholder-text: "192.168.1.10"; text <=> root.draft-fixed-ips; edited(value) => { root.schedule-save(); } }
+            }
+            if !root.compact: HorizontalLayout {
                 spacing: Theme.spacing;
                 EditField {
                     horizontal-stretch: 1;
@@ -251,12 +294,14 @@ export component ClientRow inherits Rectangle {
             HorizontalLayout {
                 spacing: Theme.spacing;
                 EditField {
-                    width: 140px;
+                    width: root.compact ? 96px : 140px;
                     label: root.label-port;
                     LineEdit { height: Theme.control-height; input-type: number; text <=> root.draft-port; edited(value) => { root.schedule-save(); } }
                 }
                 EditField {
-                    width: 200px;
+                    horizontal-stretch: root.compact ? 1 : 0;
+                    min-width: root.compact ? 0px : 200px;
+                    max-width: root.compact ? 100000px : 200px;
                     label: root.label-position;
                     ComboBox {
                         height: Theme.control-height;
@@ -265,7 +310,7 @@ export component ClientRow inherits Rectangle {
                         selected(value) => { root.schedule-save(); }
                     }
                 }
-                Rectangle { horizontal-stretch: 1; }
+                if !root.compact: Rectangle { horizontal-stretch: 1; }
             }
             Text {
                 text: Translations.tr("device-edit-autosave");

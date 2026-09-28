@@ -17,7 +17,7 @@ build-options:
     build-args:
       "--share=network"
     prepend-ld-library-path:
-      "/usr/lib/sdk/llvm19/lib"
+      "/usr/lib/sdk/llvm20/lib"
 
 finish-args:
   - "--socket=wayland"
@@ -38,15 +38,15 @@ modules:
       env:
         CARGO_HOME: /run/build/syntra/cargo
     build-commands:
-      - cargo fetch --manifest-path Cargo.toml --verbose
-      - cargo build -p syntra
-      - cargo build -p syntra-plugin-gtk-clipboard
-      - cargo build -p syntra-plugin-fuse
-      - install -Dm0755 target/debug/syntra /app/bin/syntra
-      - install -Dm0755 target/debug/syntra-plugin-gtk-clipboard /app/bin/syntra-plugin-gtk-clipboard
-      - install -Dm0755 target/debug/syntra-plugin-fuse /app/bin/syntra-plugin-fuse
-      - install -Dm0644 crates/syntra-ui/ui/assets/shell/syntra.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/syntra.svg
+      - cargo fetch --manifest-path Cargo.toml --locked
+      - cargo build --release --locked -p syntra-app -p syntra-daemon -p syntra-plugin-clipboard -p syntra-plugin-fuse --features syntra-daemon/layer_shell_capture,syntra-daemon/x11_capture,syntra-daemon/libei_capture,syntra-daemon/wlroots_emulation,syntra-daemon/libei_emulation,syntra-daemon/rdp_emulation,syntra-daemon/x11_emulation
+      - install -Dm0755 target/release/syntra /app/bin/syntra
+      - install -Dm0755 target/release/syntra-daemon /app/bin/syntra-daemon
+      - install -Dm0755 target/release/syntra-plugin-clipboard /app/bin/syntra-plugin-clipboard
+      - install -Dm0755 target/release/syntra-plugin-fuse /app/bin/syntra-plugin-fuse
+      - install -Dm0644 crates/syntra-ui/ui/assets/shell/syntra.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/${FLATPAK_ID}.svg
       - install -Dm0644 io.syntra.Syntra.desktop ${FLATPAK_DEST}/share/applications/${FLATPAK_ID}.desktop
+      - desktop-file-edit --set-icon=${FLATPAK_ID} ${FLATPAK_DEST}/share/applications/${FLATPAK_ID}.desktop
     sources:
       - type: dir
         path: ..

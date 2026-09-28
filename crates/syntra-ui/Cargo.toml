@@ -104,7 +104,9 @@ jni = "0.21.1"
 ndk-context = "0.1.1"
 # `renderer-software` is the fallback for hosts without a usable GL context,
 # such as emulators and Waydroid, where Skia cannot create a direct context.
-slint = { version = "1.17.1", default-features = false, features = ["std", "compat-1-2", "backend-android-activity-06", "renderer-femtovg", "renderer-software"] }
+# `image-default-formats` decodes PNG, JPEG and GIF at runtime: without it
+# every picked device image saves fine but can never be displayed.
+slint = { version = "1.17.1", default-features = false, features = ["std", "compat-1-2", "backend-android-activity-06", "renderer-femtovg", "renderer-software", "image-default-formats"] }
 # `cargo apk` generates a manifest declaring android.app.NativeActivity, so the
 # backend must be built for that variant. android-activity defaults to
 # GameActivity, which starts the activity but never calls android_main, giving

@@ -57,6 +57,13 @@ fn workspace_packages() -> Vec<Package> {
                 .as_array()
                 .expect("package has a dependency list")
                 .iter()
+                // On Android the app is one process that hosts the service,
+                // so its target-only dependencies are outside these rules.
+                .filter(|dep| {
+                    !dep["target"]
+                        .as_str()
+                        .is_some_and(|target| target.contains("android"))
+                })
                 .filter_map(|dep| dep["name"].as_str())
                 .filter(|dep| local.contains(*dep))
                 .map(str::to_owned)

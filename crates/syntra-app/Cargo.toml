@@ -32,3 +32,28 @@ identifier = "io.syntra.Syntra"
 icon = ["target/icon.icns", "../syntra-ui/ui/assets/shell/syntra.svg"]
 osx_info_plist_exts = ["../../build-aux/macos-lsui-element.plist"]
 resources = ["target/menubar-template.png"]
+
+# `cargo generate-rpm -p crates/syntra-app` after a release build.
+[package.metadata.generate-rpm]
+name = "syntra"
+summary = "Share mouse, keyboard, clipboard and files across your devices"
+assets = [
+    { source = "target/release/syntra", dest = "/usr/bin/syntra", mode = "755" },
+    { source = "target/release/syntra-daemon", dest = "/usr/bin/syntra-daemon", mode = "755" },
+    { source = "target/release/syntra-plugin-clipboard", dest = "/usr/bin/syntra-plugin-clipboard", mode = "755" },
+    { source = "target/release/syntra-plugin-fuse", dest = "/usr/bin/syntra-plugin-fuse", mode = "755" },
+    { source = "io.syntra.Syntra.desktop", dest = "/usr/share/applications/io.syntra.Syntra.desktop", mode = "644" },
+    { source = "crates/syntra-ui/ui/assets/shell/syntra.svg", dest = "/usr/share/icons/hicolor/scalable/apps/io.syntra.Syntra.svg", mode = "644" },
+]
+
+# Debian package (cargo bundle already builds one; this keeps the daemon in it).
+[package.metadata.deb]
+name = "syntra"
+assets = [
+    ["target/release/syntra", "usr/bin/", "755"],
+    ["target/release/syntra-daemon", "usr/bin/", "755"],
+    ["target/release/syntra-plugin-clipboard", "usr/bin/", "755"],
+    ["target/release/syntra-plugin-fuse", "usr/bin/", "755"],
+    ["../../io.syntra.Syntra.desktop", "usr/share/applications/", "644"],
+    ["../syntra-ui/ui/assets/shell/syntra.svg", "usr/share/icons/hicolor/scalable/apps/io.syntra.Syntra.svg", "644"],
+]

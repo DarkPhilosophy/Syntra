@@ -1,9 +1,9 @@
+import { PageScroll } from "../components/page-scroll.slint";
 import { AppState } from "../app-state.slint";
 import { Theme } from "../theme.slint";
 import { StatusPill } from "../components/status-pill.slint";
 import { AppButton } from "../components/controls.slint";
 import { ClientItem } from "../components/client-row.slint";
-import { SettingRow } from "../components/setting-row.slint";
 import { Translations } from "../localization.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Avatar } from "../components/avatar.slint";
@@ -17,10 +17,6 @@ export component OverviewPage inherits Rectangle {
     in property <string> input-value;
     in property <bool> connected;
     in property <[ClientItem]> clients;
-    in property <bool> clipboard-text-enabled;
-    in property <bool> clipboard-image-enabled;
-    in property <bool> clipboard-files-enabled;
-    in property <bool> clipboard-files-supported;
     in property <bool> service-known;
     in property <bool> service-installed;
     in property <bool> service-running;
@@ -39,11 +35,10 @@ export component OverviewPage inherits Rectangle {
     in property <int> daemon-port;
     in property <string> daemon-capture-backend;
     in property <string> daemon-emulation-backend;
-    callback toggle-image(bool);
-    callback toggle-files(bool);
     callback set-input-sharing(bool);
+    callback open-permissions();
+    callback open-clipboard-sharing();
     callback activate(string, bool);
-    callback toggle-text(bool);
     in property <bool> daemon-starting;
     in property <string> daemon-start-error;
     in property <int> unreachable-daemons;
@@ -53,163 +48,159 @@ export component OverviewPage inherits Rectangle {
     callback start-service();
     background: Theme.background;
 
-    ScrollView {
-        mouse-drag-pan-enabled: Theme.touch-input-active || !Theme.desktop-platform;
-        viewport-width: self.visible-width;
-        VerticalLayout {
-            // Fit the page to the window: without this the content takes its
-            // preferred width and runs off the right edge on narrow screens.
-            width: root.width;
-            padding: Theme.content-gap;
-            spacing: Theme.spacing;
-            alignment: start;
-            Text { text: Translations.tr("navigation-overview"); color: Theme.text; font-size: Theme.title-size; vertical-stretch: 0; }
-            if root.status-description != "" : Text { text: root.status-description; color: Theme.muted-text; font-size: Theme.body-size; wrap: word-wrap; vertical-stretch: 0; }
-            Rectangle {
-                height: service-summary.preferred-height;
-                vertical-stretch: 0;
-                background: Theme.surface;
-                border-radius: Theme.corner-radius;
-                service-summary := VerticalLayout {
-                    padding: Theme.spacing; spacing: Theme.small-spacing;
-                    Text { text: Translations.tr("overview-service-title"); color: Theme.text; font-size: Theme.body-size; font-weight: 600; }
-                    if !Theme.desktop-platform : Text { text: Translations.tr("overview-mobile-unsupported"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
-                    // Controlling this phone from a computer needs the
-                    // accessibility service; offer it right where it matters.
-                    if !Theme.desktop-platform : Text {
-                        text: AppState.phone-control-enabled ? Translations.tr("phone-control-on") : Translations.tr("phone-control-off");
-                        color: AppState.phone-control-enabled ? Theme.success : Theme.warning;
-                        font-size: Theme.body-size;
+    PageScroll {
+        content-padding: Theme.content-gap;
+        content-spacing: Theme.spacing;
+        Text { text: Translations.tr("navigation-overview"); color: Theme.text; font-size: Theme.title-size; vertical-stretch: 0; }
+        if root.status-description != "" : Text { text: root.status-description; color: Theme.muted-text; font-size: Theme.body-size; wrap: word-wrap; vertical-stretch: 0; }
+        Rectangle {
+            height: service-summary.preferred-height;
+            vertical-stretch: 0;
+            background: Theme.surface;
+            border-radius: Theme.corner-radius;
+            service-summary := VerticalLayout {
+                padding: Theme.spacing; spacing: Theme.small-spacing;
+                Text { text: Translations.tr("overview-service-title"); color: Theme.text; font-size: Theme.body-size; font-weight: 600; }
+                if !Theme.desktop-platform : Text { text: Translations.tr("overview-mobile-unsupported"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
+                // Controlling this phone from a computer needs the
+                // accessibility service; offer it right where it matters.
+                if !Theme.desktop-platform : Text {
+                    text: AppState.phone-control-enabled ? Translations.tr("phone-control-on") : Translations.tr("phone-control-off");
+                    color: AppState.phone-control-enabled ? Theme.success : Theme.warning;
+                    font-size: Theme.body-size;
+                    wrap: word-wrap;
+                }
+                if !Theme.desktop-platform && !AppState.phone-control-enabled : AppButton {
+                    text: Translations.tr("phone-control-enable");
+                    primary: true;
+                    clicked => { AppState.open-phone-control-settings(); }
+                }
+                if Theme.desktop-platform && !root.daemon-known : Text { text: Translations.tr("overview-service-disconnected"); color: Theme.warning; font-size: Theme.caption-size; wrap: word-wrap; }
+                // Without this the dashboard is a dead end once the
+                // service is stopped or uninstalled: nothing in the
+                // window could start one again.
+                if Theme.desktop-platform && !root.daemon-known : HorizontalLayout {
+                    spacing: Theme.small-spacing;
+                    AppButton {
+                        text: Translations.tr("overview-service-start");
+                        primary: true;
+                        enabled: !root.daemon-starting;
+                        clicked => { root.start-service(); }
+                    }
+                    if root.daemon-starting : Text { text: Translations.tr("overview-service-starting"); color: Theme.muted-text; font-size: Theme.caption-size; vertical-alignment: center; }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                // A daemon that is alive but not answering holds the peer
+                // port, so starting another can only ever fail. Offer the
+                // way out rather than leaving the user to find a terminal.
+                if Theme.desktop-platform && !root.daemon-known && root.unreachable-daemons > 0 : VerticalLayout {
+                    spacing: Theme.small-spacing;
+                    Text {
+                        text: Translations.tr("overview-service-unreachable-found");
+                        color: Theme.warning;
+                        font-size: Theme.caption-size;
                         wrap: word-wrap;
                     }
-                    if !Theme.desktop-platform && !AppState.phone-control-enabled : AppButton {
-                        text: Translations.tr("phone-control-enable");
-                        primary: true;
-                        clicked => { AppState.open-phone-control-settings(); }
-                    }
-                    if Theme.desktop-platform && !root.daemon-known : Text { text: Translations.tr("overview-service-disconnected"); color: Theme.warning; font-size: Theme.caption-size; wrap: word-wrap; }
-                    // Without this the dashboard is a dead end once the
-                    // service is stopped or uninstalled: nothing in the
-                    // window could start one again.
-                    if Theme.desktop-platform && !root.daemon-known : HorizontalLayout {
-                        spacing: Theme.small-spacing;
+                    HorizontalLayout {
                         AppButton {
-                            text: Translations.tr("overview-service-start");
-                            primary: true;
+                            text: Translations.tr("overview-service-stop-unreachable");
                             enabled: !root.daemon-starting;
-                            clicked => { root.start-service(); }
+                            clicked => { root.stop-unreachable(); }
                         }
-                        if root.daemon-starting : Text { text: Translations.tr("overview-service-starting"); color: Theme.muted-text; font-size: Theme.caption-size; vertical-alignment: center; }
                         Rectangle { horizontal-stretch: 1; }
                     }
-                    // A daemon that is alive but not answering holds the peer
-                    // port, so starting another can only ever fail. Offer the
-                    // way out rather than leaving the user to find a terminal.
-                    if Theme.desktop-platform && !root.daemon-known && root.unreachable-daemons > 0 : VerticalLayout {
-                        spacing: Theme.small-spacing;
-                        Text {
-                            text: Translations.tr("overview-service-unreachable-found");
-                            color: Theme.warning;
-                            font-size: Theme.caption-size;
-                            wrap: word-wrap;
-                        }
-                        HorizontalLayout {
-                            AppButton {
-                                text: Translations.tr("overview-service-stop-unreachable");
-                                enabled: !root.daemon-starting;
-                                clicked => { root.stop-unreachable(); }
-                            }
-                            Rectangle { horizontal-stretch: 1; }
-                        }
-                    }
-                    if !root.daemon-known && root.daemon-start-error != "" : Text { text: root.daemon-start-error; color: Theme.danger; font-size: Theme.caption-size; wrap: word-wrap; }
-                    if root.daemon-known : Text { text: Translations.tr("overview-service-name") + " " + root.daemon-version; color: Theme.text; font-size: Theme.body-size; }
-                    // Enforced between the two tiers, unlike plugins, where a
-                    // difference is tolerated: these two are one product and
-                    // are expected to be replaced together.
-                    if root.daemon-known && root.daemon-build-mismatch : Text { text: Translations.tr("overview-service-build-mismatch") + " (" + root.daemon-build + ")"; color: Theme.danger; font-size: Theme.caption-size; wrap: word-wrap; }
-                    if root.daemon-known : Text { text: root.daemon-origin == "service" ? Translations.tr("overview-service-origin-service") : root.daemon-origin == "dashboard" ? Translations.tr("overview-service-origin-dashboard") : Translations.tr("overview-service-origin-manual"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
-                    if root.daemon-known : VerticalLayout {
-                        spacing: Theme.small-spacing;
-                        Text { text: Translations.tr("overview-service-process") + ": " + root.daemon-pid + "  " + Translations.tr("overview-service-uptime") + ": " + root.daemon-uptime; color: Theme.text; font-size: Theme.caption-size; }
-                        Text { text: Translations.tr("overview-service-executable") + ": " + root.daemon-executable; color: Theme.muted-text; font-size: Theme.caption-size; overflow: elide; }
-                        Text { text: Translations.tr("overview-service-socket") + ": " + root.daemon-socket; color: Theme.muted-text; font-size: Theme.caption-size; overflow: elide; }
-                        Text { text: Translations.tr("overview-service-config") + ": " + root.daemon-config-dir; color: Theme.muted-text; font-size: Theme.caption-size; overflow: elide; }
-                        Text { text: Translations.tr("overview-service-port") + ": " + root.daemon-port; color: Theme.text; font-size: Theme.caption-size; }
-                        Text { text: Translations.tr("overview-service-capture") + ": " + (root.daemon-capture-backend != "" ? root.daemon-capture-backend : Translations.tr("overview-service-unavailable")); color: Theme.text; font-size: Theme.caption-size; overflow: elide; }
-                        Text { text: Translations.tr("overview-service-emulation") + ": " + (root.daemon-emulation-backend != "" ? root.daemon-emulation-backend : Translations.tr("overview-service-unavailable")); color: Theme.text; font-size: Theme.caption-size; overflow: elide; }
-                    }
-                    if Theme.desktop-platform : HorizontalLayout {
-                        AppButton {
-                            text: Translations.tr(root.input-sharing ? "action-stop" : "action-start");
-                            enabled: root.input-sharing-known;
-                            primary: !root.input-sharing;
-                            danger: root.input-sharing;
-                            clicked => { root.set-input-sharing(!root.input-sharing); }
-                        }
-                    }
                 }
-            }
-            if Theme.desktop-platform && root.connected && root.input-sharing && (!root.capture-enabled || !root.emulation-enabled): HorizontalLayout {
-                spacing: Theme.spacing;
-                Text {
-                    text: Translations.tr("input-permissions-description");
-                    color: Theme.warning; font-size: Theme.caption-size;
-                    wrap: word-wrap; horizontal-stretch: 1; vertical-alignment: center;
-                }
-                AppButton {
-                    text: Translations.tr("authorization-retry");
-                    clicked => { root.set-input-sharing(true); }
-                }
-            }
-            Text { text: Translations.tr("navigation-devices"); color: Theme.text; font-size: Theme.body-size; font-weight: 600; vertical-stretch: 0; }
-            peer-grid := Rectangle {
-                private property <int> columns: max(1, floor(self.width / (240px + Theme.spacing)));
-                private property <length> tile-size: min(280px, (self.width - (self.columns - 1) * Theme.spacing) / self.columns);
-                private property <length> tile-height: max(176px, Theme.control-height + 5 * Theme.body-size + 4 * Theme.small-spacing);
-                height: max(0px, ceil(root.clients.length / self.columns) * (self.tile-height + Theme.spacing) - Theme.spacing);
-                vertical-stretch: 0;
-            for device[index] in root.clients : Rectangle {
-                x: mod(index, peer-grid.columns) * (peer-grid.tile-size + Theme.spacing);
-                y: floor(index / peer-grid.columns) * (peer-grid.tile-height + Theme.spacing);
-                width: peer-grid.tile-size;
-                height: peer-grid.tile-height;
-                background: Theme.surface;
-                border-radius: Theme.corner-radius;
-                device-content := VerticalLayout {
-                    padding: Theme.spacing;
+                if !root.daemon-known && root.daemon-start-error != "" : Text { text: root.daemon-start-error; color: Theme.danger; font-size: Theme.caption-size; wrap: word-wrap; }
+                if root.daemon-known : Text { text: Translations.tr("overview-service-name") + " " + root.daemon-version; color: Theme.text; font-size: Theme.body-size; }
+                // Enforced between the two tiers, unlike plugins, where a
+                // difference is tolerated: these two are one product and
+                // are expected to be replaced together.
+                if root.daemon-known && root.daemon-build-mismatch : Text { text: Translations.tr("overview-service-build-mismatch") + " (" + root.daemon-build + ")"; color: Theme.danger; font-size: Theme.caption-size; wrap: word-wrap; }
+                if root.daemon-known : Text { text: root.daemon-origin == "service" ? Translations.tr("overview-service-origin-service") : root.daemon-origin == "dashboard" ? Translations.tr("overview-service-origin-dashboard") : Translations.tr("overview-service-origin-manual"); color: Theme.muted-text; font-size: Theme.caption-size; wrap: word-wrap; }
+                if root.daemon-known : VerticalLayout {
                     spacing: Theme.small-spacing;
-                    alignment: start;
-                    HorizontalLayout {
-                        spacing: Theme.spacing;
-                        Avatar { source: device.custom-image; has-image: device.has-custom-image; size: Theme.control-height; }
-                        Text {
-                            text: device.display-name != "" ? device.display-name : device.hostname;
-                            color: Theme.text; font-size: Theme.body-size; font-weight: 600;
-                            horizontal-stretch: 1; vertical-alignment: center; overflow: elide;
-                        }
+                    Text { text: Translations.tr("overview-service-process") + ": " + root.daemon-pid + "  " + Translations.tr("overview-service-uptime") + ": " + root.daemon-uptime; color: Theme.text; font-size: Theme.caption-size; }
+                    Text { text: Translations.tr("overview-service-executable") + ": " + root.daemon-executable; color: Theme.muted-text; font-size: Theme.caption-size; overflow: elide; }
+                    Text { text: Translations.tr("overview-service-socket") + ": " + root.daemon-socket; color: Theme.muted-text; font-size: Theme.caption-size; overflow: elide; }
+                    Text { text: Translations.tr("overview-service-config") + ": " + root.daemon-config-dir; color: Theme.muted-text; font-size: Theme.caption-size; overflow: elide; }
+                    Text { text: Translations.tr("overview-service-port") + ": " + root.daemon-port; color: Theme.text; font-size: Theme.caption-size; }
+                    Text { text: Translations.tr("overview-service-capture") + ": " + (root.daemon-capture-backend != "" ? root.daemon-capture-backend : Translations.tr("overview-service-unavailable")); color: Theme.text; font-size: Theme.caption-size; overflow: elide; }
+                    Text { text: Translations.tr("overview-service-emulation") + ": " + (root.daemon-emulation-backend != "" ? root.daemon-emulation-backend : Translations.tr("overview-service-unavailable")); color: Theme.text; font-size: Theme.caption-size; overflow: elide; }
+                }
+                if Theme.desktop-platform : HorizontalLayout {
+                    AppButton {
+                        text: Translations.tr(root.input-sharing ? "action-stop" : "action-start");
+                        enabled: root.input-sharing-known;
+                        primary: !root.input-sharing;
+                        danger: root.input-sharing;
+                        clicked => { root.set-input-sharing(!root.input-sharing); }
                     }
-                    Text { text: device.hostname; color: Theme.muted-text; font-size: Theme.caption-size; overflow: elide; }
-                    Text { text: device.active-address != "" ? device.active-address : device.fixed-ips + ":" + device.port; color: Theme.muted-text; font-size: Theme.caption-size; overflow: elide; }
-                    HorizontalLayout {
-                        spacing: Theme.small-spacing;
-                        StatusPill {
-                            label: device.alive ? (device.remote-ready ? Translations.tr("label-ready") : Translations.tr("label-connected")) : Translations.tr("label-offline");
-                            tone: device.alive ? (device.remote-ready ? Theme.success : Theme.warning) : Theme.muted-text;
-                        }
-                        if device.fingerprint != "" : StatusPill {
-                            label: device.authorized ? Translations.tr("label-authorized") : Translations.tr("label-authorization-required");
-                            tone: device.authorized ? Theme.success : Theme.warning;
-                        }
-                        Rectangle { horizontal-stretch: 1; }
+                }
+            }
+        }
+        if Theme.desktop-platform && root.connected && root.input-sharing && (!root.capture-enabled || !root.emulation-enabled): HorizontalLayout {
+            spacing: Theme.spacing;
+            Text {
+                text: Translations.tr("input-permissions-description");
+                color: Theme.warning; font-size: Theme.caption-size;
+                wrap: word-wrap; horizontal-stretch: 1; vertical-alignment: center;
+            }
+            AppButton {
+                text: Translations.tr("navigation-permissions");
+                clicked => { root.open-permissions(); }
+            }
+        }
+        Text { text: Translations.tr("navigation-devices"); color: Theme.text; font-size: Theme.body-size; font-weight: 600; vertical-stretch: 0; }
+        peer-grid := Rectangle {
+            private property <int> columns: max(1, floor(self.width / (240px + Theme.spacing)));
+            private property <length> tile-size: min(280px, (self.width - (self.columns - 1) * Theme.spacing) / self.columns);
+            private property <length> tile-height: max(176px, Theme.control-height + 5 * Theme.body-size + 4 * Theme.small-spacing);
+            height: max(0px, ceil(root.clients.length / self.columns) * (self.tile-height + Theme.spacing) - Theme.spacing);
+            vertical-stretch: 0;
+        for device[index] in root.clients : Rectangle {
+            x: mod(index, peer-grid.columns) * (peer-grid.tile-size + Theme.spacing);
+            y: floor(index / peer-grid.columns) * (peer-grid.tile-height + Theme.spacing);
+            width: peer-grid.tile-size;
+            height: peer-grid.tile-height;
+            background: Theme.surface;
+            border-radius: Theme.corner-radius;
+            device-content := VerticalLayout {
+                padding: Theme.spacing;
+                spacing: Theme.small-spacing;
+                alignment: start;
+                HorizontalLayout {
+                    spacing: Theme.spacing;
+                    Avatar { source: device.custom-image; has-image: device.has-custom-image; size: Theme.control-height; }
+                    Text {
+                        text: device.display-name != "" ? device.display-name : device.hostname;
+                        color: Theme.text; font-size: Theme.body-size; font-weight: 600;
+                        horizontal-stretch: 1; vertical-alignment: center; overflow: elide;
                     }
+                }
+                Text { text: device.hostname; color: Theme.muted-text; font-size: Theme.caption-size; overflow: elide; }
+                Text { text: device.active-address != "" ? device.active-address : device.fixed-ips + ":" + device.port; color: Theme.muted-text; font-size: Theme.caption-size; overflow: elide; }
+                HorizontalLayout {
+                    spacing: Theme.small-spacing;
+                    StatusPill {
+                        label: device.alive ? (device.remote-ready ? Translations.tr("label-ready") : Translations.tr("label-connected")) : Translations.tr("label-offline");
+                        tone: device.alive ? (device.remote-ready ? Theme.success : Theme.warning) : Theme.muted-text;
+                    }
+                    if device.fingerprint != "" : StatusPill {
+                        label: device.authorized ? Translations.tr("label-authorized") : Translations.tr("label-authorization-required");
+                        tone: device.authorized ? Theme.success : Theme.warning;
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+        }
+        }
+        }
+        // Clipboard settings live on one page only; this just leads there.
+        HorizontalLayout {
+            alignment: start;
+            AppButton {
+                text: Translations.tr("clipboard-sharing");
+                clicked => { root.open-clipboard-sharing(); }
             }
-            }
-            }
-            Text { text: Translations.tr("navigation-clipboard"); color: Theme.text; font-size: Theme.body-size; font-weight: 600; vertical-stretch: 0; }
-            SettingRow { title: Translations.tr("clipboard-text"); description: Translations.tr("clipboard-text-description"); enabled: root.clipboard-text-enabled; toggled(value) => { root.toggle-text(value); } }
-            SettingRow { title: Translations.tr("clipboard-images"); description: Translations.tr("clipboard-images-description"); enabled: root.clipboard-image-enabled; toggled(value) => { root.toggle-image(value); } }
-            SettingRow { title: Translations.tr("clipboard-files"); description: Translations.tr("clipboard-files-description"); interactive: root.clipboard-files-supported; enabled: root.clipboard-files-enabled; toggled(value) => { root.toggle-files(value); } }
         }
     }
 }

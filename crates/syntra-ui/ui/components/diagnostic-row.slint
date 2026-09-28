@@ -64,7 +64,10 @@ export component DiagnosticRow inherits Rectangle {
     in property <bool> header: false;
     in property <bool> selected: false;
     callback clicked();
-    height: max(compact || header ? 36px : 44px, Theme.body-size * 2 + Theme.small-spacing);
+    height: root.compact && !root.header
+        ? 2 * Theme.caption-size * 1.5 + Theme.body-size * 1.5 + 3 * Theme.small-spacing
+        : root.compact ? 2 * Theme.caption-size * 1.5 + 2 * Theme.small-spacing
+        : max(header ? 36px : 44px, Theme.body-size * 2 + Theme.small-spacing);
     vertical-stretch: 0;
     horizontal-stretch: 1;
     clip: true;
@@ -76,7 +79,36 @@ export component DiagnosticRow inherits Rectangle {
         mouse-cursor: root.header ? default : pointer;
         clicked => { root.clicked(); }
     }
-    HorizontalLayout {
+    // Phone: every field, labelled line above the message, full width.
+    if root.compact && !root.header: VerticalLayout {
+        padding-left: Theme.small-spacing;
+        padding-right: Theme.small-spacing;
+        padding-top: Theme.small-spacing;
+        spacing: 2px;
+        Text {
+            text: root.entry.timestamp + " · " + root.entry.level + " · " + root.entry.stage;
+            color: root.entry.level == "error" ? Theme.danger : root.entry.level == "warning" ? Theme.warning : Theme.muted-text;
+            font-size: Theme.caption-size;
+            overflow: elide;
+        }
+        // Second line: direction and event, or a dash when the line has none.
+        Text {
+            text: (root.entry.direction != "" ? root.entry.direction : "—") + " · " + (root.entry.correlation != "" ? root.entry.correlation : "—");
+            color: Theme.muted-text;
+            font-size: Theme.caption-size;
+            overflow: elide;
+        }
+        Text { text: root.entry.message; color: Theme.text; font-size: Theme.body-size; overflow: elide; }
+    }
+    // Phone header: names the fields shown on each line.
+    if root.compact && root.header: VerticalLayout {
+        padding-left: Theme.small-spacing;
+        padding-right: Theme.small-spacing;
+        alignment: center;
+        Text { text: root.entry.timestamp + " · " + root.entry.level + " · " + root.entry.stage; color: Theme.muted-text; font-size: Theme.caption-size; overflow: elide; }
+        Text { text: root.entry.direction + " · " + root.entry.correlation + " · " + root.entry.message; color: Theme.muted-text; font-size: Theme.caption-size; overflow: elide; }
+    }
+    if !root.compact: HorizontalLayout {
         spacing: 0px;
         for value[index] in [root.entry.timestamp, root.entry.level, root.entry.stage, root.entry.direction, root.entry.correlation, root.entry.message]: DiagnosticCell {
             width: root.width * DiagnosticColumns.fractions[index];

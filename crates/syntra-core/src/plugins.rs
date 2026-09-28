@@ -568,6 +568,7 @@ mod tests {
     /// A stub that prints nothing is not a plugin: the daemon reads every
     /// description from the binary, so a test using an inert file would be
     /// asserting against an absence rather than against behaviour.
+    #[cfg(unix)]
     fn describing_stub(directory: &Path, executable: &str, id: &str, on_demand: bool) {
         let hello = format!(
             r#"{{"type":"hello","data":{{"protocol_version":1,"adapter_id":"{id}",
@@ -749,6 +750,8 @@ mod tests {
     /// An executable sitting on disk is not a working plugin. Health must
     /// come from the plugin answering the daemon, never from a file being
     /// present, or the interface would claim a capability that does not work.
+    // The stub plugin is a shell script, which only unix can execute.
+    #[cfg(unix)]
     #[test]
     fn an_installed_executable_alone_is_never_reported_healthy() {
         let directory = temp_dir("presence-is-not-health");
@@ -773,6 +776,8 @@ mod tests {
     /// Restarting an on-demand plugin must not leave it claiming to start.
     /// Nothing relaunches it until a transfer needs it, so a "starting" flag
     /// set from intention rather than an observed process stuck for ever.
+    // The stub plugin is a shell script, which only unix can execute.
+    #[cfg(unix)]
     #[test]
     fn restarting_an_on_demand_plugin_returns_it_to_on_demand() {
         let directory = temp_dir("on-demand-restart");
@@ -801,6 +806,8 @@ mod tests {
     /// A one-shot plugin exiting has finished its work, not failed. Treating
     /// it as a fault left a red state and a badge nothing could clear,
     /// because nothing relaunches it until the next transfer.
+    // The stub plugin is a shell script, which only unix can execute.
+    #[cfg(unix)]
     #[test]
     fn an_on_demand_plugin_exiting_is_not_a_failure() {
         let directory = temp_dir("on-demand-exit");
@@ -829,6 +836,8 @@ mod tests {
     }
 
     /// A persistent plugin exiting IS a failure, and must keep saying why.
+    // The stub plugin is a shell script, which only unix can execute.
+    #[cfg(unix)]
     #[test]
     fn a_persistent_plugin_exiting_is_reported_as_failed() {
         let directory = temp_dir("persistent-exit");
@@ -853,6 +862,8 @@ mod tests {
     /// daemon knows about its own plugins. An installed file that predated
     /// `on_demand` made a one-shot plugin report as merely stopped, which is
     /// exactly the staleness built-ins exist to remove.
+    // The stub plugin is a shell script, which only unix can execute.
+    #[cfg(unix)]
     #[test]
     fn a_manifest_beside_the_daemon_cannot_override_a_builtin() {
         let directory = temp_dir("builtin-not-overridden");

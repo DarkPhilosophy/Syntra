@@ -307,6 +307,26 @@ impl Service {
                 }
             }
             ICaptureEvent::StepInside(edge) => self.emulation.step_inside(edge),
+            ICaptureEvent::PlacePointer(edge) => self.emulation.place_pointer(edge),
+            ICaptureEvent::HandOn {
+                controller,
+                target,
+                side,
+            } => {
+                let owner = self
+                    .incoming_conn_info
+                    .values()
+                    .find(|incoming| incoming.fingerprint == controller)
+                    .map(|incoming| incoming.addr);
+                match owner {
+                    Some(addr) => {
+                        log::info!("handing the pointer of {addr} on through the {side} edge");
+                        self.emulation
+                            .send_proto(addr, syntra_proto::ProtoEvent::Handoff { target, side });
+                    }
+                    None => log::warn!("cannot hand the pointer on: its owner is not connected"),
+                }
+            }
             ICaptureEvent::CaptureBegin(handle) => {
                 // The shared pointer a peer controls here touched one of our
                 // edges. Towards the peer itself: hand control back. Towards

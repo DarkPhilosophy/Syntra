@@ -837,6 +837,7 @@ fn project_local_identity(app: &AppWindow, settings: &PresentationSettings) {
     let image = (!settings.local_device.image_path.is_empty())
         .then(|| {
             slint::Image::load_from_path(std::path::Path::new(&settings.local_device.image_path))
+                .map_err(|error| log::warn!("cannot load this device's image: {error}"))
                 .ok()
         })
         .flatten();
@@ -1657,6 +1658,29 @@ fn project_app_state(app: &AppWindow, state: &AppViewState, settings: &Presentat
     global.set_daemon_emulation_backend(
         daemon
             .and_then(|d| d.emulation_backend.clone())
+            .unwrap_or_default()
+            .into(),
+    );
+    let names = |names: Option<&Vec<String>>| {
+        ModelRc::new(VecModel::from(
+            names
+                .into_iter()
+                .flatten()
+                .map(|name| SharedString::from(name.as_str()))
+                .collect::<Vec<_>>(),
+        ))
+    };
+    global.set_capture_backends(names(daemon.map(|d| &d.capture_backends)));
+    global.set_emulation_backends(names(daemon.map(|d| &d.emulation_backends)));
+    global.set_capture_backend_choice(
+        daemon
+            .and_then(|d| d.capture_backend_choice.clone())
+            .unwrap_or_default()
+            .into(),
+    );
+    global.set_emulation_backend_choice(
+        daemon
+            .and_then(|d| d.emulation_backend_choice.clone())
             .unwrap_or_default()
             .into(),
     );
@@ -2854,6 +2878,30 @@ fn bind_app_state_callbacks(
         UiIntent::SetMultiHop,
         |g, callback| g.on_set_multi_hop(callback),
     );
+    // "" from the picker means automatic.
+    let backend_name = |name: SharedString| (!name.is_empty()).then(|| name.to_string());
+    {
+        let (tx, weak, state) = (tx.clone(), weak.clone(), Arc::clone(&state));
+        global.on_set_capture_backend(move |name| {
+            dispatch(
+                UiIntent::SetCaptureBackend(backend_name(name)),
+                &tx,
+                &weak,
+                &state,
+            )
+        });
+    }
+    {
+        let (tx, weak, state) = (tx.clone(), weak.clone(), Arc::clone(&state));
+        global.on_set_emulation_backend(move |name| {
+            dispatch(
+                UiIntent::SetEmulationBackend(backend_name(name)),
+                &tx,
+                &weak,
+                &state,
+            )
+        });
+    }
     {
         let tx = tx.clone();
         let weak = weak.clone();
@@ -3671,34 +3719,17 @@ fn file_kind(name: &str) -> String {
         .unwrap_or_else(|| "File".into())
 }
 
-fn presentation_settings_path() -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    let base = std::env::var_os("APPDATA").map(PathBuf::from)?;
-    #[cfg(target_os = "macos")]
-    let base = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .map(|home| home.join("Library").join("Application Support"))?;
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
-    #[cfg(target_os = "windows")]
-    return Some(base.join("Syntra").join("presentation.json"));
-    #[cfg(target_os = "macos")]
-    return Some(base.join("Syntra").join("presentation.json"));
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    Some(base.join("syntra").join("presentation.json"))
-}
-
+// One location for reading and writing: Android keeps it in the app's own
+// files directory (SYNTRA_CONFIG_DIR), which the XDG fallback never sees.
 fn load_presentation_settings() -> io::Result<PresentationSettings> {
-    let Some(path) = presentation_settings_path() else {
+    let Some(path) = crate::settings::presentation_settings_path() else {
         return Ok(PresentationSettings::default());
     };
     PresentationSettings::load(&path)
 }
 
 fn save_presentation_settings(settings: &PresentationSettings) -> io::Result<()> {
-    let Some(path) = presentation_settings_path() else {
+    let Some(path) = crate::settings::presentation_settings_path() else {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
             "no user configuration directory is available",

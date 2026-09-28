@@ -8,7 +8,7 @@ use crate::{
     capture::{Capture, CaptureType, ICaptureEvent},
     client::ClientManager,
     clipboard::{Clipboard, ClipboardContent},
-    config::{Config, ConfigClient, EmulationBackend},
+    config::{BackendName, CaptureBackend, Config, ConfigClient, EmulationBackend},
     connect::SyntraConnection,
     crypto,
     discovery::{Discovery, DiscoveryEvent},
@@ -208,6 +208,19 @@ struct SourceReadResult {
 /// read that finishes the file.
 type SourceChunk = (OutgoingFile, Option<(u64, Vec<u8>)>, Option<[u8; 32]>);
 
+/// Whether the clipboard goes through the desktop clipboard rather than the
+/// emulation backend's own (portal) clipboard.
+pub(super) fn uses_desktop_clipboard(backend: Option<EmulationBackend>) -> bool {
+    let native = match backend {
+        #[cfg(libei_emulation)]
+        Some(EmulationBackend::Libei) => true,
+        #[cfg(rdp_emulation)]
+        Some(EmulationBackend::Xdp) => true,
+        _ => false,
+    };
+    !native
+}
+
 impl Service {
     /// Builds the service and every subsystem it owns.
     ///
@@ -242,10 +255,16 @@ impl Service {
 
         // input capture + emulation
         let capture_backend = config.capture_backend().map(|b| b.into());
-        let capture = Capture::new(capture_backend, conn, config.release_bind());
+        let last_entry = crate::capture::EntryMark::default();
+        let capture = Capture::new(
+            capture_backend,
+            conn,
+            config.release_bind(),
+            last_entry.clone(),
+        );
         capture.set_multi_hop(config.multi_hop());
         let emulation_backend = config.emulation_backend().map(|b| b.into());
-        let emulation = Emulation::new(emulation_backend, listener);
+        let emulation = Emulation::new(emulation_backend, listener, last_entry);
         // Never start pen cursors into a session where they crash GNOME.
         #[cfg(target_os = "linux")]
         let independent = config.independent_pointers()
@@ -255,13 +274,7 @@ impl Service {
         emulation.set_independent_pointers(independent);
         emulation.set_hop_bypass(config.hop_bypass());
         emulation.set_multi_hop(config.multi_hop());
-        let legacy_clipboard = !match config.emulation_backend() {
-            #[cfg(libei_emulation)]
-            Some(EmulationBackend::Libei) => true,
-            #[cfg(rdp_emulation)]
-            Some(EmulationBackend::Xdp) => true,
-            _ => false,
-        };
+        let legacy_clipboard = uses_desktop_clipboard(config.emulation_backend());
         let clipboard = Clipboard::new();
         let executable_dir = std::env::current_exe()?
             .parent()
@@ -484,7 +497,9 @@ impl Service {
                         if self.clipboard_settings.text && !self.native_file_selection =>
                     {
                         self.record_local_history(history::text(text.clone())).await;
-                        for handle in self.client_manager.clipboard_clients() {
+                        let clients = self.client_manager.clipboard_clients();
+                        log::info!("sharing copied text ({} bytes) with {} device(s)", text.len(), clients.len());
+                        for handle in clients {
                             self.next_clipboard_transfer = self.next_clipboard_transfer.wrapping_add(1);
                             self.capture.send_clipboard(handle, self.next_clipboard_transfer, text.as_bytes().to_vec(), None);
                         }

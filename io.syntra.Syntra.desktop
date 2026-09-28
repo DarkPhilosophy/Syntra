@@ -1,12 +1,15 @@
 [Desktop Entry]
-Categories=Utility;
-Comment[en_US]=Mouse & Keyboard sharing via LAN
-Comment=Mouse & Keyboard sharing via LAN
-Comment[de_DE]=Maus- und Tastaturfreigabe über LAN
-Exec=syntra
-Icon=syntra
-Name[en_US]=Syntra
-Name=Syntra
-StartupNotify=true
-Terminal=false
 Type=Application
+Name=Syntra
+GenericName=Input and clipboard sharing
+Comment=Share mouse, keyboard, clipboard and files across your devices
+Comment[de]=Maus, Tastatur, Zwischenablage und Dateien zwischen Geräten teilen
+Comment[ro]=Partajează mouse, tastatură, clipboard și fișiere între dispozitive
+Exec=syntra %U
+Icon=io.syntra.Syntra
+Terminal=false
+Categories=Utility;RemoteAccess;Network;
+Keywords=kvm;mouse;keyboard;clipboard;sharing;
+StartupNotify=true
+StartupWMClass=io.syntra.Syntra
+SingleMainWindow=true
