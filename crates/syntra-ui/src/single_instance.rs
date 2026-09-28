@@ -26,6 +26,7 @@ const ACTIVATE: u8 = 1;
 const RETRIES: usize = 20;
 const RETRY_DELAY: Duration = Duration::from_millis(10);
 const CLIENT_READ_TIMEOUT: Duration = Duration::from_millis(50);
+const ACTIVATION_ACK_TIMEOUT: Duration = Duration::from_millis(500);
 
 pub enum InstanceOutcome {
     Primary(PrimaryInstanceGuard),
@@ -132,7 +133,7 @@ where
 fn start_primary<F>(
     endpoint: Endpoint,
     ownership: File,
-    mut on_activate: F,
+    on_activate: F,
 ) -> Result<InstanceOutcome, SingleInstanceError>
 where
     F: FnMut() + Send + 'static,
@@ -155,6 +156,7 @@ where
     };
     let stopping = Arc::new(AtomicBool::new(false));
     let listener_stopping = Arc::clone(&stopping);
+    let on_activate = Arc::new(std::sync::Mutex::new(on_activate));
     let listener = thread::Builder::new()
         .name("syntra-activation-listener".into())
         .spawn(move || {
@@ -162,21 +164,27 @@ where
                 if listener_stopping.load(Ordering::Acquire) {
                     break;
                 }
-                // An idle or malicious client must not prevent guard teardown.
-                // A bounded read also returns the listener to `accept` promptly.
-                if connection
-                    .set_recv_timeout(Some(CLIENT_READ_TIMEOUT))
-                    .is_err()
-                {
-                    continue;
-                }
-                let mut command = [0];
-                if connection.read_exact(&mut command).is_ok()
-                    && command[0] == ACTIVATE
-                    && !listener_stopping.load(Ordering::Acquire)
-                {
-                    on_activate();
-                }
+                // Each client is read on its own thread, so an idle or
+                // malicious client can neither stall `accept` nor prevent
+                // guard teardown. Not every platform supports a receive
+                // timeout (macOS sockets, Windows pipes refuse it); where it
+                // does, it also bounds that thread.
+                let _ = connection.set_recv_timeout(Some(CLIENT_READ_TIMEOUT));
+                let stopping = Arc::clone(&listener_stopping);
+                let on_activate = Arc::clone(&on_activate);
+                let _ = thread::Builder::new()
+                    .name("syntra-activation-client".into())
+                    .spawn(move || {
+                        let mut command = [0];
+                        if connection.read_exact(&mut command).is_ok()
+                            && command[0] == ACTIVATE
+                            && !stopping.load(Ordering::Acquire)
+                        {
+                            if let Ok(mut on_activate) = on_activate.lock() {
+                                on_activate();
+                            }
+                        }
+                    });
             }
         })
         .map_err(SingleInstanceError::ListenerThread)?;
@@ -253,7 +261,13 @@ impl Endpoint {
 fn notify(endpoint: &Endpoint) -> io::Result<()> {
     let name = endpoint.name().map_err(io::Error::other)?;
     let mut stream = Stream::connect(name)?;
-    stream.write_all(&[ACTIVATE])
+    stream.write_all(&[ACTIVATE])?;
+    // Stay connected until the primary has read the byte and hung up: a
+    // client closing at once can take unread data with it (Windows named
+    // pipes), and the activation is then silently lost.
+    stream.set_recv_timeout(Some(ACTIVATION_ACK_TIMEOUT))?;
+    let _ = stream.read(&mut [0]);
+    Ok(())
 }
 
 fn notify_with_retry(endpoint: &Endpoint) -> io::Result<()> {
