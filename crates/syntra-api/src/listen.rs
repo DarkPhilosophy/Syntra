@@ -162,14 +162,13 @@ impl Stream for AsyncFrontendListener {
 mod tests {
     use super::*;
 
+    // Tests here point the daemon socket at their own path through one
+    // process-wide environment variable, so they share one lock.
+    use crate::paths::ENV_LOCK;
+
     /// A second daemon must never unlink the endpoint of one that is alive.
     ///
     /// Deleting it leaves the first daemon listening on an inode no client
-    /// Both tests point the daemon socket at their own path through one
-    /// process-wide environment variable; run in parallel they overwrite
-    /// each other's value and see the other test's socket.
-    use crate::paths::ENV_LOCK;
-
     /// can reach: the process keeps running and every dashboard reports "no
     /// service is reachable" for as long as it lives.
     #[tokio::test]
@@ -204,9 +203,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("daemon.sock");
-        // A plain file stands in for the remains of a crashed daemon: nothing
-        // is listening, so connecting is refused.
-        std::fs::write(&path, b"").unwrap();
+        // The remains of a crashed daemon: a socket file nobody listens on.
+        // (A plain file is not a socket; macOS refuses it differently.)
+        drop(std::os::unix::net::UnixListener::bind(&path).unwrap());
         unsafe { std::env::set_var(crate::paths::ENV_DAEMON_SOCKET, &path) };
 
         let listener = AsyncFrontendListener::new().await;

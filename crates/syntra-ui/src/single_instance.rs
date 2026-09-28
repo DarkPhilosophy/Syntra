@@ -117,7 +117,11 @@ where
 
     match ownership.try_lock_exclusive() {
         Ok(()) => start_primary(endpoint, ownership, on_activate),
-        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+        // Windows reports a held lock as ERROR_LOCK_VIOLATION, not WouldBlock.
+        Err(error)
+            if error.kind() == io::ErrorKind::WouldBlock
+                || error.raw_os_error() == fs2::lock_contended_error().raw_os_error() =>
+        {
             notify_with_retry(&endpoint).map_err(SingleInstanceError::Activation)?;
             Ok(InstanceOutcome::Existing)
         }

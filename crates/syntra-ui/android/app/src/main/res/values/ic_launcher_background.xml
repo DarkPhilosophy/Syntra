@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Near-black plate: Android always draws an adaptive icon's background,
+         and a transparent one is filled white. On dark home screens this
+         reads as the figure alone. -->
+    <color name="ic_launcher_background">#0D110E</color>
+</resources>
