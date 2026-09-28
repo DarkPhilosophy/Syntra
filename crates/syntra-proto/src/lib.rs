@@ -295,6 +295,13 @@ pub enum ProtoEvent {
         target: String,
         side: Position,
     },
+    /// Sent instead of `Enter` after a handoff: the pointer arrives through
+    /// the device with certificate `via`, so the receiver places it on the
+    /// side where its own map has that device, and hands back through it.
+    EnterVia {
+        side: Position,
+        via: String,
+    },
     Ack(u32),
     Input(InputEvent),
     Ping,
@@ -465,6 +472,7 @@ impl Display for ProtoEvent {
             }
             Self::ProfileChanged => write!(f, "ProfileChanged"),
             Self::Handoff { side, .. } => write!(f, "Handoff({side})"),
+            Self::EnterVia { side, .. } => write!(f, "EnterVia({side})"),
             Self::ProfileStart {
                 request_id,
                 width,
@@ -680,6 +688,7 @@ pub enum EventType {
     ManualFileResult,
     ManualFileCancel,
     Handoff,
+    EnterVia,
 }
 
 impl ProtoEvent {
@@ -719,6 +728,7 @@ impl ProtoEvent {
             Self::Enter(_) => EventType::Enter,
             Self::Leave(_) => EventType::Leave,
             Self::Handoff { .. } => EventType::Handoff,
+            Self::EnterVia { .. } => EventType::EnterVia,
             Self::Ack(_) => EventType::Ack,
             Self::Hello { .. } => EventType::Hello,
             Self::ClipboardStart { .. } => EventType::ClipboardStart,
@@ -875,7 +885,7 @@ impl ProtoEvent {
             Self::Pong(alive) => buf.push(u8::from(alive)),
             Self::Enter(position) => buf.push(position as u8),
             Self::Leave(serial) | Self::Ack(serial) => put_u32(&mut buf, serial),
-            Self::Handoff { target, side } => {
+            Self::Handoff { target, side } | Self::EnterVia { side, via: target } => {
                 buf.push(side as u8);
                 let bytes = target.as_bytes();
                 put_u16(&mut buf, bytes.len().min(MAX_HANDOFF_TARGET) as u16);
@@ -1184,6 +1194,16 @@ impl ProtoEvent {
                 let target = String::from_utf8(take(&mut buf, len)?.to_vec())
                     .map_err(|_| ProtocolError::Truncated)?;
                 Self::Handoff { target, side }
+            }
+            EventType::EnterVia => {
+                let side = get_u8(&mut buf)?.try_into()?;
+                let len = get_u16(&mut buf)? as usize;
+                if len > MAX_HANDOFF_TARGET {
+                    return Err(ProtocolError::Truncated);
+                }
+                let via = String::from_utf8(take(&mut buf, len)?.to_vec())
+                    .map_err(|_| ProtocolError::Truncated)?;
+                Self::EnterVia { side, via }
             }
             EventType::Ack => Self::Ack(get_u32(&mut buf)?),
             EventType::Hello => {
@@ -2819,6 +2839,7 @@ mod tests {
         assert_eq!(EventType::ManualFileResult as u8, 39);
         assert_eq!(EventType::ManualFileCancel as u8, 40);
         assert_eq!(EventType::Handoff as u8, 41);
+        assert_eq!(EventType::EnterVia as u8, 42);
     }
 
     /// A handoff names the next device and the edge it was reached through;

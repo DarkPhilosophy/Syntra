@@ -16,10 +16,10 @@ pub async fn pick_image() -> io::Result<Option<PathBuf>> {
 
 #[cfg(target_os = "android")]
 pub async fn pick_image() -> io::Result<Option<PathBuf>> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "image picker unavailable on Android",
-    ))
+    Ok(crate::android_picker::pick("image/*", false)
+        .await?
+        .into_iter()
+        .next())
 }
 use crate::settings::{
     DevicePresentation, PresentationSettings, identity_images_path, presentation_settings_path,

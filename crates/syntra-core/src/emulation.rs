@@ -379,6 +379,40 @@ impl ListenTask {
     /// hand the shared pointer back; an independent pointer returns control
     /// through its own edges, so a capture backend that is still starting or
     /// re-initialising must not bounce the peer out mid-movement.
+    /// A peer asks to move its pointer onto this screen. `through` is the
+    /// side of the device it arrived through after a handoff; otherwise our
+    /// own map's side for the peer wins over the side it assumed.
+    async fn handle_enter(&mut self, addr: SocketAddr, pos: Position, through: Option<Position>) {
+        if !self.accepts_input() {
+            log::warn!("rejecting entry from {addr}: remote input is unavailable");
+            self.emulation_proxy.remove(addr);
+            self.listener.reply(addr, ProtoEvent::Leave(0)).await;
+            return;
+        }
+        let Some(fingerprint) = self.listener.get_certificate_fingerprint(addr).await else {
+            self.listener.reply(addr, ProtoEvent::Leave(0)).await;
+            return;
+        };
+        log::info!("accepting entry from {addr}");
+        self.active_inputs.insert(addr);
+        let side = through
+            .or_else(|| self.peer_sides.get(&addr.ip()).copied())
+            .unwrap_or(pos);
+        self.entered_from.insert(addr, side);
+        self.emulation_proxy.place_pointer(side);
+        self.event_tx
+            .send(EmulationEvent::ReleaseNotify)
+            .expect("channel closed");
+        self.listener.reply(addr, ProtoEvent::Ack(0)).await;
+        self.event_tx
+            .send(EmulationEvent::Entered {
+                addr,
+                pos: to_ipc_pos(side),
+                fingerprint,
+            })
+            .expect("channel closed");
+    }
+
     /// Multi-hop: the pointer of `addr` was pushed past `edge` of this
     /// screen towards another configured device. Ask the machine that owns
     /// the pointer to take it back and enter that device directly; it checks
@@ -489,39 +523,18 @@ impl ListenTask {
                         log::trace!("{event} <-<-<-<-<- {addr}");
                         last_response.insert(addr, Instant::now());
                         match event {
+                            ProtoEvent::EnterVia { side, via } => {
+                                // Arrived through `via` after a handoff: our
+                                // own map says on which side that device sits.
+                                let through = self
+                                    .peer_beyond
+                                    .iter()
+                                    .find(|(_, fingerprint)| **fingerprint == via)
+                                    .map(|(side, _)| *side);
+                                self.handle_enter(addr, side, through).await;
+                            }
                             ProtoEvent::Enter(pos) => {
-                                if !self.accepts_input() {
-                                    log::warn!(
-                                        "rejecting entry from {addr}: remote input is unavailable"
-                                    );
-                                    self.emulation_proxy.remove(addr);
-                                    self.listener.reply(addr, ProtoEvent::Leave(0)).await;
-                                    continue;
-                                }
-                                if let Some(fingerprint) =
-                                    self.listener.get_certificate_fingerprint(addr).await
-                                {
-                                    log::info!("accepting entry from {addr}");
-                                    self.active_inputs.insert(addr);
-                                    // This machine's own layout wins over the
-                                    // side the other machine assumed.
-                                    let side = self.peer_sides.get(&addr.ip()).copied().unwrap_or(pos);
-                                    self.entered_from.insert(addr, side);
-                                    self.emulation_proxy.place_pointer(side);
-                                    self.event_tx
-                                        .send(EmulationEvent::ReleaseNotify)
-                                        .expect("channel closed");
-                                    self.listener.reply(addr, ProtoEvent::Ack(0)).await;
-                                    self.event_tx
-                                        .send(EmulationEvent::Entered {
-                                            addr,
-                                            pos: to_ipc_pos(pos),
-                                            fingerprint,
-                                        })
-                                        .expect("channel closed");
-                                } else {
-                                    self.listener.reply(addr, ProtoEvent::Leave(0)).await;
-                                }
+                                self.handle_enter(addr, pos, None).await;
                             }
                             ProtoEvent::Leave(_) => {
                                 self.active_inputs.remove(&addr);

@@ -24,6 +24,12 @@
             android:exported="false"
             android:stopWithTask="true"
             android:foregroundServiceType="connectedDevice" />
+        <!-- Opens the system document picker for the native UI. -->
+        <activity
+            android:name=".PickerActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
         <!-- Lets a paired computer move a pointer, tap, scroll and type on
              this phone. Enabled by the user in system Accessibility settings. -->
         <service

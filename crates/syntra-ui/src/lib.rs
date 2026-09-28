@@ -37,6 +37,8 @@ pub mod settings;
 
 #[cfg(any(target_os = "android", test))]
 pub mod android;
+#[cfg(target_os = "android")]
+mod android_picker;
 pub(crate) mod avatar;
 pub mod device_identity;
 pub mod lifecycle;

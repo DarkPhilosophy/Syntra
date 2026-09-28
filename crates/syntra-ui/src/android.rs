@@ -237,3 +237,47 @@ pub fn open_accessibility_settings() {
 pub fn phone_control_enabled() -> bool {
     syntra_input_emulation::android::service_enabled()
 }
+
+/// Where received files go on the phone: the app's own external Download
+/// folder (Android/data/io.syntra.syntra/files/Download). Writable without
+/// storage permissions; publishing into the shared Downloads collection is
+/// not done yet.
+#[cfg(target_os = "android")]
+pub fn downloads_dir() -> std::path::PathBuf {
+    use jni::{
+        JavaVM,
+        objects::{JObject, JString, JValue},
+    };
+    let context = ndk_context::android_context();
+    let found = (|| -> jni::errors::Result<Option<String>> {
+        // SAFETY: ndk-context is initialised before android_main; the VM and
+        // activity outlive the process.
+        let vm = unsafe { JavaVM::from_raw(context.vm().cast()) }?;
+        let mut env = vm.attach_current_thread()?;
+        let activity = unsafe { JObject::from_raw(context.context().cast()) };
+        let result = (|| {
+            let kind = env.new_string("Download")?;
+            let dir = env
+                .call_method(
+                    &activity,
+                    "getExternalFilesDir",
+                    "(Ljava/lang/String;)Ljava/io/File;",
+                    &[JValue::Object(&kind)],
+                )?
+                .l()?;
+            if dir.is_null() {
+                return Ok(None);
+            }
+            let path = env
+                .call_method(&dir, "getAbsolutePath", "()Ljava/lang/String;", &[])?
+                .l()?;
+            Ok(Some(env.get_string(&JString::from(path))?.into()))
+        })();
+        std::mem::forget(activity);
+        result
+    })();
+    match found {
+        Ok(Some(path)) => std::path::PathBuf::from(path),
+        _ => std::path::PathBuf::from("/data/data/io.syntra.syntra/files/Download"),
+    }
+}

@@ -29,12 +29,6 @@ pub(crate) fn project(app: &AppWindow, view: &AppViewState) {
     );
     global.set_file_receive_known(view.status.connected && view.file_receive_settings.is_some());
     global.set_file_receive_error(view.file_receive_error.clone().unwrap_or_default().into());
-    #[cfg(target_os = "android")]
-    {
-        global.set_file_receive_known(false);
-        global.set_file_receive_error(tr(app, "manual-transfer-platform-unavailable"));
-        global.set_manual_transfer_error(tr(app, "manual-transfer-platform-unavailable"));
-    }
     if !global.get_file_receive_dirty() {
         if let Some(settings) = &view.file_receive_settings {
             global.set_file_receive_auto_accept(settings.auto_accept);
@@ -708,3 +702,113 @@ mod desktop {
 
 #[cfg(not(target_os = "android"))]
 pub(crate) use desktop::bind;
+
+/// Phone variant: send through the system picker, receive into the app's
+/// Downloads folder. No drag-and-drop or folder browsing on a phone.
+#[cfg(target_os = "android")]
+pub(crate) fn bind(
+    app: &AppWindow,
+    tx: mpsc::Sender<FrontendRequest>,
+    state: Arc<Mutex<AppViewState>>,
+) {
+    let global = app.global::<AppState>();
+    let send = |tx: &mpsc::Sender<FrontendRequest>, request| {
+        if let Err(error) = tx.send(request) {
+            log::warn!("frontend request failed: {error}");
+        }
+    };
+
+    let weak = app.as_weak();
+    let model = Arc::clone(&state);
+    global.on_select_incoming_file(move |peer, id| {
+        let Some(app) = weak.upgrade() else { return };
+        let global = app.global::<AppState>();
+        global.set_selected_offer_peer(peer);
+        global.set_selected_offer_id(id);
+        if let Ok(view) = model.lock() {
+            project(&app, &view);
+        }
+    });
+
+    let weak = app.as_weak();
+    let sender = tx.clone();
+    global.on_choose_manual_files(move |fingerprint| {
+        let Some(app) = weak.upgrade() else { return };
+        let global = app.global::<AppState>();
+        if global.get_manual_picker_busy() {
+            return;
+        }
+        global.set_manual_picker_busy(true);
+        let weak = weak.clone();
+        let sender = sender.clone();
+        let _ = slint::spawn_local(async move {
+            let picked = crate::android_picker::pick("*/*", true).await;
+            let Some(app) = weak.upgrade() else { return };
+            app.global::<AppState>().set_manual_picker_busy(false);
+            match picked {
+                Ok(paths) if !paths.is_empty() => send(
+                    &sender,
+                    FrontendRequest::SendFiles {
+                        peer_fingerprint: fingerprint.to_string(),
+                        paths,
+                    },
+                ),
+                Ok(_) => {}
+                Err(error) => app
+                    .global::<AppState>()
+                    .set_manual_transfer_error(error.to_string().into()),
+            }
+        });
+    });
+
+    let sender = tx.clone();
+    global.on_cancel_manual_transfer(move |peer, id| {
+        if let Ok(transfer_id) = id.parse::<u64>() {
+            send(
+                &sender,
+                FrontendRequest::CancelManualTransfer {
+                    peer_fingerprint: peer.to_string(),
+                    transfer_id,
+                },
+            );
+        }
+    });
+
+    let weak = app.as_weak();
+    let sender = tx.clone();
+    global.on_accept_incoming_file(move || {
+        let Some(app) = weak.upgrade() else { return };
+        let global = app.global::<AppState>();
+        let Ok(transfer_id) = global.get_manual_offer_id().parse::<u64>() else {
+            return;
+        };
+        global.set_manual_offer_busy(true);
+        send(
+            &sender,
+            FrontendRequest::AcceptFileTransfer {
+                peer_fingerprint: global.get_manual_offer_peer().to_string(),
+                transfer_id,
+                destination_directory: crate::android::downloads_dir(),
+                overwrite: global.get_manual_offer_overwrite(),
+            },
+        );
+    });
+
+    let weak = app.as_weak();
+    let sender = tx.clone();
+    global.on_decline_incoming_file(move || {
+        let Some(app) = weak.upgrade() else { return };
+        let global = app.global::<AppState>();
+        let Ok(transfer_id) = global.get_manual_offer_id().parse::<u64>() else {
+            return;
+        };
+        global.set_manual_offer_busy(true);
+        send(
+            &sender,
+            FrontendRequest::DeclineFileTransfer {
+                peer_fingerprint: global.get_manual_offer_peer().to_string(),
+                transfer_id,
+            },
+        );
+    });
+}

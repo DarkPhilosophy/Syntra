@@ -208,6 +208,22 @@ impl Service {
         self.broadcast_client(handle);
     }
 
+    /// Edge of this screen an incoming peer's barrier sits on.
+    pub(super) fn capture_position(&self, handle: ClientHandle) -> Option<Position> {
+        self.incoming_conn_info
+            .get(&handle)
+            .map(|incoming| incoming.pos)
+    }
+
+    /// Certificate of the configured device on `pos` of this screen.
+    pub(super) fn fingerprint_at(&self, pos: Position) -> Option<String> {
+        self.client_manager
+            .get_client_states()
+            .into_iter()
+            .find(|(_, config, _)| config.pos == pos)
+            .and_then(|(handle, ..)| self.client_manager.peer_fingerprint(handle))
+    }
+
     pub(super) fn add_incoming(&mut self, addr: SocketAddr, pos: Position, fingerprint: String) {
         let handle = crate::client::ENTER_HANDLE_BEGIN + self.next_trigger_handle;
         self.next_trigger_handle += 1;

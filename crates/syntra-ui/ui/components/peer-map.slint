@@ -63,6 +63,26 @@ export component PeerMap inherits Rectangle {
             horizontal-alignment: center; vertical-alignment: center; overflow: elide;
         }
     }
+    // Handle of the device picked up by a tap on phones ("" when none).
+    in-out property <string> picked: "";
+    // Drop zones for a picked device: tap one to move it there.
+    for zone[index] in [0, 1, 2, 3]: Rectangle {
+        visible: !Theme.desktop-platform && root.picked != "";
+        x: zone == 0 ? 0px : zone == 1 ? 2 * root.width / 3 : root.width / 3;
+        y: zone == 2 ? 0px : zone == 3 ? 2 * root.lane : root.lane;
+        width: root.width / 3;
+        height: root.lane;
+        border-radius: Theme.small-radius;
+        border-width: 1px;
+        border-color: Theme.accent.with-alpha(0.6);
+        background: Theme.accent.with-alpha(0.06);
+        TouchArea {
+            clicked => {
+                root.move-peer(root.picked, zone);
+                root.picked = "";
+            }
+        }
+    }
     for peer in root.clients: Rectangle {
         // The direction label occupies a band at the top of every zone, so
         // the peers below it are centred within what remains. Without this
@@ -107,9 +127,20 @@ export component PeerMap inherits Rectangle {
             text: peer.display-name; color: Theme.text;
             horizontal-alignment: center; vertical-alignment: center; overflow: elide;
         }
+        // Phones: a drag is the page scroll, so tap a device to pick it up,
+        // then tap the zone it should move to.
+        if !Theme.desktop-platform: TouchArea {
+            clicked => {
+                root.picked = root.picked == peer.handle ? "" : peer.handle;
+            }
+        }
+        if !Theme.desktop-platform && root.picked == peer.handle: Rectangle {
+            border-width: 2px;
+            border-color: Theme.accent;
+            border-radius: Theme.small-radius;
+            background: Theme.accent.with-alpha(0.12);
+        }
         drag := TouchArea {
-            // On touch screens a drag here is a page scroll; the position is
-            // set from the device editor instead.
             enabled: Theme.desktop-platform;
             pointer-event(event) => {
                 if event.kind == PointerEventKind.down {

@@ -21,8 +21,13 @@ pub(crate) enum ClipboardContent {
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum Observation {
+    /// New content the user copied here: share it.
     Local,
+    /// Content that arrived from a peer: never send it back.
     Remote,
+    /// Same content as last time. Polling platforms (Android) read the
+    /// clipboard on a timer; resending it each time loops between devices.
+    Unchanged,
 }
 
 #[derive(Default)]
@@ -37,7 +42,7 @@ impl ClipboardState {
             return if self.remote_origin {
                 Observation::Remote
             } else {
-                Observation::Local
+                Observation::Unchanged
             };
         }
         self.last = Some(content);
@@ -53,10 +58,9 @@ impl ClipboardState {
     fn commit_remote(&mut self, queued: &QueuedRemote, current: Option<&ClipboardContent>) -> bool {
         if let Some(baseline) = queued.baseline.as_ref() {
             if Some(baseline) != current {
-                if let Some(current) = current {
-                    self.last = Some(current.clone());
-                    self.remote_origin = false;
-                }
+                // The user copied something newer meanwhile: drop the stale
+                // remote write, and leave `last` so that copy is still
+                // reported (and shared) on the next read.
                 return false;
             }
         }
@@ -160,7 +164,7 @@ fn spawn_read_worker(
                         .lock()
                         .expect("clipboard state poisoned")
                         .observe(content.clone());
-                    if observation == Observation::Remote {
+                    if observation != Observation::Local {
                         Err(arboard::Error::ContentNotAvailable)
                     } else {
                         Ok(content)
@@ -268,7 +272,19 @@ mod tests {
         assert_eq!(state.observe(text("before")), Observation::Local);
         let queued = state.queue_remote(text("remote"));
         assert!(!state.commit_remote(&queued, Some(&text("after"))));
+        // The user's newer copy is still shared, once.
         assert_eq!(state.observe(text("after")), Observation::Local);
+        assert_eq!(state.observe(text("after")), Observation::Unchanged);
+    }
+    /// Reading the same local content again (as polling does every second)
+    /// must not look like a new copy, or it is resent forever.
+    #[test]
+    fn unchanged_local_content_is_not_shared_again() {
+        let mut state = ClipboardState::default();
+        assert_eq!(state.observe(text("copied")), Observation::Local);
+        assert_eq!(state.observe(text("copied")), Observation::Unchanged);
+        assert_eq!(state.observe(text("copied")), Observation::Unchanged);
+        assert_eq!(state.observe(text("next")), Observation::Local);
     }
     #[test]
     fn restored_remote_content_is_not_retransmitted() {

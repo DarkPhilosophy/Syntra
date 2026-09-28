@@ -676,6 +676,8 @@ where
     }
     #[cfg(not(target_os = "android"))]
     let _file_drop_guard = crate::manual_ui::bind(&app, request_tx.clone(), Arc::clone(&state));
+    #[cfg(target_os = "android")]
+    crate::manual_ui::bind(&app, request_tx.clone(), Arc::clone(&state));
     slint::run_event_loop_until_quit()?;
     app.hide()?;
     drop(tray);
@@ -3198,7 +3200,6 @@ fn bind_window_callbacks(
     identity_callback!(on_clear_display_image, |key| {
         |store: &mut crate::device_identity::IdentityStore| store.clear_peer_image(key.as_str())
     });
-    #[cfg(not(target_os = "android"))]
     app.on_choose_display_image({
         let weak = app.as_weak();
         let settings = Arc::clone(&settings);
@@ -3244,7 +3245,6 @@ fn bind_window_callbacks(
         |store: &mut crate::device_identity::IdentityStore| store.clear_local_image()
     });
 
-    #[cfg(not(target_os = "android"))]
     app.on_choose_local_image({
         let weak = app.as_weak();
         let settings = Arc::clone(&settings);

@@ -114,6 +114,7 @@ impl Capture {
             active_client: None,
             ack_deadline: None,
             held_until_ack: Vec::new(),
+            entering_via: None,
             backend,
             cancellation_token: cancellation_token.clone(),
             enabled_captures: Default::default(),
@@ -229,6 +230,9 @@ macro_rules! debounce {
 struct CaptureTask {
     active_client: Option<CaptureHandle>,
     ack_deadline: Option<Instant>,
+    /// After a handoff: certificate of the device the pointer came through,
+    /// named in every enter until the new peer acknowledges.
+    entering_via: Option<String>,
     /// Clicks and keys pressed before the peer acknowledged entry. They are
     /// replayed once it does; dropping them lost every first click.
     held_until_ack: Vec<Event>,
@@ -251,6 +255,13 @@ impl CaptureTask {
 
     fn remove_capture(&mut self, handle: CaptureHandle) {
         self.captures.retain(|&(h, ..)| handle != h);
+    }
+
+    /// Whether an incoming peer's barrier shares this edge.
+    fn incoming_at(&self, pos: Position) -> bool {
+        self.captures
+            .iter()
+            .any(|&(_, p, t)| p == pos && t == CaptureType::EnterOnly)
     }
 
     fn is_default_capture_at(&self, pos: Position) -> bool {
@@ -517,6 +528,7 @@ impl CaptureTask {
                     match event {
                         ProtoEvent::Ack(_) if self.state == State::WaitingForAck => {
                             log::info!("client {handle} acknowledged entry");
+                            self.entering_via = None;
                             self.state = State::Sending;
                             self.ack_deadline = None;
                             for event in std::mem::take(&mut self.held_until_ack) {
@@ -736,6 +748,18 @@ impl CaptureTask {
             return Ok(());
         }
 
+        // The shared pointer here belongs to a peer that controls us. At an
+        // edge towards another device, the peer enters that device itself
+        // (multi-hop Handoff); taking the pointer over here as well would
+        // enter it twice.
+        if event == CaptureEvent::Begin
+            && self.active_client.is_none()
+            && self.incoming_at(self.get_pos(handle))
+        {
+            capture.release().await?;
+            return Ok(());
+        }
+
         // activated a new client
         if event == CaptureEvent::Begin && Some(handle) != self.active_client {
             self.state = State::WaitingForAck;
@@ -749,7 +773,11 @@ impl CaptureTask {
         let opposite_pos = to_proto_pos(self.get_pos(handle).opposite());
 
         let event = match event {
-            CaptureEvent::Begin => ProtoEvent::Enter(opposite_pos),
+            CaptureEvent::Begin => {
+                // A fresh entry from our own screen, not a handoff.
+                self.entering_via = None;
+                ProtoEvent::Enter(opposite_pos)
+            }
             CaptureEvent::Input(e) => match self.state {
                 // connection not acknowledged, repeat `Enter` event; keep
                 // discrete presses so they still arrive once it is.
@@ -762,7 +790,7 @@ impl CaptureTask {
                     {
                         self.held_until_ack.push(e);
                     }
-                    ProtoEvent::Enter(opposite_pos)
+                    self.enter_event(opposite_pos)
                 }
                 State::Sending => ProtoEvent::Input(e),
             },
@@ -775,6 +803,23 @@ impl CaptureTask {
             self.release_capture(capture).await?;
         }
         Ok(())
+    }
+
+    /// Enter event for the current entry: plain, or naming the device the
+    /// pointer comes through after a handoff.
+    fn enter_event(&self, side: syntra_proto::Position) -> ProtoEvent {
+        match &self.entering_via {
+            Some(via) => ProtoEvent::EnterVia {
+                side,
+                via: via.clone(),
+            },
+            None => ProtoEvent::Enter(side),
+        }
+    }
+
+    async fn send_enter(&mut self, handle: CaptureHandle, side: syntra_proto::Position) {
+        let event = self.enter_event(side);
+        let _ = self.conn.send(event, handle).await;
     }
 
     /// Multi-hop: the device we control pushed our pointer on to the device
@@ -839,9 +884,11 @@ impl CaptureTask {
         self.event_tx
             .send(ICaptureEvent::ClientEntered(next))
             .expect("channel closed");
-        // The receiver places the pointer on the side its own map gives us.
+        // Name the device the pointer comes through, so the receiver places
+        // it on that device's side of its own screen.
         let enter = to_proto_pos(self.get_pos(next).opposite());
-        let _ = self.conn.send(ProtoEvent::Enter(enter), next).await;
+        self.entering_via = self.conn.client_fingerprint(from);
+        self.send_enter(next, enter).await;
         Ok(())
     }
 
@@ -992,6 +1039,7 @@ mod tests {
             active_client: None,
             ack_deadline: None,
             held_until_ack: Vec::new(),
+            entering_via: None,
             backend: None,
             cancellation_token: CancellationToken::new(),
             enabled_captures: HashSet::new(),

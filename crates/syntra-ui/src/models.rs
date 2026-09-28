@@ -265,7 +265,21 @@ impl AppViewState {
                     self.pending_file_offers.push(offer);
                 }
             }
-            FrontendEvent::ManualTransferStatus(status) => {
+            FrontendEvent::ManualTransferStatus(mut status) => {
+                // On a phone, received files leave the app folder for the
+                // shared Downloads, where the user can actually find them.
+                #[cfg(target_os = "android")]
+                if status.state == syntra_api::ManualTransferState::Completed
+                    && status.direction == syntra_api::ClipboardTransferDirection::Receiving
+                {
+                    if let Some(directory) = status.destination.clone() {
+                        if let Some(visible) = crate::android_picker::publish_download(
+                            &directory.join(&status.file_name),
+                        ) {
+                            status.destination = Some(std::path::PathBuf::from(visible));
+                        }
+                    }
+                }
                 if !matches!(
                     status.state,
                     syntra_api::ManualTransferState::AwaitingAcceptance

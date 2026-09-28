@@ -300,10 +300,28 @@ impl Service {
                 }
             }
             ICaptureEvent::CaptureBegin(handle) => {
-                // we entered the capture zone for an incoming connection
-                // => notify it that its capture should be released
+                // The shared pointer a peer controls here touched one of our
+                // edges. Towards the peer itself: hand control back. Towards
+                // another device of ours: ask the peer to enter it directly
+                // (multi-hop); it checks it is paired with that device.
                 if let Some(incoming) = self.incoming_conn_info.get(&handle) {
-                    self.emulation.send_leave_event(incoming.addr);
+                    let addr = incoming.addr;
+                    let peer_fingerprint = incoming.fingerprint.clone();
+                    let pos = self.capture_position(handle);
+                    let beyond = pos.and_then(|pos| self.fingerprint_at(pos));
+                    match (pos, beyond) {
+                        (Some(pos), Some(target)) if target != peer_fingerprint => {
+                            log::info!("handing the pointer of {addr} on through the {pos} edge");
+                            self.emulation.send_proto(
+                                addr,
+                                syntra_proto::ProtoEvent::Handoff {
+                                    target,
+                                    side: api_to_proto_pos(pos),
+                                },
+                            );
+                        }
+                        _ => self.emulation.send_leave_event(addr),
+                    }
                 }
             }
             ICaptureEvent::CaptureDisabled => {
@@ -329,5 +347,14 @@ impl Service {
                 }
             }
         }
+    }
+}
+
+fn api_to_proto_pos(pos: syntra_api::Position) -> syntra_proto::Position {
+    match pos {
+        syntra_api::Position::Left => syntra_proto::Position::Left,
+        syntra_api::Position::Right => syntra_proto::Position::Right,
+        syntra_api::Position::Top => syntra_proto::Position::Top,
+        syntra_api::Position::Bottom => syntra_proto::Position::Bottom,
     }
 }
