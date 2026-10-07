@@ -210,8 +210,8 @@ Guides: [architecture](../docs/architecture.md) · [client API](../docs/api.md)
 - [`syntra-log`](../crates/syntra-log) — Runtime-reconfigurable, per-subsystem logging shared by every Syntra process
 - [`syntra-plugin-api`](../crates/syntra-plugin-api) — Versioned external-process adapter protocol for Syntra file clipboard integration
 - [`syntra-plugin-clipboard`](../plugins/clipboard) — Workspace crate.
+- [`syntra-plugin-edge-glow`](../plugins/edge-glow) — Draws a glow along the screen edge a pointer from another device came in through.
 - [`syntra-plugin-fuse`](../plugins/fuse) — Workspace crate.
-- [`syntra-plugin-edge-glow`](../plugins/edge-glow) — Workspace crate.
 - [`syntra-proto`](../crates/syntra-proto) — network protocol for syntra
 - [`syntra-store`](../crates/syntra-store) — persistent clipboard history storage and daemon worker for Syntra
 - [`syntra-ui`](../crates/syntra-ui) — frontend-neutral presentation state and transport boundary for syntra
