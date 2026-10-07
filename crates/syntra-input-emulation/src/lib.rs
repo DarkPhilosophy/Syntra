@@ -43,8 +43,100 @@ pub enum PointerEdge {
     Bottom,
 }
 
+/// Push needed against an edge before an independent pointer leaves through
+/// it, in motion units. Shared with the capture side, which reads the same
+/// setting; zero leaves at the first touch.
+static EDGE_PRESSURE_BITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+pub fn set_edge_pressure(amount: f32) {
+    EDGE_PRESSURE_BITS.store(amount.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg_attr(not(uinput), allow(dead_code))]
+pub(crate) fn edge_pressure() -> f64 {
+    f64::from(f32::from_bits(
+        EDGE_PRESSURE_BITS.load(std::sync::atomic::Ordering::Relaxed),
+    ))
+}
+
+/// How fast a push that is not kept up leaks away, per second.
+const PUSH_LEAK_PER_SECOND: f64 = 100.0;
+
+/// Adds one motion event to the push against `edge`. Returns the new total
+/// and whether it reaches `needed` (zero needs nothing). Used by every
+/// backend that watches a pointer of its own for the edge it is pushed past,
+/// so a leave takes the same push everywhere.
+#[cfg_attr(not(any(uinput, target_os = "android")), allow(dead_code))]
+pub(crate) fn push_against_edge(
+    so_far: f64,
+    idle: std::time::Duration,
+    edge: PointerEdge,
+    dx: f64,
+    dy: f64,
+    needed: f64,
+) -> (f64, bool) {
+    let outward = match edge {
+        PointerEdge::Left => -dx,
+        PointerEdge::Right => dx,
+        PointerEdge::Top => -dy,
+        PointerEdge::Bottom => dy,
+    };
+    let leaked = (so_far - PUSH_LEAK_PER_SECOND * idle.as_secs_f64()).max(0.0);
+    let total = (leaked + outward).max(0.0);
+    (total, total >= needed)
+}
+#[cfg(uinput)]
+mod scroll_trace;
 #[cfg(uinput)]
 mod uinput;
+
+/// Whether the compositor draws a cursor for each pen-tablet tool, which is
+/// how independent pointers give every peer a cursor of its own. Only GNOME
+/// is known to; elsewhere (gamescope draws none) peers move the shared
+/// pointer. `SYNTRA_PEER_CURSOR=pen|shared` overrides. The backend and the
+/// capture side both ask this, so they never disagree.
+pub fn peers_have_pen_cursors() -> bool {
+    pen_cursors_for(
+        gnome_shell_running(),
+        std::env::var("SYNTRA_PEER_CURSOR").ok().as_deref(),
+    )
+}
+
+#[cfg_attr(not(uinput), allow(dead_code))]
+pub(crate) fn pen_cursors_for(gnome: bool, overridden: Option<&str>) -> bool {
+    match overridden.map(str::trim) {
+        Some("pen") => true,
+        Some("shared") => false,
+        _ => gnome,
+    }
+}
+
+/// Whether this user is running GNOME Shell right now. The desktop
+/// environment variables are not used: a user manager that outlives logouts
+/// keeps the values of the first session it saw, so a Steam Deck that once
+/// ran GNOME kept reporting GNOME under gamescope.
+#[cfg(target_os = "linux")]
+pub fn gnome_shell_running() -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+    // The owner of /proc/self is this process's user.
+    let Ok(own) = std::fs::metadata("/proc/self") else {
+        return false;
+    };
+    let uid = own.uid();
+    entries.flatten().any(|entry| {
+        let path = entry.path();
+        std::fs::read_to_string(path.join("comm")).is_ok_and(|comm| comm.trim() == "gnome-shell")
+            && std::fs::metadata(&path).is_ok_and(|meta| meta.uid() == uid)
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn gnome_shell_running() -> bool {
+    false
+}
 
 #[cfg(target_os = "android")]
 pub mod android;
@@ -208,9 +300,19 @@ impl InputEmulation {
         self.emulation.step_inside(edge);
     }
 
+    /// See [`Emulation::hide_pointer`].
+    pub fn hide_pointer(&mut self) {
+        self.emulation.hide_pointer();
+    }
+
     /// See [`Emulation::place_pointer`].
     pub fn place_pointer(&mut self, edge: PointerEdge) {
         self.emulation.place_pointer(edge);
+    }
+
+    /// See [`Emulation::place_pointer_along`].
+    pub fn place_pointer_along(&mut self, edge: PointerEdge, along: Option<f32>) {
+        self.emulation.place_pointer_along(edge, along);
     }
 
     /// See [`Emulation::take_pointer_edge`].
@@ -350,9 +452,18 @@ trait Emulation: Send {
     /// from that side appears. Backends driving the shared system pointer
     /// leave it where it is.
     fn place_pointer(&mut self, _edge: PointerEdge) {}
+    /// Like `place_pointer`, with the pointer at `along`, a share of the edge's
+    /// length from 0.0 to 1.0, where the backend can place it by absolute
+    /// position. Backends that cannot ignore the share, as they ignore the edge.
+    fn place_pointer_along(&mut self, edge: PointerEdge, _along: Option<f32>) {
+        self.place_pointer(edge);
+    }
     /// Moves the shared pointer a little inside from `edge` so it no longer
     /// touches it. Backends that cannot move the pointer do nothing.
     fn step_inside(&mut self, _edge: PointerEdge) {}
+    /// Hides a cursor this device drew for a pointer that is no longer on its
+    /// screen. Backends that draw no cursor of their own do nothing.
+    fn hide_pointer(&mut self) {}
     fn take_clipboard_receiver(&mut self) -> Option<mpsc::Receiver<(String, Vec<u8>)>> {
         None
     }

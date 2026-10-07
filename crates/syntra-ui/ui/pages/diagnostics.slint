@@ -10,17 +10,31 @@ export component DiagnosticsPage inherits Rectangle {
     in property <bool> paused: false;
     in-out property <bool> follow-tail: true;
     in property <bool> compact: false;
+    /// Which columns are shown: date, time, level, stage, direction, event,
+    /// message.
+    in property <[bool]> columns-shown: [true, true, true, true, true, true, true];
     callback text-filter-changed(string);
     callback pause-toggled(bool);
     callback clear-requested();
     callback copy-all();
     callback copy-text(string);
+    callback toggle-column(int);
     // Selected record, shown in full below the list where it can be read,
     // selected with the mouse and copied.
     private property <int> selected: -1;
+    private property <bool> columns-open: false;
     private property <bool> has-selection: root.selected >= 0 && root.selected < root.entries.length;
     private property <DiagnosticEntry> current: root.has-selection ? root.entries[root.selected] : { };
-    private property <string> current-line: root.current.timestamp + "  " + root.current.level + "  " + root.current.stage + "  " + root.current.direction + "  " + root.current.correlation + "  " + root.current.message;
+    private property <string> current-line: root.current.stamp + "  " + root.current.level + "  " + root.current.stage + "  " + root.current.direction + "  " + root.current.correlation + "  " + root.current.message;
+    private property <[string]> column-names: [
+        Translations.tr("diagnostics-column-date"),
+        Translations.tr("diagnostics-column-time"),
+        Translations.tr("diagnostics-filter-level"),
+        Translations.tr("diagnostics-filter-stage"),
+        Translations.tr("diagnostics-filter-direction"),
+        Translations.tr("diagnostics-column-event"),
+        Translations.tr("diagnostics-column-message"),
+    ];
     changed entries => {
         // Rows shift as the tail advances; never point at a different record.
         if root.selected >= root.entries.length { root.selected = -1; }
@@ -41,14 +55,32 @@ export component DiagnosticsPage inherits Rectangle {
             Text { text: root.paused ? Translations.tr("diagnostics-paused") : Translations.tr("diagnostics-live"); color: root.paused ? Theme.warning : Theme.success; font-size: Theme.body-size; vertical-alignment: center; horizontal-stretch: 1; }
             AppButton { text: root.follow-tail ? Translations.tr("diagnostics-following-tail") : Translations.tr("diagnostics-follow-tail"); clicked => { root.follow-tail = !root.follow-tail; } }
             AppButton { text: root.paused ? Translations.tr("diagnostics-resume") : Translations.tr("diagnostics-pause"); clicked => { root.pause-toggled(!root.paused); } }
+            if !root.compact: AppButton { text: Translations.tr("diagnostics-columns"); primary: root.columns-open; clicked => { root.columns-open = !root.columns-open; } }
             if !root.compact: AppButton { text: Translations.tr("diagnostics-copy-all"); enabled: root.entries.length > 0; clicked => { root.copy-all(); } }
             if !root.compact: AppButton { text: Translations.tr("diagnostics-clear"); clicked => { root.selected = -1; root.clear-requested(); } }
         }
         if root.compact: HorizontalLayout {
             spacing: Theme.small-spacing;
             alignment: end;
+            AppButton { text: Translations.tr("diagnostics-columns"); primary: root.columns-open; clicked => { root.columns-open = !root.columns-open; } }
             AppButton { text: Translations.tr("diagnostics-copy-all"); enabled: root.entries.length > 0; clicked => { root.copy-all(); } }
             AppButton { text: Translations.tr("diagnostics-clear"); clicked => { root.selected = -1; root.clear-requested(); } }
+        }
+        // Which columns to show. The message column is not offered: a log
+        // without it says nothing.
+        if root.columns-open: HorizontalLayout {
+            spacing: Theme.small-spacing;
+            alignment: start;
+            for index in [0, 1, 2]: AppButton { text: root.column-names[index]; primary: root.columns-shown[index]; clicked => { root.toggle-column(index); } }
+            if !root.compact: HorizontalLayout {
+                spacing: Theme.small-spacing;
+                for index in [3, 4, 5]: AppButton { text: root.column-names[index]; primary: root.columns-shown[index]; clicked => { root.toggle-column(index); } }
+            }
+        }
+        if root.columns-open && root.compact: HorizontalLayout {
+            spacing: Theme.small-spacing;
+            alignment: start;
+            for index in [3, 4, 5]: AppButton { text: root.column-names[index]; primary: root.columns-shown[index]; clicked => { root.toggle-column(index); } }
         }
         VerticalLayout {
             vertical-stretch: 1;
@@ -56,7 +88,8 @@ export component DiagnosticsPage inherits Rectangle {
             DiagnosticRow {
                 header: true;
                 compact: root.compact;
-                entry: { timestamp: Translations.tr("diagnostics-column-time"), level: Translations.tr("diagnostics-filter-level"), stage: Translations.tr("diagnostics-filter-stage"), direction: Translations.tr("diagnostics-filter-direction"), correlation: Translations.tr("diagnostics-column-event"), message: Translations.tr("diagnostics-column-message") };
+                shown: root.columns-shown;
+                entry: { date: root.column-names[0], timestamp: root.column-names[1], level: root.column-names[2], stage: root.column-names[3], direction: root.column-names[4], correlation: root.column-names[5], message: root.column-names[6] };
             }
             ListView {
                 mouse-drag-pan-enabled: Theme.touch-input-active || !Theme.desktop-platform;
@@ -68,6 +101,7 @@ export component DiagnosticsPage inherits Rectangle {
                     width: parent.width;
                     entry: entry;
                     compact: root.compact;
+                    shown: root.columns-shown;
                     selected: index == root.selected;
                     clicked => {
                         root.selected = root.selected == index ? -1 : index;
@@ -77,8 +111,11 @@ export component DiagnosticsPage inherits Rectangle {
                 }
             }
         }
+        // A fixed height that always fits the header line and a few lines of
+        // text. Sizing it from the text's preferred height gave one line
+        // before the text had a width, which squeezed the Copy button out.
         if root.has-selection: Rectangle {
-            height: min(220px, detail.preferred-height + 2 * Theme.small-spacing);
+            height: root.compact ? 280px : 200px;
             vertical-stretch: 0;
             background: Theme.surface;
             border-radius: Theme.corner-radius;
@@ -89,9 +126,10 @@ export component DiagnosticsPage inherits Rectangle {
                 spacing: Theme.small-spacing;
                 HorizontalLayout {
                     spacing: Theme.small-spacing;
+                    height: 44px;
                     Text {
                         horizontal-stretch: 1;
-                        text: root.current.timestamp + " · " + root.current.level + " · " + root.current.stage;
+                        text: root.current.stamp + " · " + root.current.level + " · " + root.current.stage + " · " + root.current.direction + " · " + root.current.correlation;
                         color: Theme.muted-text;
                         font-size: Theme.caption-size;
                         vertical-alignment: center;
@@ -100,8 +138,11 @@ export component DiagnosticsPage inherits Rectangle {
                     AppButton { text: Translations.tr("diagnostics-copy"); clicked => { root.copy-text(root.current-line); } }
                     AppButton { text: Translations.tr("action-close"); clicked => { root.selected = -1; } }
                 }
-                ScrollView {
+                detail-scroll := ScrollView {
+                    vertical-stretch: 1;
+                    viewport-width: self.visible-width;
                     detail := TextInput {
+                        width: detail-scroll.visible-width;
                         text: root.current.message;
                         read-only: true;
                         single-line: false;

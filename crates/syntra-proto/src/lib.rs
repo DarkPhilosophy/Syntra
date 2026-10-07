@@ -302,6 +302,14 @@ pub enum ProtoEvent {
         side: Position,
         via: String,
     },
+    /// Like `Enter`, and also says where along the edge the pointer came in, as
+    /// a fraction from 0.0 (start of the edge) to 1.0 (its end). A fraction, so
+    /// it means the same on screens of different resolution. Peers that predate
+    /// it reject the event id, so all devices must run the same version.
+    EnterAt {
+        side: Position,
+        along: f32,
+    },
     Ack(u32),
     Input(InputEvent),
     Ping,
@@ -473,6 +481,7 @@ impl Display for ProtoEvent {
             Self::ProfileChanged => write!(f, "ProfileChanged"),
             Self::Handoff { side, .. } => write!(f, "Handoff({side})"),
             Self::EnterVia { side, .. } => write!(f, "EnterVia({side})"),
+            Self::EnterAt { side, along } => write!(f, "EnterAt({side}, {along:.3})"),
             Self::ProfileStart {
                 request_id,
                 width,
@@ -689,6 +698,9 @@ pub enum EventType {
     ManualFileCancel,
     Handoff,
     EnterVia,
+    /// Enter that also says where along the edge the pointer came in. Appended
+    /// last so every existing id keeps its number.
+    EnterAt,
 }
 
 impl ProtoEvent {
@@ -729,6 +741,7 @@ impl ProtoEvent {
             Self::Leave(_) => EventType::Leave,
             Self::Handoff { .. } => EventType::Handoff,
             Self::EnterVia { .. } => EventType::EnterVia,
+            Self::EnterAt { .. } => EventType::EnterAt,
             Self::Ack(_) => EventType::Ack,
             Self::Hello { .. } => EventType::Hello,
             Self::ClipboardStart { .. } => EventType::ClipboardStart,
@@ -885,6 +898,10 @@ impl ProtoEvent {
             Self::Pong(alive) => buf.push(u8::from(alive)),
             Self::Enter(position) => buf.push(position as u8),
             Self::Leave(serial) | Self::Ack(serial) => put_u32(&mut buf, serial),
+            Self::EnterAt { side, along } => {
+                buf.push(side as u8);
+                put_u32(&mut buf, along.to_bits());
+            }
             Self::Handoff { target, side } | Self::EnterVia { side, via: target } => {
                 buf.push(side as u8);
                 let bytes = target.as_bytes();
@@ -1194,6 +1211,17 @@ impl ProtoEvent {
                 let target = String::from_utf8(take(&mut buf, len)?.to_vec())
                     .map_err(|_| ProtocolError::Truncated)?;
                 Self::Handoff { target, side }
+            }
+            EventType::EnterAt => {
+                let side = get_u8(&mut buf)?.try_into()?;
+                let along = f32::from_bits(get_u32(&mut buf)?);
+                if !along.is_finite() {
+                    return Err(ProtocolError::Truncated);
+                }
+                Self::EnterAt {
+                    side,
+                    along: along.clamp(0.0, 1.0),
+                }
             }
             EventType::EnterVia => {
                 let side = get_u8(&mut buf)?.try_into()?;
@@ -1980,6 +2008,56 @@ mod tests {
                 dy: 2.25,
             },
         )));
+    }
+
+    /// The entry position survives the wire exactly, and the new event takes
+    /// the next id without moving any existing one.
+    #[test]
+    fn enter_at_carries_the_fraction_and_keeps_the_ids_stable() {
+        assert_round_trip(ProtoEvent::EnterAt {
+            side: Position::Left,
+            along: 0.0,
+        });
+        assert_round_trip(ProtoEvent::EnterAt {
+            side: Position::Right,
+            along: 1.0,
+        });
+        let bytes = ProtoEvent::EnterAt {
+            side: Position::Bottom,
+            along: 0.625,
+        }
+        .encode()
+        .unwrap();
+        match ProtoEvent::decode(&bytes).unwrap() {
+            ProtoEvent::EnterAt { side, along } => {
+                assert_eq!(side, Position::Bottom);
+                assert_eq!(along, 0.625);
+            }
+            other => panic!("decoded as {other}"),
+        }
+        assert_eq!(EventType::EnterAt as u8, 43);
+        assert_eq!(EventType::EnterVia as u8, 42, "existing ids do not move");
+    }
+
+    /// A fraction outside the edge is held at its end; one that is not a
+    /// number is refused, so it can never reach the UI as an offset.
+    #[test]
+    fn enter_at_clamps_out_of_range_and_refuses_non_numbers() {
+        let wire = |along: f32| {
+            let mut bytes = vec![EventType::EnterAt as u8, Position::Left as u8];
+            bytes.extend_from_slice(&along.to_bits().to_be_bytes());
+            bytes
+        };
+        match ProtoEvent::decode(&wire(4.0)).unwrap() {
+            ProtoEvent::EnterAt { along, .. } => assert_eq!(along, 1.0),
+            other => panic!("decoded as {other}"),
+        }
+        match ProtoEvent::decode(&wire(-3.0)).unwrap() {
+            ProtoEvent::EnterAt { along, .. } => assert_eq!(along, 0.0),
+            other => panic!("decoded as {other}"),
+        }
+        assert!(ProtoEvent::decode(&wire(f32::NAN)).is_err());
+        assert!(ProtoEvent::decode(&wire(f32::INFINITY)).is_err());
     }
 
     #[test]

@@ -1,6 +1,8 @@
 package io.syntra.syntra
 
 import android.app.Notification
+import android.content.Context
+import android.net.wifi.WifiManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
@@ -30,7 +32,33 @@ class SyntraForegroundService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private var wifiLock: WifiManager.WifiLock? = null
+
+    // Without it the radio sleeps between packets: pings to the phone swung
+    // from 3 ms to over 400 ms, which reads as a jerky pointer.
+    private fun holdWifi() {
+        if (wifiLock?.isHeld == true) return
+        val mode = if (Build.VERSION.SDK_INT >= 29) {
+            WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+        } else {
+            @Suppress("DEPRECATION") WifiManager.WIFI_MODE_FULL_HIGH_PERF
+        }
+        wifiLock = (applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager)
+            .createWifiLock(mode, "syntra:link")
+            .apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+    }
+
+    override fun onDestroy() {
+        wifiLock?.takeIf { it.isHeld }?.release()
+        wifiLock = null
+        super.onDestroy()
+    }
+
     private fun startForeground() {
+        holdWifi()
         val notification = Notification.Builder(this, CHANNEL)
             .setContentTitle(getString(R.string.notification_title))
             .setContentText(getString(R.string.notification_background_service))

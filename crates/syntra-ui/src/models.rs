@@ -128,6 +128,12 @@ pub struct AppViewState {
     pub hop_bypass: bool,
     /// The pointer may travel on through chains of devices.
     pub multi_hop: bool,
+    /// The pointer of another device that is on this screen, with the edge it
+    /// came in through. `None` while nobody else drives this screen.
+    pub pointer_passage: Option<syntra_api::PointerPassage>,
+    /// Grows with every entry and exit, so an effect restarts even when the
+    /// edge is the same as the last time.
+    pub pointer_passage_count: u32,
     pub clipboard: ClipboardSettings,
     pub history_page: Option<syntra_api::HistoryPage>,
     pub history_query: String,
@@ -407,6 +413,14 @@ impl AppViewState {
             FrontendEvent::IndependentPointers(enabled) => self.independent_pointers = enabled,
             FrontendEvent::HopBypass(enabled) => self.hop_bypass = enabled,
             FrontendEvent::MultiHop(enabled) => self.multi_hop = enabled,
+            FrontendEvent::PointerEntered(passage) => {
+                self.pointer_passage_count = self.pointer_passage_count.wrapping_add(1);
+                self.pointer_passage = Some(passage);
+            }
+            FrontendEvent::PointerLeft(_) => {
+                self.pointer_passage_count = self.pointer_passage_count.wrapping_add(1);
+                self.pointer_passage = None;
+            }
             FrontendEvent::EmulationStatus(s) => self.input_health.emulation = bool::from(s),
             FrontendEvent::AuthorizedUpdated(a) => self.authorization = a,
             FrontendEvent::PublicKeyFingerprint(k) => self.public_key_fingerprint = Some(k),

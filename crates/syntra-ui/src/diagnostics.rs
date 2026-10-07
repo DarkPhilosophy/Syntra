@@ -200,61 +200,127 @@ fn metadata_value(message: &str, key: &str) -> Option<String> {
     })
 }
 
+/// Ordered rules: the first needle found in the lower-cased message decides.
+/// Anything that is not traffic to or from a peer is `local`, so the
+/// Direction column is never blank.
+const DIRECTION_RULES: &[(&str, &str)] = &[
+    ("[route] out", "outgoing"),
+    ("[route] hop", "outgoing"),
+    ("[route] pass", "outgoing"),
+    ("[route] back", "outgoing"),
+    ("sending", "outgoing"),
+    ("entering client", "outgoing"),
+    ("handing", "outgoing"),
+    ("publishing", "outgoing"),
+    ("sharing", "outgoing"),
+    ("connecting", "outgoing"),
+    ("failed to connect", "outgoing"),
+    ("send error", "outgoing"),
+    ("[route] in ", "incoming"),
+    ("[route] home", "incoming"),
+    ("accepting", "incoming"),
+    ("acknowledged", "incoming"),
+    ("received", "incoming"),
+    ("receiving", "incoming"),
+    ("incoming", "incoming"),
+    ("recv error", "incoming"),
+    ("peer state", "incoming"),
+    ("dtls client", "incoming"),
+    ("did not respond", "incoming"),
+    ("connection closed", "incoming"),
+    ("connected @", "incoming"),
+    (" from client", "incoming"),
+    (" from ", "incoming"),
+];
+
 fn classify_direction(message: &str) -> String {
     let text = message.to_ascii_lowercase();
-    let has = |words: &[&str]| words.iter().any(|word| text.contains(word));
-    if has(&[
-        "[route] in ",
-        "[route] home",
-        "accepting",
-        "received",
-        "receiving",
-        "incoming",
-        "from client",
-        " from ",
-    ]) {
-        "incoming".into()
-    } else if has(&[
-        "[route] out",
-        "[route] hop",
-        "[route] pass",
-        "[route] back",
-        "sending",
-        "entering client",
-        "handing",
-        "sharing",
-        " to client",
-        "publishing",
-    ]) {
-        "outgoing".into()
-    } else {
-        String::new()
-    }
+    DIRECTION_RULES
+        .iter()
+        .find(|(needle, _)| text.contains(needle))
+        .map_or("local", |(_, direction)| direction)
+        .to_owned()
 }
 
-/// A short name for what happened: the route step, or the peer involved.
+/// Ordered rules naming what happened, most specific first.
+const EVENT_RULES: &[(&str, &str)] = &[
+    // Named states first: their text also holds generic words such as
+    // "connected" or "refused" that would otherwise win.
+    ("peer state", "peer-state"),
+    ("independent pointers", "pointers"),
+    ("peer gate", "gate"),
+    ("active connections", "connections"),
+    ("failed to connect", "connect-failed"),
+    ("connecting", "connecting"),
+    ("connection closed", "disconnected"),
+    ("disconnected", "disconnected"),
+    ("connected", "connected"),
+    ("did not respond", "timeout"),
+    ("send error", "send-error"),
+    ("recv error", "recv-error"),
+    (" lost", "peer-lost"),
+    ("accepting entry", "entry"),
+    ("acknowledged", "ack"),
+    ("entering client", "enter"),
+    ("sending leave", "leave"),
+    ("releasing", "release"),
+    ("rejecting capture", "rejected"),
+    ("refused", "refused"),
+    ("hand-off", "handoff"),
+    ("handoff", "handoff"),
+    ("handing", "handoff"),
+    ("ignoring the edge", "ignored-edge"),
+    ("clipboard-trace", "clipboard-change"),
+    ("sharing copied text", "clipboard-share"),
+    ("local text copy", "clipboard-read"),
+    ("wayland data control", "clipboard-init"),
+    ("clipboard", "clipboard"),
+    ("terminating", "shutdown"),
+    ("daemon stopped", "stopped"),
+    ("exited", "exited"),
+    ("creating input", "starting"),
+    ("using emulation backend", "backend"),
+    ("using capture backend", "backend"),
+    ("history", "history"),
+    ("dtls", "dtls"),
+    ("listening", "listen"),
+];
+
+/// A short name for what happened, never empty.
 fn classify_event(message: &str) -> String {
+    // Route steps name themselves: `[route] HOP client 0 ...` is a hop.
     if let Some(step) = message
         .strip_prefix("[route] ")
         .and_then(|rest| rest.split_whitespace().next())
     {
-        return step.to_owned();
+        return step.to_ascii_lowercase();
     }
-    let words: Vec<&str> = message.split_whitespace().collect();
-    if let Some(index) = words.iter().position(|word| *word == "client") {
-        if let Some(handle) = words.get(index + 1) {
-            let handle = handle.trim_matches(|c: char| !c.is_ascii_alphanumeric());
-            if !handle.is_empty() {
-                return format!("client {handle}");
-            }
+    // Raw capture events: what the input was, not the plumbing around it.
+    if message.starts_with("capture event") {
+        let event = metadata_value(message, "event").unwrap_or_default();
+        return match () {
+            _ if event.contains("Motion") => "motion",
+            _ if event.contains("Button") => "button",
+            _ if event.contains("Axis") || event.contains("Scroll") => "scroll",
+            _ if event.contains("Key") => "key",
+            _ if event.starts_with("Begin") => "begin",
+            _ => "capture-event",
         }
+        .to_owned();
     }
-    words
-        .iter()
-        .map(|word| word.trim_matches(|c: char| ",;()[]".contains(c)))
-        .find(|word| word.parse::<std::net::SocketAddr>().is_ok())
-        .map(str::to_owned)
-        .unwrap_or_default()
+    let text = message.to_ascii_lowercase();
+    if let Some((_, event)) = EVENT_RULES.iter().find(|(needle, _)| text.contains(needle)) {
+        return (*event).to_owned();
+    }
+    // No rule: the message's own first word beats an empty cell.
+    let word: String = text
+        .split_whitespace()
+        .next()
+        .unwrap_or("log")
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect();
+    if word.is_empty() { "log".into() } else { word }
 }
 
 fn normalize_direction(value: String) -> String {
@@ -283,11 +349,19 @@ fn classify_stage(target: &str, message: &str) -> String {
     }
 }
 
+/// Where the live log arrives.
+///
+/// This must resolve exactly as the publisher's path does. The two used to
+/// differ wherever there is no XDG runtime directory (Android sets an
+/// explicit path; macOS uses its cache directory), so the view listened on a
+/// file nobody wrote to and stayed empty.
 pub fn socket_path() -> PathBuf {
-    std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join(SOCKET_NAME)
+    syntra_api::paths::diagnostics_socket().unwrap_or_else(|_| {
+        std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join(SOCKET_NAME)
+    })
 }
 
 #[cfg(unix)]
@@ -473,29 +547,116 @@ impl LiveDiagnosticReceiver {
 mod tests {
     use super::*;
 
-    /// Lines without key=value metadata still fill Direction and Event.
+    /// Real daemon lines, each with the direction and event it should get.
     #[test]
-    fn direction_and_event_are_inferred_from_plain_log_lines() {
-        let route =
-            parse_record("[t][INFO][syntra::capture] [route] HOP client 0 (Left edge) -> client 1")
-                .unwrap();
-        assert_eq!(
-            (route.direction.as_str(), route.correlation.as_str()),
-            ("outgoing", "HOP")
-        );
-        let entry = parse_record("[t][INFO][syntra::emulation] accepting entry from 10.0.0.3:4242")
-            .unwrap();
-        assert_eq!(
-            (entry.direction.as_str(), entry.correlation.as_str()),
-            ("incoming", "10.0.0.3:4242")
-        );
-        let ack = parse_record("[t][INFO][syntra::capture] client 1 acknowledged entry").unwrap();
-        assert_eq!(ack.correlation, "client 1");
-        let plain = parse_record("[t][INFO][syntra] service started").unwrap();
-        assert_eq!(
-            (plain.direction.as_str(), plain.correlation.as_str()),
-            ("", "")
-        );
+    fn direction_and_event_are_inferred_from_real_log_lines() {
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "[route] HOP client 0 (Left edge) -> client 1",
+                "outgoing",
+                "hop",
+            ),
+            (
+                "[route] IN  10.0.0.3:4242 enters on the right edge (from this device's layout)",
+                "incoming",
+                "in",
+            ),
+            (
+                "[route] HOME pointer returns through the Right edge (client 1)",
+                "incoming",
+                "home",
+            ),
+            ("accepting entry from 10.0.0.3:4242", "incoming", "entry"),
+            ("client 1 acknowledged entry", "incoming", "ack"),
+            ("entering client 1 ...", "outgoing", "enter"),
+            ("sending Leave event to client 1", "outgoing", "leave"),
+            (
+                "releasing capture: remote input unavailable",
+                "local",
+                "release",
+            ),
+            (
+                "rejecting capture: client 0 cannot accept remote input",
+                "local",
+                "rejected",
+            ),
+            (
+                "handoff from client 1 refused: client 0 cannot accept input",
+                "incoming",
+                "refused",
+            ),
+            (
+                "hand-off from client 1 leads back here; taking the pointer home",
+                "incoming",
+                "handoff",
+            ),
+            (
+                "client (2) connecting ... (ips: [10.0.0.3])",
+                "outgoing",
+                "connecting",
+            ),
+            (
+                "failed to connect to 10.0.0.3:4242: `Connection timed out`",
+                "outgoing",
+                "connect-failed",
+            ),
+            (
+                "client (2) connected @ 10.0.0.3:4242",
+                "incoming",
+                "connected",
+            ),
+            (
+                "peer state handle=1 connected=true remote_ready=true version_known=true",
+                "incoming",
+                "peer-state",
+            ),
+            (
+                "dtls client disconnected 10.0.0.3:5555",
+                "incoming",
+                "disconnected",
+            ),
+            (
+                "sharing copied text (12 bytes) with 2 device(s)",
+                "outgoing",
+                "clipboard-share",
+            ),
+            (
+                "local text copy noticed; reading the clipboard (legacy=true)",
+                "local",
+                "clipboard-read",
+            ),
+            (
+                "Tried to initialize the wayland data control protocol clipboard, but failed.",
+                "local",
+                "clipboard-init",
+            ),
+            (
+                "independent pointers refused: needs a GNOME setting",
+                "local",
+                "pointers",
+            ),
+            ("terminating service ...", "local", "shutdown"),
+            ("daemon stopped", "local", "stopped"),
+            (
+                "capture event handle=0 event=Input(Pointer(Motion { time: 1, dx: 2.0, dy: 3.0 })) ready=true",
+                "local",
+                "motion",
+            ),
+            (
+                "capture event handle=0 event=Begin ready=false barrier=true active=false",
+                "local",
+                "begin",
+            ),
+            ("service started", "local", "service"),
+        ];
+        for (message, direction, event) in cases {
+            let record = parse_record(&format!("[t][INFO][syntra] {message}")).unwrap();
+            assert_eq!(
+                (record.direction.as_str(), record.correlation.as_str()),
+                (*direction, *event),
+                "for `{message}`"
+            );
+        }
     }
 
     #[test]

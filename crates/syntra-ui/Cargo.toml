@@ -71,6 +71,7 @@ image = { version = "0.25", default-features = false }
 ksni = { version = "0.3.6", default-features = false, features = ["blocking", "async-io"] }
 x11rb = "0.13"
 wayland-client = "0.31.14"
+wayland-cursor = "0.31.14"
 wayland-backend = { version = "0.3.15", features = ["client_system"] }
 wayland-protocols = { version = "0.32", features = ["client"] }
 url = "2"

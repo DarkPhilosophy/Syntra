@@ -1,7 +1,12 @@
 import { Theme } from "../theme.slint";
 
 export struct DiagnosticEntry {
+    /// Day and month, `29.09`.
+    date: string,
+    /// Local time, always `HH:MM:SS.mmm`.
     timestamp: string,
+    /// Full date and time, for the detail view and for copying.
+    stamp: string,
     level: string,
     stage: string,
     direction: string,
@@ -10,13 +15,33 @@ export struct DiagnosticEntry {
 }
 
 export global DiagnosticColumns {
-    in-out property <[float]> fractions: [0.16, 0.07, 0.11, 0.09, 0.13, 0.44];
-    public function resize(index: int, amount: float) {
+    // Date, time, level, stage, direction, event, message.
+    in-out property <[float]> fractions: [0.06, 0.135, 0.095, 0.105, 0.105, 0.15, 0.35];
+
+    /// Share of the row the shown columns take up, so they fill it exactly.
+    public pure function total(shown: [bool]) -> float {
+        return (shown[0] ? fractions[0] : 0) + (shown[1] ? fractions[1] : 0) + (shown[2] ? fractions[2] : 0)
+            + (shown[3] ? fractions[3] : 0) + (shown[4] ? fractions[4] : 0) + (shown[5] ? fractions[5] : 0)
+            + fractions[6];
+    }
+
+    /// The next shown column after `index`. The message column is always
+    /// shown, so every column before it has one.
+    public pure function next(shown: [bool], index: int) -> int {
+        return shown[index + 1] ? index + 1
+            : shown[index + 2] ? index + 2
+            : shown[index + 3] ? index + 3
+            : shown[index + 4] ? index + 4
+            : shown[index + 5] ? index + 5
+            : index + 6;
+    }
+
+    public function resize(index: int, target: int, amount: float) {
         let left = fractions[index];
-        let right = fractions[index + 1];
+        let right = fractions[target];
         let delta = clamp(amount, 0.035 - left, right - 0.035);
         fractions[index] = left + delta;
-        fractions[index + 1] = right - delta;
+        fractions[target] = right - delta;
     }
 }
 
@@ -63,10 +88,18 @@ export component DiagnosticRow inherits Rectangle {
     in property <bool> compact: false;
     in property <bool> header: false;
     in property <bool> selected: false;
+    /// Which columns are shown: date, time, level, stage, direction, event,
+    /// message.
+    in property <[bool]> shown: [true, true, true, true, true, true, true];
     callback clicked();
-    height: root.compact && !root.header
-        ? 2 * Theme.caption-size * 1.5 + Theme.body-size * 1.5 + 3 * Theme.small-spacing
-        : root.compact ? 2 * Theme.caption-size * 1.5 + 2 * Theme.small-spacing
+    // Phone rows have up to three lines: when and what, who and which
+    // event, then the message. A line with nothing shown is left out.
+    private property <bool> has-when-line: root.shown[0] || root.shown[1] || root.shown[2] || root.shown[3];
+    private property <bool> has-event-line: root.shown[4] || root.shown[5];
+    height: root.compact
+        ? (root.has-when-line ? Theme.caption-size * 1.5 + 2px : 0px)
+            + (root.has-event-line ? Theme.caption-size * 1.5 + 2px : 0px)
+            + Theme.body-size * 1.5 + 2 * Theme.small-spacing
         : max(header ? 36px : 44px, Theme.body-size * 2 + Theme.small-spacing);
     vertical-stretch: 0;
     horizontal-stretch: 1;
@@ -79,44 +112,42 @@ export component DiagnosticRow inherits Rectangle {
         mouse-cursor: root.header ? default : pointer;
         clicked => { root.clicked(); }
     }
-    // Phone: every field, labelled line above the message, full width.
-    if root.compact && !root.header: VerticalLayout {
+    // Phone: the fields the user chose, in up to three lines.
+    if root.compact: VerticalLayout {
         padding-left: Theme.small-spacing;
         padding-right: Theme.small-spacing;
         padding-top: Theme.small-spacing;
         spacing: 2px;
-        Text {
-            text: root.entry.timestamp + " · " + root.entry.level + " · " + root.entry.stage;
-            color: root.entry.level == "error" ? Theme.danger : root.entry.level == "warning" ? Theme.warning : Theme.muted-text;
-            font-size: Theme.caption-size;
-            overflow: elide;
+        if root.has-when-line: HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+            if root.shown[0]: Text { text: root.entry.date; color: Theme.muted-text; font-size: Theme.caption-size; }
+            if root.shown[1]: Text { text: root.entry.timestamp; color: Theme.muted-text; font-size: Theme.caption-size; }
+            if root.shown[2]: Text {
+                text: root.entry.level;
+                color: root.header ? Theme.muted-text : root.entry.level == "error" ? Theme.danger : root.entry.level == "warning" ? Theme.warning : Theme.accent;
+                font-size: Theme.caption-size;
+            }
+            if root.shown[3]: Text { text: root.entry.stage; color: Theme.muted-text; font-size: Theme.caption-size; overflow: elide; }
         }
-        // Second line: direction and event, or a dash when the line has none.
-        Text {
-            text: (root.entry.direction != "" ? root.entry.direction : "—") + " · " + (root.entry.correlation != "" ? root.entry.correlation : "—");
-            color: Theme.muted-text;
-            font-size: Theme.caption-size;
-            overflow: elide;
+        if root.has-event-line: HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+            if root.shown[4]: Text { text: root.entry.direction != "" ? root.entry.direction : "—"; color: Theme.muted-text; font-size: Theme.caption-size; }
+            if root.shown[5]: Text { text: root.entry.correlation != "" ? root.entry.correlation : "—"; color: Theme.muted-text; font-size: Theme.caption-size; overflow: elide; }
         }
-        Text { text: root.entry.message; color: Theme.text; font-size: Theme.body-size; overflow: elide; }
-    }
-    // Phone header: names the fields shown on each line.
-    if root.compact && root.header: VerticalLayout {
-        padding-left: Theme.small-spacing;
-        padding-right: Theme.small-spacing;
-        alignment: center;
-        Text { text: root.entry.timestamp + " · " + root.entry.level + " · " + root.entry.stage; color: Theme.muted-text; font-size: Theme.caption-size; overflow: elide; }
-        Text { text: root.entry.direction + " · " + root.entry.correlation + " · " + root.entry.message; color: Theme.muted-text; font-size: Theme.caption-size; overflow: elide; }
+        Text { text: root.entry.message; color: root.header ? Theme.muted-text : Theme.text; font-size: Theme.body-size; overflow: elide; }
     }
     if !root.compact: HorizontalLayout {
         spacing: 0px;
-        for value[index] in [root.entry.timestamp, root.entry.level, root.entry.stage, root.entry.direction, root.entry.correlation, root.entry.message]: DiagnosticCell {
-            width: root.width * DiagnosticColumns.fractions[index];
+        for value[index] in [root.entry.date, root.entry.timestamp, root.entry.level, root.entry.stage, root.entry.direction, root.entry.correlation, root.entry.message]: DiagnosticCell {
+            visible: root.shown[index];
+            width: root.shown[index] ? root.width * DiagnosticColumns.fractions[index] / DiagnosticColumns.total(root.shown) : 0px;
             value: value;
-            resizable: root.header && index < 5;
+            resizable: root.header && index < 6 && root.shown[index];
             row-width: root.width;
-            foreground: root.header ? Theme.muted-text : index == 1 ? (root.entry.level == "error" ? Theme.danger : root.entry.level == "warning" ? Theme.warning : Theme.accent) : index == 5 ? Theme.text : Theme.muted-text;
-            resize(amount) => { DiagnosticColumns.resize(index, amount); }
+            foreground: root.header ? Theme.muted-text : index == 2 ? (root.entry.level == "error" ? Theme.danger : root.entry.level == "warning" ? Theme.warning : Theme.accent) : index == 6 ? Theme.text : Theme.muted-text;
+            resize(amount) => { DiagnosticColumns.resize(index, DiagnosticColumns.next(root.shown, index), amount * DiagnosticColumns.total(root.shown)); }
         }
     }
 }

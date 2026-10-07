@@ -67,6 +67,10 @@ impl Default for UpdatePreferences {
     }
 }
 
+/// Columns of the diagnostics list: date, time, level, stage, direction,
+/// event and message.
+pub const DIAGNOSTIC_COLUMNS: u32 = 7;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PresentationSettings {
     pub locale: String,
@@ -79,6 +83,15 @@ pub struct PresentationSettings {
     pub reduced_motion: bool,
     pub sidebar_open: bool,
     pub suppress_popups: bool,
+    /// Bit `n` set hides diagnostics column `n`.
+    pub hidden_diagnostic_columns: u32,
+    /// A glow along the screen edge a pointer from another device came in
+    /// through, starting at the place it entered.
+    pub entry_glow: bool,
+    /// Colour of that glow, `#rrggbb`; empty means the accent colour.
+    pub entry_glow_color: String,
+    /// Cycle the glow through the colours of the rainbow instead.
+    pub entry_glow_rainbow: bool,
     pub local_device: DevicePresentation,
     pub devices: BTreeMap<String, DevicePresentation>,
     pub updates: UpdatePreferences,
@@ -106,6 +119,16 @@ struct PresentationSettingsWire {
     sidebar_open: bool,
     #[serde(default)]
     suppress_popups: bool,
+    // The date takes room the message needs; it stays in the detail view and
+    // in copied lines, and can be shown from the column chooser.
+    #[serde(default = "default_hidden_diagnostic_columns")]
+    hidden_diagnostic_columns: u32,
+    #[serde(default = "default_entry_glow")]
+    entry_glow: bool,
+    #[serde(default)]
+    entry_glow_color: String,
+    #[serde(default)]
+    entry_glow_rainbow: bool,
     #[serde(default)]
     local_device: DevicePresentation,
     #[serde(default)]
@@ -175,6 +198,11 @@ impl<'de> Deserialize<'de> for PresentationSettings {
             reduced_motion: wire.reduced_motion,
             sidebar_open: wire.sidebar_open,
             suppress_popups: wire.suppress_popups,
+            hidden_diagnostic_columns: wire.hidden_diagnostic_columns,
+            entry_glow: wire.entry_glow,
+            // Empty means "use the accent": only a real colour overrides it.
+            entry_glow_color: normalize_color(wire.entry_glow_color, String::new()),
+            entry_glow_rainbow: wire.entry_glow_rainbow,
             local_device: wire.local_device,
             devices: wire.devices,
             updates: wire.updates,
@@ -193,6 +221,16 @@ fn default_titlebar_color() -> String {
 }
 fn default_sidebar() -> bool {
     true
+}
+/// The entry glow starts on: it is how a pointer coming in from another device
+/// is noticed, and it is one setting away from off.
+fn default_entry_glow() -> bool {
+    true
+}
+
+/// Only the date (column 0) starts hidden.
+fn default_hidden_diagnostic_columns() -> u32 {
+    1
 }
 
 fn normalize_color(value: String, fallback: String) -> String {
@@ -220,6 +258,10 @@ impl Default for PresentationSettings {
             reduced_motion: false,
             sidebar_open: true,
             suppress_popups: false,
+            hidden_diagnostic_columns: default_hidden_diagnostic_columns(),
+            entry_glow: true,
+            entry_glow_color: String::new(),
+            entry_glow_rainbow: false,
             local_device: DevicePresentation::default(),
             devices: BTreeMap::new(),
             updates: UpdatePreferences::default(),
@@ -285,6 +327,21 @@ mod tests {
     fn missing_presentation_settings_use_backward_compatible_defaults() {
         let settings: PresentationSettings = serde_json::from_str("{}").unwrap();
         assert_eq!(settings, PresentationSettings::default());
+    }
+
+    /// Only the date starts hidden, and showing everything is a choice that
+    /// must survive a save and reload (zero is not "unset").
+    #[test]
+    fn diagnostic_columns_start_without_the_date_and_keep_the_users_choice() {
+        let default: PresentationSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(default.hidden_diagnostic_columns, 0b1);
+
+        let everything: PresentationSettings =
+            serde_json::from_str(r#"{"hidden_diagnostic_columns":0}"#).unwrap();
+        assert_eq!(everything.hidden_diagnostic_columns, 0);
+        let reloaded: PresentationSettings =
+            serde_json::from_str(&serde_json::to_string(&everything).unwrap()).unwrap();
+        assert_eq!(reloaded.hidden_diagnostic_columns, 0);
     }
 
     #[test]

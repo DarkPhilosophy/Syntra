@@ -658,6 +658,7 @@ mod linux {
                     paste: true,
                     cancel: true,
                     requires_live_mount: true,
+                    pointer_events: false,
                     mime_types: vec![
                         "text/uri-list".into(),
                         "x-special/gnome-copied-files".into(),

@@ -197,6 +197,9 @@ impl Emulation for AndroidEmulation {
         call("enter", "(I)V", &[JValue::Int(side)]);
     }
 
+    fn hide_pointer(&mut self) {
+        call("leave", "()V", &[]);
+    }
     async fn create(&mut self, _handle: EmulationHandle) {}
     async fn destroy(&mut self, _handle: EmulationHandle) {
         call("leave", "()V", &[]);

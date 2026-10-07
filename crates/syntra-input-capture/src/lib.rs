@@ -54,6 +54,11 @@ pub type CaptureHandle = u64;
 pub enum CaptureEvent {
     /// capture on this capture handle is now active
     Begin,
+    /// Where along the edge the pointer was when capture began, from 0.0 at
+    /// the start of the edge to 1.0 at its end. A fraction, so it carries over
+    /// between screens of different resolution. Sent right after `Begin` by the
+    /// backends that know the position; the others never send it.
+    Entry { along: f32 },
     /// input event coming from capture handle
     Input(Event),
     /// Clipboard selection read through the native desktop portal.
@@ -64,6 +69,7 @@ impl Display for CaptureEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CaptureEvent::Begin => write!(f, "begin capture"),
+            CaptureEvent::Entry { along } => write!(f, "entry at {along:.3}"),
             CaptureEvent::Input(e) => write!(f, "{e}"),
             CaptureEvent::Clipboard { mime_type, data } => {
                 write!(f, "clipboard {mime_type} ({} bytes)", data.len())
@@ -204,9 +210,21 @@ impl InputCapture {
     /// pointer comes back through that edge, not the one it left through.
     /// Returns whether the backend placed the pointer itself.
     pub async fn release_at(&mut self, landing: Position) -> Result<bool, CaptureError> {
+        self.release_at_along(landing, None).await
+    }
+
+    /// Like [`release_at`](Self::release_at), leaving the pointer at `along`, a
+    /// share of the edge from 0.0 (its start) to 1.0 (its end), so the place
+    /// holds on a screen of any resolution. `None` keeps it level with where
+    /// it was.
+    pub async fn release_at_along(
+        &mut self,
+        landing: Position,
+        along: Option<f32>,
+    ) -> Result<bool, CaptureError> {
         self.pressed_keys.clear();
         self.pressed_buttons.clear();
-        self.capture.release_at(landing).await
+        self.capture.release_at_along(landing, along).await
     }
 
     /// Drain every pointer button forwarded as down-but-not-up.
@@ -347,6 +365,17 @@ trait Capture: Stream<Item = Result<(Position, CaptureEvent), CaptureError>> + U
     /// return `false`.
     async fn release_at(&mut self, _landing: Position) -> Result<bool, CaptureError> {
         self.release().await.map(|()| false)
+    }
+
+    /// Like `release_at`, and also says what share of that edge, from 0.0 to
+    /// 1.0, the pointer should be left at. Backends that cannot place it on an
+    /// edge at all ignore the share, as they ignore the edge.
+    async fn release_at_along(
+        &mut self,
+        landing: Position,
+        _along: Option<f32>,
+    ) -> Result<bool, CaptureError> {
+        self.release_at(landing).await
     }
 
     /// destroy the input capture

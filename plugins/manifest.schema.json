@@ -65,16 +65,68 @@
     "args": { "type": "array", "items": { "type": "string" } },
     "capabilities": {
       "type": "object",
-      "required": ["clipboard_read", "paste", "cancel", "mime_types"],
+      "description": "What the plugin does. A clipboard or transfer plugin declares the clipboard fields and at least one MIME type. A plugin that only reacts to the pointer declares `pointer_events` and none of those.",
       "properties": {
         "clipboard_read": { "type": "boolean" },
         "paste": { "type": "boolean" },
         "cancel": { "type": "boolean" },
         "requires_live_mount": { "type": "boolean", "default": false },
+        "pointer_events": {
+          "type": "boolean",
+          "default": false,
+          "description": "True when the plugin wants to be told as a pointer enters, leaves or pushes against a screen edge. The daemon then launches it, sends it its settings after the handshake, and forwards those events. Such a plugin only listens; anything it sends other than an error report stops it."
+        },
         "mime_types": {
           "type": "array",
-          "minItems": 1,
           "items": { "type": "string", "minLength": 1 }
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["clipboard_read", "paste", "cancel", "mime_types"],
+          "properties": { "mime_types": { "minItems": 1 } }
+        },
+        {
+          "required": ["pointer_events"],
+          "properties": {
+            "pointer_events": { "const": true },
+            "mime_types": { "maxItems": 0 }
+          }
+        }
+      ]
+    },
+    "settings": {
+      "type": "array",
+      "description": "What the user can change. The plugin manager draws a control for each, stores the choice per plugin, and hands the current values to the plugin after its handshake and whenever one changes.",
+      "items": {
+        "type": "object",
+        "required": ["key", "label", "kind"],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Name the plugin receives the value under."
+          },
+          "label": { "type": "string", "minLength": 1 },
+          "kind": { "enum": ["toggle", "choice", "color", "number"] },
+          "default": {
+            "type": "string",
+            "description": "Value until the user chooses one, written as the wire form: `true` or `false`, an option value, a number, or `#rrggbb`."
+          },
+          "options": {
+            "type": "array",
+            "description": "Required for `choice`.",
+            "items": {
+              "type": "object",
+              "required": ["value", "label"],
+              "properties": {
+                "value": { "type": "string", "minLength": 1 },
+                "label": { "type": "string", "minLength": 1 }
+              }
+            }
+          },
+          "min": { "type": "integer", "description": "Lowest value of a `number`." },
+          "max": { "type": "integer", "description": "Highest value of a `number`." }
         }
       }
     }

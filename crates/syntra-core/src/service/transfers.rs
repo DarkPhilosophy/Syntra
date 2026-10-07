@@ -17,10 +17,11 @@ use super::*;
 ///
 /// The supervisor keys FUSE adapters by transfer, but the plugin manager
 /// shows one entry per plugin, so every FUSE process reports the same id.
-fn plugin_id(adapter: &ProcessAdapterId) -> &'static str {
+fn plugin_id(adapter: &ProcessAdapterId) -> &str {
     match adapter {
         ProcessAdapterId::Gtk => crate::plugins::CLIPBOARD_PLUGIN_ID,
         ProcessAdapterId::Fuse { .. } => crate::plugins::FUSE_PLUGIN_ID,
+        ProcessAdapterId::Plugin(id) => id,
     }
 }
 
@@ -60,6 +61,7 @@ impl Service {
                 let adapter_id = match &adapter {
                     ProcessAdapterId::Gtk => "gtk-clipboard".to_owned(),
                     ProcessAdapterId::Fuse { transfer_id } => transfer_id.clone(),
+                    ProcessAdapterId::Plugin(id) => id.clone(),
                 };
                 let actions = match message {
                     AdapterMessage::RangeRequest(request) => {
@@ -188,6 +190,8 @@ impl Service {
                     }
                     AdapterMessage::Hello { .. }
                     | AdapterMessage::Error { .. }
+                    | AdapterMessage::Settings { .. }
+                    | AdapterMessage::Pointer(_)
                     | AdapterMessage::PasteDestination(_)
                     | AdapterMessage::RangeResponse(_)
                     | AdapterMessage::PublishFileClipboard(_)
@@ -210,6 +214,7 @@ impl Service {
                 let adapter_id = match &adapter {
                     ProcessAdapterId::Gtk => "gtk-clipboard".to_owned(),
                     ProcessAdapterId::Fuse { transfer_id } => transfer_id.clone(),
+                    ProcessAdapterId::Plugin(id) => id.clone(),
                 };
                 if let Ok(actions) = self
                     .transfers
@@ -224,12 +229,17 @@ impl Service {
             ManagerEvent::Exited { adapter, status } => {
                 self.plugins.set_exited(plugin_id(&adapter), status.clone());
                 self.publish_plugins();
-                let id = match adapter {
-                    ProcessAdapterId::Gtk => "gtk-clipboard".to_owned(),
-                    ProcessAdapterId::Fuse { transfer_id } => transfer_id,
-                };
-                let actions = self.transfers.adapter_lost(&id);
-                self.execute_transfer_actions(actions);
+                // A generic plugin takes part in no transfer, so its exit has
+                // nothing to cancel; the registry update above is all it needs.
+                if !matches!(adapter, ProcessAdapterId::Plugin(_)) {
+                    let id = match adapter {
+                        ProcessAdapterId::Gtk => "gtk-clipboard".to_owned(),
+                        ProcessAdapterId::Fuse { transfer_id } => transfer_id,
+                        ProcessAdapterId::Plugin(_) => unreachable!("excluded above"),
+                    };
+                    let actions = self.transfers.adapter_lost(&id);
+                    self.execute_transfer_actions(actions);
+                }
                 log::warn!("adapter exited: {}", status);
             }
         }

@@ -1,0 +1,12 @@
+[Unit]
+Description=Restart Syntra when a graphical session starts
+# Backends that need the desktop (portals, the compositor) are tried again with
+# the session's environment. Enable it together with syntra.service.
+After=graphical-session.target
+
+[Service]
+Type=oneshot
+ExecStart=systemctl --user try-restart syntra.service
+
+[Install]
+WantedBy=graphical-session.target

@@ -34,7 +34,7 @@
 
 mod logger;
 
-pub use logger::{InstallError, Logger, Mirror, install};
+pub use logger::{InstallError, Logger, Mirror, install, install_with_tee};
 
 use std::fmt;
 use std::str::FromStr;

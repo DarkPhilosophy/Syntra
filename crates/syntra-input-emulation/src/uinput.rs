@@ -73,6 +73,16 @@ pub(crate) struct UinputEmulation {
     /// When set, each peer drives its own pen-tablet cursor instead of the
     /// shared pointer.
     independent: bool,
+    /// Whether the compositor draws a cursor for each pen. Where it does not
+    /// (gamescope), independent pointers move the shared pointer and follow
+    /// its position in `trackers`, so the peer can still be left by an edge.
+    pen_cursors: bool,
+    trackers: HashMap<EmulationHandle, PenState>,
+    /// Edge the shared pointer was last placed at on entry.
+    entry_edge: Option<PointerEdge>,
+    /// Where along that edge the peer came in, as a share of the edge from 0.0
+    /// to 1.0, for the pointers placed by absolute position.
+    entry_along: Option<f32>,
     pointers: HashMap<EmulationHandle, PeerPointer>,
     /// Pens of peers that left. Handles are per-session, so every re-entry
     /// would otherwise create a new device, swallow motion while the
@@ -89,6 +99,10 @@ impl UinputEmulation {
             device,
             scroll: ScrollAccumulator::default(),
             independent: false,
+            pen_cursors: pen_cursors_supported(),
+            trackers: HashMap::new(),
+            entry_edge: None,
+            entry_along: None,
             pointers: HashMap::new(),
             idle: Vec::new(),
         })
@@ -107,10 +121,43 @@ impl UinputEmulation {
             // A pen has no wheel: scrolling goes through the shared device.
             return Ok(false);
         }
+        if !self.pen_cursors {
+            // The compositor draws no cursor for a pen: the shared pointer
+            // does the moving and only the position is followed here, to
+            // notice when the peer pushes off an edge.
+            let entry_edge = self.entry_edge;
+            let entry_along = self.entry_along;
+            let tracker = self.trackers.entry(handle).or_insert_with(|| {
+                let mut pen = PenState::new(pointer_area());
+                if let Some(edge) = entry_edge {
+                    pen.enter_at(edge, entry_along);
+                }
+                pen
+            });
+            if matches!(pointer_event, PointerEvent::Motion { .. }) {
+                tracker.track(pointer_event);
+            }
+            return Ok(false);
+        }
         let pointer = match self.pointers.entry(handle) {
             std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
             std::collections::hash_map::Entry::Vacant(entry) => match self.idle.pop() {
-                Some(pointer) => entry.insert(pointer),
+                Some(mut pointer) => {
+                    if let Some(edge) = self.entry_edge {
+                        pointer.pen.enter_at(edge, self.entry_along);
+                    }
+                    // Keep a settled pen ready for the next peer: one made at
+                    // its entry would not be open in the compositor yet.
+                    if self.idle.is_empty() {
+                        match PeerPointer::create(u64::MAX, pointer_area()) {
+                            Ok(spare) => self.idle.push(spare),
+                            Err(error) => {
+                                log::warn!("could not prepare a spare independent pointer: {error}")
+                            }
+                        }
+                    }
+                    entry.insert(pointer)
+                }
                 None => {
                     let area = pointer_area();
                     log::info!(
@@ -118,7 +165,11 @@ impl UinputEmulation {
                         area.0,
                         area.1
                     );
-                    entry.insert(PeerPointer::create(handle, area)?)
+                    let mut pointer = PeerPointer::create(handle, area)?;
+                    if let Some(edge) = self.entry_edge {
+                        pointer.pen.enter_at(edge, self.entry_along);
+                    }
+                    entry.insert(pointer)
                 }
             },
         };
@@ -217,7 +268,14 @@ struct PenState {
     in_proximity: bool,
     /// Edge the last motion tried to cross.
     edge: Option<PointerEdge>,
+    /// Push against the edge so far and when it last changed: it builds with
+    /// every push outwards, leaks while the user rests, and starts again
+    /// from zero once the pen is away from the edges.
+    pressure: f64,
+    pressure_at: std::time::Instant,
 }
+
+use crate::push_against_edge;
 
 impl PenState {
     fn new(area: (i32, i32)) -> Self {
@@ -226,7 +284,42 @@ impl PenState {
             position: (f64::from(area.0) / 2.0, f64::from(area.1) / 2.0),
             in_proximity: false,
             edge: None,
+            pressure: 0.0,
+            pressure_at: std::time::Instant::now(),
         }
+    }
+
+    /// A recycled pen must not resume where the last peer left it: pinned at
+    /// an edge, the next peer's first push that way would leave at once.
+    fn recenter(&mut self) {
+        self.position = (f64::from(self.area.0) / 2.0, f64::from(self.area.1) / 2.0);
+        self.edge = None;
+        self.pressure = 0.0;
+    }
+
+    /// Puts the followed position where the shared pointer lands when a peer
+    /// enters through `edge`: the edge, less the entry inset. Along the edge
+    /// it is at `along`, a share of the edge's length from 0.0 to 1.0, so it
+    /// means the same on a screen of any resolution; with none given it is
+    /// the middle.
+    fn enter_at(&mut self, edge: PointerEdge, along: Option<f32>) {
+        let (w, h) = (f64::from(self.area.0), f64::from(self.area.1));
+        let inset = f64::from(ENTRY_INSET);
+        // The share, as a distance along the edge, kept on the screen. A value
+        // that is not a number counts as none given: the middle.
+        let share = along
+            .filter(|share| share.is_finite())
+            .map_or(0.5, |share| f64::from(share).clamp(0.0, 1.0));
+        let across = share * (w - 1.0).max(0.0);
+        let down = share * (h - 1.0).max(0.0);
+        self.position = match edge {
+            PointerEdge::Left => (inset, down),
+            PointerEdge::Right => (w - 1.0 - inset, down),
+            PointerEdge::Top => (across, inset),
+            PointerEdge::Bottom => (across, h - 1.0 - inset),
+        };
+        self.edge = None;
+        self.pressure = 0.0;
     }
 }
 
@@ -291,10 +384,16 @@ impl PenState {
     fn translate(&mut self, event: PointerEvent) -> Vec<RawEvent> {
         let mut events = Vec::with_capacity(4);
         if !self.in_proximity {
-            // Entering proximity makes the cursor appear where it last was.
+            // A real proximity-out disables libinput's forced 50 ms
+            // proximity timeout for this virtual tablet. Keep each transition
+            // in its own frame, then enter normally before the actual input.
             self.in_proximity = true;
             events.push(raw(EV_ABS, ABS_X, self.position.0 as i32));
             events.push(raw(EV_ABS, ABS_Y, self.position.1 as i32));
+            events.push(raw(EV_KEY, BTN_TOOL_PEN, 1));
+            events.push(SYN);
+            events.push(raw(EV_KEY, BTN_TOOL_PEN, 0));
+            events.push(SYN);
             events.push(raw(EV_KEY, BTN_TOOL_PEN, 1));
         }
         match event {
@@ -305,7 +404,7 @@ impl PenState {
                     // Pushing past an edge is how the user leaves this
                     // screen; the shared pointer gets the same signal from
                     // local capture, which cannot see this cursor.
-                    self.edge = if target.0 < 0.0 {
+                    let crossing = if target.0 < 0.0 {
                         Some(PointerEdge::Left)
                     } else if target.0 > max.0 {
                         Some(PointerEdge::Right)
@@ -314,8 +413,35 @@ impl PenState {
                     } else if target.1 > max.1 {
                         Some(PointerEdge::Bottom)
                     } else {
-                        self.edge
+                        None
                     };
+                    match crossing {
+                        Some(edge) => {
+                            let (total, reached) = push_against_edge(
+                                self.pressure,
+                                self.pressure_at.elapsed(),
+                                edge,
+                                dx,
+                                dy,
+                                crate::edge_pressure(),
+                            );
+                            self.pressure = total;
+                            self.pressure_at = std::time::Instant::now();
+                            if reached {
+                                self.edge = Some(edge);
+                                self.pressure = 0.0;
+                            }
+                        }
+                        // Away from every edge: whatever was pushed is over.
+                        None if target.0 > 0.0
+                            && target.0 < max.0
+                            && target.1 > 0.0
+                            && target.1 < max.1 =>
+                        {
+                            self.pressure = 0.0;
+                        }
+                        None => {}
+                    }
                     self.position.0 = target.0.clamp(0.0, max.0);
                     self.position.1 = target.1.clamp(0.0, max.1);
                     events.push(raw(EV_ABS, ABS_X, self.position.0 as i32));
@@ -323,12 +449,14 @@ impl PenState {
                 }
             }
             PointerEvent::Button { button, state, .. } => {
-                // Tip for the primary button; the barrel buttons carry the
-                // secondary and middle clicks, as GNOME maps them by default.
+                // Tip for the primary button. Measured on GNOME 50 with no
+                // stylus settings: BTN_STYLUS arrives as the right click and
+                // BTN_STYLUS2 as the middle one, so the barrel buttons are
+                // assigned that way round.
                 let code = match button {
                     syntra_input_event::BTN_LEFT => Some(BTN_TOUCH),
-                    syntra_input_event::BTN_RIGHT => Some(BTN_STYLUS2),
-                    syntra_input_event::BTN_MIDDLE => Some(BTN_STYLUS),
+                    syntra_input_event::BTN_RIGHT => Some(BTN_STYLUS),
+                    syntra_input_event::BTN_MIDDLE => Some(BTN_STYLUS2),
                     _ => None,
                 };
                 if let Some(code) = code {
@@ -357,6 +485,19 @@ impl PenState {
 // No proximity-out on drop: destroying the device removes the tablet
 // sprite in one step. A separate proximity-out leaves GNOME with a sprite
 // whose cursor is unset, the state its compositor mishandles.
+
+/// What the entry's share of the edge is after a placement. A new position
+/// replaces it; none given keeps the old one only for the same edge, since
+/// the release and the ignored edge touch place the pointer again for the
+/// entry that already named it; anything not a number is no position.
+fn resolve_entry_along(same_edge: bool, previous: Option<f32>, given: Option<f32>) -> Option<f32> {
+    match given {
+        Some(share) if share.is_finite() => Some(share),
+        Some(_) => None,
+        None if same_edge => previous,
+        None => None,
+    }
+}
 
 /// Logical desktop size in pixels, which the pen range is mapped onto.
 ///
@@ -574,8 +715,23 @@ impl Emulation for UinputEmulation {
             // Dropping a peer pointer lifts its pen, releasing its buttons.
             self.pointers.clear();
             self.idle.clear();
+            self.trackers.clear();
         }
         self.independent = enabled;
+        // A pen created at the moment of the first entry is not open in the
+        // compositor yet: its proximity-in is lost, the cursor flickers or
+        // never appears, and a later proximity-out then reaches GNOME Shell
+        // for a tool it never saw enter. One pen made ahead has long been
+        // discovered by the time a peer arrives.
+        if enabled && self.pen_cursors && self.idle.is_empty() && self.pointers.is_empty() {
+            match PeerPointer::create(u64::MAX, pointer_area()) {
+                Ok(pointer) => {
+                    log::info!("independent pointer prepared ahead of the first peer");
+                    self.idle.push(pointer);
+                }
+                Err(error) => log::warn!("could not prepare an independent pointer: {error}"),
+            }
+        }
     }
 
     /// Moves the shared pointer next to the edge the peer entered from, so
@@ -583,8 +739,31 @@ impl Emulation for UinputEmulation {
     /// edge that would bounce it straight on. uinput is relative only: slam
     /// it against the edge, then step back inside in a separate report.
     fn place_pointer(&mut self, edge: PointerEdge) {
-        if self.independent {
+        self.place_pointer_along(edge, None);
+    }
+
+    /// Like `place_pointer`, with the pointer at `along`, a share of the edge's
+    /// length from 0.0 to 1.0, wherever a pen or a tracked pointer is placed
+    /// by absolute position. The shared pointer, moved by relative motion,
+    /// cannot be put at an exact place: it keeps its height.
+    fn place_pointer_along(&mut self, edge: PointerEdge, along: Option<f32>) {
+        // A re-placement for the same entry (the release and the ignored edge
+        // touch both ask for one) names no position of its own. It must not
+        // wipe the one the entry gave, or the pen would start in the middle.
+        let same_edge = self.entry_edge == Some(edge);
+        self.entry_along = resolve_entry_along(same_edge, self.entry_along, along);
+        if self.independent && self.pen_cursors {
+            // The compositor draws the pen where it is told: start it at the
+            // entry edge, not wherever it was left or the middle.
+            self.entry_edge = Some(edge);
             return;
+        }
+        if self.independent {
+            // Tracked pointers start where the slam below leaves the cursor.
+            self.entry_edge = Some(edge);
+            for tracker in self.trackers.values_mut() {
+                tracker.enter_at(edge, self.entry_along);
+            }
         }
         let (code, towards) = match edge {
             PointerEdge::Left => (REL_X, -1),
@@ -592,12 +771,17 @@ impl Emulation for UinputEmulation {
             PointerEdge::Top => (REL_Y, -1),
             PointerEdge::Bottom => (REL_Y, 1),
         };
-        let _ = self
+        let slam = self
             .device
             .write_events(&[raw(EV_REL, code, towards * 20_000)]);
-        let _ = self
+        let inset = self
             .device
             .write_events(&[raw(EV_REL, code, -towards * ENTRY_INSET)]);
+        log::info!(
+            "placed the pointer at the {edge:?} edge (slam {}, inset {})",
+            if slam.is_ok() { "ok" } else { "failed" },
+            if inset.is_ok() { "ok" } else { "failed" }
+        );
     }
 
     fn step_inside(&mut self, edge: PointerEdge) {
@@ -616,6 +800,9 @@ impl Emulation for UinputEmulation {
     }
 
     fn take_pointer_edge(&mut self, handle: EmulationHandle) -> Option<PointerEdge> {
+        if let Some(tracker) = self.trackers.get_mut(&handle) {
+            return tracker.edge.take();
+        }
         self.pointers.get_mut(&handle)?.pen.edge.take()
     }
 
@@ -624,10 +811,34 @@ impl Emulation for UinputEmulation {
         event: Event,
         handle: EmulationHandle,
     ) -> Result<(), EmulationError> {
+        let scroll = match event {
+            Event::Pointer(PointerEvent::Axis { axis, value, .. }) => {
+                Some(format!("axis={axis} value={value}"))
+            }
+            Event::Pointer(PointerEvent::AxisDiscrete120 { axis, value }) => {
+                Some(format!("axis={axis} discrete120={value}"))
+            }
+            _ => None,
+        };
         if self.independent && self.consume_independent(event, handle)? {
             return Ok(());
         }
         let events = self.scroll.translate(event);
+        if let Some(what) = &scroll {
+            // Which route it took, and how much came out of the translation: a
+            // scroll that was accepted but turned into nothing is otherwise
+            // indistinguishable from one that never arrived.
+            crate::scroll_trace::line(&format!(
+                "peer {handle} {what} via {} -> {} raw event(s) {:?}",
+                if self.independent {
+                    "the shared device (peer has an independent cursor)"
+                } else {
+                    "the shared device"
+                },
+                events.len(),
+                events.iter().map(|e| (e.code, e.value)).collect::<Vec<_>>()
+            ));
+        }
         self.device.write_events(&events)?;
         Ok(())
     }
@@ -637,10 +848,12 @@ impl Emulation for UinputEmulation {
     // mice. Independent pointers are created lazily on first motion.
     async fn create(&mut self, _handle: EmulationHandle) {}
     async fn destroy(&mut self, handle: EmulationHandle) {
+        self.trackers.remove(&handle);
         if let Some(mut pointer) = self.pointers.remove(&handle) {
             // Hide the cursor now; keep the device for the next entry.
             let _ = pointer.leave();
-            pointer.pen.edge = None;
+            pointer.pen.recenter();
+            // Reset happens before the device is parked for reuse.
             if self.idle.len() < MAX_IDLE_POINTERS {
                 self.idle.push(pointer);
             }
@@ -654,6 +867,24 @@ impl Emulation for UinputEmulation {
 
 /// Distance from the entry edge the shared pointer lands at, in pixels.
 const ENTRY_INSET: i32 = 40;
+
+/// Whether the running compositor gives each pen-tablet tool a cursor.
+/// Only GNOME is known to; elsewhere (gamescope draws none) the shared
+/// pointer is moved instead. `SYNTRA_PEER_CURSOR=pen|shared` overrides.
+fn pen_cursors_supported() -> bool {
+    let pen = crate::peers_have_pen_cursors();
+    log::info!(
+        "peer cursors: {}",
+        if pen {
+            "pen (the compositor draws one per peer)"
+        } else {
+            "shared pointer (followed for edges)"
+        }
+    );
+    pen
+}
+
+use crate::pen_cursors_for;
 
 /// How far the pointer is moved off an edge after a refused hand-off, in px.
 const STEP_INSIDE: i32 = 60;
@@ -684,6 +915,10 @@ mod tests {
                 raw(EV_ABS, ABS_X, 500),
                 raw(EV_ABS, ABS_Y, 250),
                 raw(EV_KEY, BTN_TOOL_PEN, 1),
+                SYN,
+                raw(EV_KEY, BTN_TOOL_PEN, 0),
+                SYN,
+                raw(EV_KEY, BTN_TOOL_PEN, 1),
                 raw(EV_ABS, ABS_X, 510),
                 raw(EV_ABS, ABS_Y, 245),
             ]
@@ -700,6 +935,68 @@ mod tests {
     }
 
     #[test]
+    fn pen_entry_primes_real_proximity_before_buttons_and_after_reuse() {
+        let mut pen = PenState::new((100, 100));
+        pen.track(PointerEvent::Motion {
+            time: 0,
+            dx: 1.0,
+            dy: 0.0,
+        });
+        for _ in 0..2 {
+            let events = pen.translate(PointerEvent::Button {
+                time: 0,
+                button: BTN_LEFT,
+                state: 1,
+            });
+            let proximity_frames: Vec<Vec<i32>> = events
+                .split(|event| *event == SYN)
+                .map(|frame| {
+                    frame
+                        .iter()
+                        .filter(|event| event.kind == EV_KEY && event.code == BTN_TOOL_PEN)
+                        .map(|event| event.value)
+                        .collect()
+                })
+                .collect();
+            assert_eq!(proximity_frames, vec![vec![1], vec![0], vec![1]]);
+            assert_eq!(events.last(), Some(&raw(EV_KEY, BTN_TOUCH, 1)));
+            let release = pen.translate(PointerEvent::Button {
+                time: 0,
+                button: BTN_LEFT,
+                state: 0,
+            });
+            assert_eq!(release, vec![raw(EV_KEY, BTN_TOUCH, 0)]);
+            pen.leave();
+            pen.recenter();
+        }
+    }
+
+    #[test]
+    fn a_pen_leaves_only_when_the_push_is_enough() {
+        use std::time::Duration;
+        let push = |so_far, idle: f64, dx| {
+            push_against_edge(
+                so_far,
+                Duration::from_secs_f64(idle),
+                PointerEdge::Right,
+                dx,
+                0.0,
+                80.0,
+            )
+        };
+        assert_eq!(push(0.0, 0.0, 30.0), (30.0, false), "a gentle push");
+        assert_eq!(push(30.0, 0.0, 30.0), (60.0, false), "builds up");
+        assert!(push(60.0, 0.0, 30.0).1, "and passes");
+        // Rest lets it go; a firm push afterwards still leaves.
+        assert!(push(60.0, 0.5, 0.0).0 < 20.0);
+        assert!(push(60.0, 0.5, 90.0).1);
+        // No pressure setting: the first touch leaves.
+        assert!(push_against_edge(0.0, Duration::ZERO, PointerEdge::Left, -1.0, 0.0, 0.0).1);
+        // Only the outward direction counts.
+        assert_eq!(push(20.0, 0.0, -50.0), (0.0, false));
+    }
+
+    #[test]
     fn peer_pen_reports_the_edge_it_is_pushed_past() {
         let mut pen = PenState::new((100, 100));
         let motion = |dx, dy| PointerEvent::Motion { time: 0, dx, dy };
@@ -713,6 +1010,119 @@ mod tests {
         assert_eq!(pen.edge.take(), Some(PointerEdge::Top));
         pen.translate(motion(10.0, 10.0));
         assert_eq!(pen.edge.take(), None);
+    }
+
+    #[test]
+    fn tracked_pointer_leaves_by_the_edge_it_entered_through() {
+        let motion = |dx| PointerEvent::Motion {
+            time: 0,
+            dx,
+            dy: 0.0,
+        };
+        let mut pen = PenState::new((1000, 600));
+        pen.enter_at(PointerEdge::Right, None);
+        // The slam leaves the cursor ENTRY_INSET short of the edge.
+        pen.track(motion(f64::from(ENTRY_INSET) - 1.0));
+        assert_eq!(pen.edge.take(), None, "still inside");
+        pen.track(motion(2.0));
+        assert_eq!(pen.edge.take(), Some(PointerEdge::Right));
+
+        pen.enter_at(PointerEdge::Left, None);
+        pen.track(motion(-f64::from(ENTRY_INSET) - 2.0));
+        assert_eq!(pen.edge.take(), Some(PointerEdge::Left));
+    }
+
+    /// The pen enters at the share of the edge it was given, so the same
+    /// share is the same place on a screen of any resolution.
+    #[test]
+    fn the_pen_enters_at_a_share_of_the_edge_whatever_the_resolution() {
+        // Two desktops of different size and shape.
+        for (w, h) in [(1920, 1080), (2880, 1800), (800, 1280)] {
+            let mut pen = PenState::new((w, h));
+            let (right_x, _) = {
+                pen.enter_at(PointerEdge::Right, Some(0.25));
+                pen.position
+            };
+            assert_eq!(right_x, f64::from(w) - 1.0 - f64::from(ENTRY_INSET));
+            // A quarter of the way down, on every resolution.
+            assert!(
+                (pen.position.1 / f64::from(h - 1) - 0.25).abs() < 1e-9,
+                "{w}x{h}: {:?}",
+                pen.position
+            );
+            pen.enter_at(PointerEdge::Left, Some(0.75));
+            assert_eq!(pen.position.0, f64::from(ENTRY_INSET));
+            assert!((pen.position.1 / f64::from(h - 1) - 0.75).abs() < 1e-9);
+        }
+    }
+
+    /// Along a horizontal edge the share runs left to right, and none given
+    /// is the middle, as before the share existed.
+    #[test]
+    fn the_pen_enters_a_horizontal_edge_left_to_right_and_defaults_to_the_middle() {
+        let mut pen = PenState::new((1001, 601));
+        pen.enter_at(PointerEdge::Top, Some(0.125));
+        assert_eq!(pen.position, (125.0, f64::from(ENTRY_INSET)));
+        pen.enter_at(PointerEdge::Bottom, None);
+        assert_eq!(pen.position, (500.0, 600.0 - f64::from(ENTRY_INSET)));
+        pen.enter_at(PointerEdge::Left, None);
+        assert_eq!(pen.position, (f64::from(ENTRY_INSET), 300.0));
+    }
+
+    /// A re-placement that names no position keeps the entry's for the same
+    /// edge; a new position replaces it; another edge forgets it.
+    #[test]
+    fn a_replacement_without_a_position_keeps_the_entrys_for_the_same_edge() {
+        assert_eq!(resolve_entry_along(true, Some(0.25), None), Some(0.25));
+        assert_eq!(
+            resolve_entry_along(true, Some(0.25), Some(0.75)),
+            Some(0.75)
+        );
+        assert_eq!(resolve_entry_along(false, Some(0.25), None), None);
+        assert_eq!(resolve_entry_along(true, None, Some(f32::NAN)), None);
+        assert_eq!(
+            resolve_entry_along(true, Some(0.5), Some(f32::INFINITY)),
+            None
+        );
+    }
+
+    /// A share outside the edge, or not a number, never puts the pen off the
+    /// screen.
+    #[test]
+    fn the_pen_never_enters_off_the_screen() {
+        let mut pen = PenState::new((1000, 600));
+        pen.enter_at(PointerEdge::Right, Some(9.0));
+        assert_eq!(pen.position.1, 599.0);
+        pen.enter_at(PointerEdge::Right, Some(-3.0));
+        assert_eq!(pen.position.1, 0.0);
+        pen.enter_at(PointerEdge::Right, Some(f32::NAN));
+        assert!(pen.position.1.is_finite());
+    }
+
+    #[test]
+    fn only_gnome_gets_pen_cursors_unless_overridden() {
+        assert!(pen_cursors_for(true, None));
+        assert!(!pen_cursors_for(false, None));
+        assert!(pen_cursors_for(false, Some("pen")));
+        assert!(!pen_cursors_for(true, Some("shared")));
+    }
+
+    #[test]
+    fn recycled_pen_starts_from_the_centre_not_the_last_edge() {
+        let mut pen = PenState::new((100, 100));
+        pen.translate(PointerEvent::Motion {
+            time: 0,
+            dx: -500.0,
+            dy: 0.0,
+        });
+        pen.edge = None;
+        pen.recenter();
+        pen.translate(PointerEvent::Motion {
+            time: 0,
+            dx: -10.0,
+            dy: 0.0,
+        });
+        assert_eq!(pen.edge.take(), None, "first push must not leave at once");
     }
 
     #[test]
@@ -734,6 +1144,10 @@ mod tests {
         );
         assert_eq!(
             pen.translate(button(syntra_input_event::BTN_RIGHT, 1)),
+            vec![raw(EV_KEY, BTN_STYLUS, 1)]
+        );
+        assert_eq!(
+            pen.translate(button(syntra_input_event::BTN_MIDDLE, 1)),
             vec![raw(EV_KEY, BTN_STYLUS2, 1)]
         );
         assert_eq!(

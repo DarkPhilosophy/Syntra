@@ -96,13 +96,20 @@ Command line:
 - `syntra` — dashboard; `syntra --background` starts it in the tray.
 - `syntra-daemon` — the service without any interface.
 
-Run the service at login on Linux:
+Run the service from boot on Linux, with or without a desktop session:
 
 ```bash
 install -Dm644 service/syntra.service ~/.config/systemd/user/syntra.service
+install -Dm644 service/syntra-session.service ~/.config/systemd/user/syntra-session.service
 systemctl --user daemon-reload
-systemctl --user enable --now syntra.service
+systemctl --user enable --now syntra.service syntra-session.service
+loginctl enable-linger "$USER"   # keep it running while logged out
 ```
+
+The service is not tied to a graphical session, so a machine logged out of its
+desktop (a Steam Deck, a box nobody sits at) can still be controlled through
+uinput. `syntra-session.service` restarts it when a desktop session starts, so
+capture backends that need the desktop are tried again.
 
 ## Platform support
 
@@ -122,7 +129,7 @@ To build from source on Linux:
 ```bash
 cargo build --release -p syntra-app -p syntra-daemon \
   --features syntra-daemon/layer_shell_capture,syntra-daemon/x11_capture,syntra-daemon/libei_capture,syntra-daemon/wlroots_emulation,syntra-daemon/libei_emulation,syntra-daemon/rdp_emulation,syntra-daemon/uinput_emulation,syntra-daemon/x11_emulation
-cargo build --release -p syntra-plugin-clipboard -p syntra-plugin-fuse
+cargo build --release -p syntra-plugin-clipboard -p syntra-plugin-fuse -p syntra-plugin-edge-glow
 ```
 
 System packages (Debian/Ubuntu names): `libx11-dev libxtst-dev libei-dev
@@ -204,6 +211,7 @@ Guides: [architecture](../docs/architecture.md) · [client API](../docs/api.md)
 - [`syntra-plugin-api`](../crates/syntra-plugin-api) — Versioned external-process adapter protocol for Syntra file clipboard integration
 - [`syntra-plugin-clipboard`](../plugins/clipboard) — Workspace crate.
 - [`syntra-plugin-fuse`](../plugins/fuse) — Workspace crate.
+- [`syntra-plugin-edge-glow`](../plugins/edge-glow) — Workspace crate.
 - [`syntra-proto`](../crates/syntra-proto) — network protocol for syntra
 - [`syntra-store`](../crates/syntra-store) — persistent clipboard history storage and daemon worker for Syntra
 - [`syntra-ui`](../crates/syntra-ui) — frontend-neutral presentation state and transport boundary for syntra

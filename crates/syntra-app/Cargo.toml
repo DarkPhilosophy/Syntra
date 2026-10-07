@@ -45,8 +45,11 @@ assets = [
     { source = "target/release/syntra-daemon", dest = "/usr/bin/syntra-daemon", mode = "755" },
     { source = "target/release/syntra-plugin-clipboard", dest = "/usr/bin/syntra-plugin-clipboard", mode = "755" },
     { source = "target/release/syntra-plugin-fuse", dest = "/usr/bin/syntra-plugin-fuse", mode = "755" },
+    { source = "target/release/syntra-plugin-edge-glow", dest = "/usr/bin/syntra-plugin-edge-glow", mode = "755" },
     { source = "io.syntra.Syntra.desktop", dest = "/usr/share/applications/io.syntra.Syntra.desktop", mode = "644" },
     { source = "crates/syntra-ui/ui/assets/shell/syntra.svg", dest = "/usr/share/icons/hicolor/scalable/apps/io.syntra.Syntra.svg", mode = "644" },
+    { source = "service/syntra.service", dest = "/usr/lib/systemd/user/syntra.service", mode = "644" },
+    { source = "service/syntra-session.service", dest = "/usr/lib/systemd/user/syntra-session.service", mode = "644" },
 ]
 
 # Debian package (cargo bundle already builds one; this keeps the daemon in it).
@@ -57,6 +60,9 @@ assets = [
     ["target/release/syntra-daemon", "usr/bin/", "755"],
     ["target/release/syntra-plugin-clipboard", "usr/bin/", "755"],
     ["target/release/syntra-plugin-fuse", "usr/bin/", "755"],
+    ["target/release/syntra-plugin-edge-glow", "usr/bin/", "755"],
     ["../../io.syntra.Syntra.desktop", "usr/share/applications/", "644"],
     ["../syntra-ui/ui/assets/shell/syntra.svg", "usr/share/icons/hicolor/scalable/apps/io.syntra.Syntra.svg", "644"],
+    ["../../service/syntra.service", "usr/lib/systemd/user/", "644"],
+    ["../../service/syntra-session.service", "usr/lib/systemd/user/", "644"],
 ]

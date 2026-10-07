@@ -297,12 +297,33 @@ The daemon does not provide a trust sandbox. An installed plugin runs with the u
 
 Protocol errors include invalid JSON, unsupported hello versions, truncated/oversized frames, invalid base64, oversized range payloads, and uncorrelated transfer ids (`crates/syntra-plugin-api/src/lib.rs:23-49`; `adapter_manager.rs:527-606`). Treat these as actionable implementation errors, not as permission to emit a different JSON shape.
 
+## 10. Pointer plugins and settings
+
+A plugin that only reacts to the pointer declares `"pointer_events": true` in its capabilities and no clipboard fields or MIME types (`plugins/manifest.schema.json`). The shipped example is `plugins/edge-glow` (id `edge-glow`).
+
+What the daemon does for such a plugin:
+
+1. Launches it when the daemon starts, unless the user switched it off, and keeps it running (three automatic restarts, then it stays failed until restarted from the plugin manager).
+2. After the handshake, sends one `settings` frame with every setting and its current value, and another whenever the user changes one:
+   `{"type":"settings","data":{"values":[["width","72"],["renderer","opengl"]]}}`. Values are strings: `true`/`false`, a choice value, a number, or `#rrggbb`. Ignore keys you do not know and values you cannot read.
+3. Sends `pointer` frames, one per crossing and never per motion: `{"type":"pointer","data":{"kind":"entered","edge":"left","along":0.35,"peer":"phone"}}`, the same with `"kind":"left"`, and `"kind":"pressure"` with an `amount` from 0.0 to 1.0 while an edge is being pushed (at most about thirty a second; `0.0` ends it). `along` is `0.0`–`1.0` along the edge and may be absent.
+4. Never waits for the plugin: a pointer frame for a plugin that is starting or cannot take it is dropped, not queued. Do not rely on seeing every one.
+
+Such a plugin only listens. Anything it writes other than `hello` and an `error` report stops it, so it cannot inject clipboard or transfer frames. Closing its standard input means the daemon has stopped it; exit then.
+
+The manifest's `settings` array declares what the user can change (`key`, `label`, `kind` of `toggle`, `choice`, `color` or `number`, `default`, `options`, `min`, `max`). The plugin manager draws a control for each and stores the choice per plugin under `<config>/plugin-state/<id>/settings.json`. A bundled plugin's manifest is compiled into the daemon (`crates/syntra-core/src/plugins.rs`), because the handshake cannot carry settings.
+
+### Edge glow
+
+`edge-glow` draws a strip of light on the screen edge a pointer from another device came in through, and builds up while you push against an edge. Returning the captured local pointer also sends an entry event, with `peer` set to `local` and the return position when known. Settings: glow while pushing, rainbow colours, colour, width, and drawing (`auto`, `opengl`, `software`). `auto` uses the GPU and falls back to the CPU, and says why in the log; choosing `opengl` or `software` is never silently replaced by the other.
+
+Platform scope, as tested: **Linux only**. It draws through X11 (XWayland on a Wayland session), the only way to place a window against a screen edge and keep it on top on GNOME, which has no layer-shell. It has been run on GNOME Wayland with XWayland. KDE and wlroots (layer-shell), Windows and macOS are not implemented; on those systems the plugin exits with a message and the rest of Syntra is unaffected. The software renderer writes premultiplied ARGB into 32-bit windows, so it needs a compositing window manager.
 ## 10. Current limitations
 
 * The API is version `1`; there is no capability negotiation beyond the hello declaration and no compatibility matrix for older/newer versions.
 * There is no authentication or authorisation between daemon and plugin beyond local process ownership and the manifest path. The protocol is not a security sandbox.
 * There is no standard plugin installer, signature verification, dependency resolver, or automatic rollback. Installation is a filesystem operation performed by the user.
-* The API is focused on file clipboard flows. It cannot add new daemon input-capture backends, input-emulation backends, network discovery, or core text/image clipboard formats.
+* Outside pointer events (section 10) the API is focused on file clipboard flows. It cannot add new daemon input-capture backends, input-emulation backends, network discovery, or core text/image clipboard formats.
 * Plugins cannot ask the daemon to run arbitrary client commands, alter daemon configuration, or change the machine-to-machine protocol.
 * The message vocabulary has no general request correlation for `Error`; transfer-specific correlation must be carried by the defined transfer fields.
 * Progress is advisory and does not itself provide flow control. Range requests are bounded by the supervisor, but plugin authors still need their own back-pressure and cancellation discipline.

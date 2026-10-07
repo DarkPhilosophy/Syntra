@@ -103,8 +103,9 @@ struct ReleaseSignal {
     /// Raised once the session has actually let go.
     completed: Arc<Notify>,
     /// Edge to leave the pointer at on the next release, instead of the
-    /// edge the capture began on.
-    landing: Arc<std::sync::Mutex<Option<Position>>>,
+    /// edge the capture began on, and optionally the share of that edge
+    /// (0.0 to 1.0) to leave it at.
+    landing: Arc<std::sync::Mutex<Option<(Position, Option<f32>)>>>,
 }
 
 impl ReleaseSignal {
@@ -123,11 +124,11 @@ impl ReleaseSignal {
         self.requested.notified()
     }
 
-    fn set_landing(&self, landing: Option<Position>) {
+    fn set_landing(&self, landing: Option<(Position, Option<f32>)>) {
         *self.landing.lock().expect("landing lock") = landing;
     }
 
-    fn landing(&self) -> Option<Position> {
+    fn landing(&self) -> Option<(Position, Option<f32>)> {
         *self.landing.lock().expect("landing lock")
     }
 
@@ -665,7 +666,19 @@ async fn do_capture_session(
                     current_pos.replace(Some(pos));
                     release.set_capturing(true);
 
-                    // client entered => send event
+                    // client entered => send event. Where along the edge it came
+                    // in goes first, as a fraction, so it is known by the time
+                    // `Begin` is turned into an `Enter`. Only when the compositor
+                    // reported a cursor position.
+                    if let Some(along) = activated
+                        .cursor_position()
+                        .and_then(|cursor| entry_fraction(&barriers, &pos_for_barrier_id, pos, cursor))
+                    {
+                        event_tx
+                            .send((pos, CaptureEvent::Entry { along }))
+                            .await
+                            .expect("no channel");
+                    }
                     event_tx.send((pos, CaptureEvent::Begin)).await.expect("no channel");
 
                     let mut compositor_released = false;
@@ -729,9 +742,15 @@ async fn do_capture_session(
                     let release_result = if compositor_released {
                         Ok(())
                     } else {
-                        let landing = release
-                            .landing()
-                            .and_then(|edge| landing_point(&barriers, &pos_for_barrier_id, edge, activated.cursor_position()?));
+                        let landing = release.landing().and_then(|(edge, along)| {
+                            landing_point(
+                                &barriers,
+                                &pos_for_barrier_id,
+                                edge,
+                                activated.cursor_position()?,
+                                along,
+                            )
+                        });
                         let result = release_capture(syntra_input_capture, session, &activated, pos, landing).await;
                         if let Err(error) = result {
                             // Release can race a compositor-initiated deactivation.
@@ -829,14 +848,17 @@ async fn release_capture(
     Ok(())
 }
 
-/// A point just inside `landing`, level with `cursor`. Multi-monitor setups
-/// have a barrier per output; the outermost one is the desktop's edge, and
-/// among those the one nearest the cursor.
+/// A point just inside `landing`. Level with `cursor`, or, when `along` says
+/// where on the edge the pointer should appear, at that share of the edge's
+/// length (0.0 its start, 1.0 its end), which keeps its meaning whatever the
+/// resolution. Multi-monitor setups have a barrier per output; the outermost
+/// one is the desktop's edge, and among those the one nearest the cursor.
 fn landing_point(
     barriers: &[ICBarrier],
     pos_for_barrier_id: &HashMap<BarrierID, Position>,
     landing: Position,
     cursor: (f32, f32),
+    along: Option<f32>,
 ) -> Option<(f64, f64)> {
     let (cx, cy) = (cursor.0 as f64, cursor.1 as f64);
     barriers
@@ -845,13 +867,22 @@ fn landing_point(
         .map(|b| {
             let (x1, y1, x2, y2) = b.position;
             let (x1, y1, x2, y2) = (x1 as f64, y1 as f64, x2 as f64, y2 as f64);
+            // Barriers are inclusive, so the edge is one pixel longer than
+            // the difference of its ends.
+            let at = |start: f64, end: f64, level: f64| match along {
+                Some(share) => {
+                    let share = f64::from(share).clamp(0.0, 1.0);
+                    (start + share * (end - start + 1.0)).clamp(start, end)
+                }
+                None => level.clamp(start, end),
+            };
             // Same insets as a normal release: barriers on the right and
             // bottom sit one pixel outside the screen.
             let point = match landing {
-                Position::Left => (x1 + 1., cy.clamp(y1, y2)),
-                Position::Right => (x1 - 2., cy.clamp(y1, y2)),
-                Position::Top => (cx.clamp(x1, x2), y1 + 1.),
-                Position::Bottom => (cx.clamp(x1, x2), y1 - 2.),
+                Position::Left => (x1 + 1., at(y1, y2, cy)),
+                Position::Right => (x1 - 2., at(y1, y2, cy)),
+                Position::Top => (at(x1, x2, cx), y1 + 1.),
+                Position::Bottom => (at(x1, x2, cx), y1 - 2.),
             };
             let outward = match landing {
                 Position::Left => -x1,
@@ -864,6 +895,46 @@ fn landing_point(
         })
         .max_by(|a, b| a.1.total_cmp(&b.1).then(b.2.total_cmp(&a.2)))
         .map(|(point, ..)| point)
+}
+
+/// Where along the screen edge the cursor was when the capture began, from 0.0
+/// at the start of the edge (top, or left) to 1.0 at its end. Taken against
+/// the barrier of that edge, the same one `landing_point` chooses on a
+/// multi-monitor desktop, so a pointer entering at the middle of the right
+/// edge reads 0.5 whatever the screen size.
+fn entry_fraction(
+    barriers: &[ICBarrier],
+    pos_for_barrier_id: &HashMap<BarrierID, Position>,
+    edge: Position,
+    cursor: (f32, f32),
+) -> Option<f32> {
+    let (cx, cy) = (f64::from(cursor.0), f64::from(cursor.1));
+    let barrier = barriers
+        .iter()
+        .filter(|b| pos_for_barrier_id.get(&b.barrier_id) == Some(&edge))
+        .map(|b| {
+            let (x1, y1, x2, y2) = b.position;
+            let outward = match edge {
+                Position::Left => -x1,
+                Position::Right => x1,
+                Position::Top => -y1,
+                Position::Bottom => y1,
+            };
+            let (along, start, end) = match edge {
+                Position::Left | Position::Right => (cy, f64::from(y1), f64::from(y2)),
+                Position::Top | Position::Bottom => (cx, f64::from(x1), f64::from(x2)),
+            };
+            let distance = (along - (start + end) / 2.0).abs();
+            (outward, distance, along, start, end)
+        })
+        .max_by(|a, b| a.0.cmp(&b.0).then(b.1.total_cmp(&a.1)))?;
+    let (_, _, along, start, end) = barrier;
+    // Barriers are inclusive (`y + h - 1`), so the edge is `h` pixels long.
+    let length = end - start + 1.0;
+    if !length.is_finite() || length <= 0.0 {
+        return None;
+    }
+    Some(((along - start) / length).clamp(0.0, 1.0) as f32)
 }
 
 fn find_corresponding_client(barriers: &[ICBarrier], pos: (f32, f32)) -> BarrierID {
@@ -964,7 +1035,15 @@ impl SyntraInputCapture for LibeiInputCapture {
     }
 
     async fn release_at(&mut self, landing: Position) -> Result<bool, CaptureError> {
-        self.release.set_landing(Some(landing));
+        self.release_at_along(landing, None).await
+    }
+
+    async fn release_at_along(
+        &mut self,
+        landing: Position,
+        along: Option<f32>,
+    ) -> Result<bool, CaptureError> {
+        self.release.set_landing(Some((landing, along)));
         let result = self.release().await;
         self.release.set_landing(None);
         result.map(|()| true)
@@ -1021,7 +1100,7 @@ impl Stream for LibeiInputCapture {
 
 #[cfg(test)]
 mod tests {
-    use super::{ICBarrier, ReleaseSignal, landing_point, pos_to_barrier_for_test};
+    use super::{ICBarrier, ReleaseSignal, entry_fraction, landing_point, pos_to_barrier_for_test};
     use crate::Position;
     use std::collections::HashMap;
     use std::num::NonZeroU32;
@@ -1050,10 +1129,10 @@ mod tests {
     fn coming_home_through_another_edge_lands_on_that_edge() {
         let (barriers, ids) = layout();
         let exit_point = (0.0, 400.0);
-        let (x, y) = landing_point(&barriers, &ids, Position::Right, exit_point).unwrap();
+        let (x, y) = landing_point(&barriers, &ids, Position::Right, exit_point, None).unwrap();
         assert_eq!(y, 400.0);
         assert!(x > 3800.0 && x < 3840.0, "inside the right edge, got {x}");
-        let (x, _) = landing_point(&barriers, &ids, Position::Left, (3839.0, 400.0)).unwrap();
+        let (x, _) = landing_point(&barriers, &ids, Position::Left, (3839.0, 400.0), None).unwrap();
         assert!((0.0..10.0).contains(&x), "inside the left edge, got {x}");
     }
 
@@ -1061,15 +1140,96 @@ mod tests {
     #[test]
     fn no_barrier_on_the_landing_edge_keeps_the_normal_release() {
         let (barriers, ids) = layout();
-        assert!(landing_point(&barriers, &ids, Position::Top, (10.0, 10.0)).is_none());
+        assert!(landing_point(&barriers, &ids, Position::Top, (10.0, 10.0), None).is_none());
+    }
+
+    /// Landing at a share of the edge puts the pointer at that share of the
+    /// edge's length, level with nothing, so it means the same on any screen.
+    #[test]
+    fn landing_at_a_share_of_the_edge_ignores_the_old_height() {
+        let (barriers, ids) = layout();
+        let landed = |edge, cursor, along| {
+            landing_point(&barriers, &ids, edge, cursor, Some(along)).unwrap()
+        };
+        // Middle of the right edge, whatever height the cursor had.
+        let (x, y) = landed(Position::Right, (0.0, 10.0), 0.5);
+        assert_eq!(y, 540.0);
+        assert!(x > 3800.0 && x < 3840.0, "inside the right edge, got {x}");
+        assert_eq!(landed(Position::Right, (0.0, 900.0), 0.5).1, 540.0);
+        // A quarter of the way down the left edge.
+        assert_eq!(landed(Position::Left, (3839.0, 0.0), 0.25).1, 270.0);
+        // The ends stay on the edge.
+        assert_eq!(landed(Position::Left, (0.0, 0.0), 0.0).1, 0.0);
+        assert_eq!(landed(Position::Left, (0.0, 0.0), 1.0).1, 1079.0);
+        // Out of range is held at the ends, never off the screen.
+        assert_eq!(landed(Position::Left, (0.0, 0.0), 9.0).1, 1079.0);
+        assert_eq!(landed(Position::Left, (0.0, 0.0), -2.0).1, 0.0);
+    }
+
+    /// On a horizontal edge the share runs left to right.
+    #[test]
+    fn landing_on_a_horizontal_edge_runs_left_to_right() {
+        let screens = [(0, 0, 1920, 1080)];
+        let id = NonZeroU32::new(1).unwrap();
+        let barriers = vec![ICBarrier::new(
+            id,
+            pos_to_barrier_for_test(screens[0], Position::Top),
+        )];
+        let ids = HashMap::from([(id, Position::Top)]);
+        let (x, y) =
+            landing_point(&barriers, &ids, Position::Top, (0.0, 500.0), Some(0.5)).unwrap();
+        assert_eq!(x, 960.0);
+        assert_eq!(y, 1.0, "just inside the top edge");
+    }
+
+    /// The pointer entering the middle of the right edge reads one half, and
+    /// the ends of the edge read zero and one, whatever the screen height.
+    #[test]
+    fn the_entry_point_is_a_fraction_of_the_edge() {
+        let (barriers, ids) = layout();
+        let at = |edge, cursor| entry_fraction(&barriers, &ids, edge, cursor).unwrap();
+        assert_eq!(at(Position::Right, (3839.0, 540.0)), 0.5);
+        assert_eq!(at(Position::Right, (3839.0, 0.0)), 0.0);
+        assert_eq!(at(Position::Right, (3839.0, 1080.0)), 1.0);
+        assert_eq!(at(Position::Left, (0.0, 270.0)), 0.25);
+    }
+
+    /// On two outputs the outer edge is the right output's, so a cursor on the
+    /// seam is measured against that output and never against both.
+    #[test]
+    fn the_outer_output_decides_the_edge() {
+        let (barriers, ids) = layout();
+        let value = entry_fraction(&barriers, &ids, Position::Right, (3839.0, 810.0)).unwrap();
+        assert_eq!(value, 0.75);
+    }
+
+    /// Past either end of the edge it is held at the end instead of going out
+    /// of range, and no barrier on the edge means no position.
+    #[test]
+    fn the_entry_point_stays_inside_the_edge() {
+        let (barriers, ids) = layout();
+        assert_eq!(
+            entry_fraction(&barriers, &ids, Position::Right, (3839.0, -50.0)),
+            Some(0.0)
+        );
+        assert_eq!(
+            entry_fraction(&barriers, &ids, Position::Right, (3839.0, 5000.0)),
+            Some(1.0)
+        );
+        assert!(entry_fraction(&barriers, &ids, Position::Top, (10.0, 10.0)).is_none());
     }
 
     #[test]
     fn landing_is_cleared_by_default() {
         let signal = ReleaseSignal::default();
         assert_eq!(signal.landing(), None);
-        signal.set_landing(Some(Position::Right));
-        assert_eq!(signal.landing(), Some(Position::Right));
+        signal.set_landing(Some((Position::Right, None)));
+        assert_eq!(signal.landing(), Some((Position::Right, None)));
+        // The share rides along with the edge and goes with it.
+        signal.set_landing(Some((Position::Left, Some(0.25))));
+        assert_eq!(signal.landing(), Some((Position::Left, Some(0.25))));
+        signal.set_landing(None);
+        assert_eq!(signal.landing(), None);
     }
 
     #[tokio::test]

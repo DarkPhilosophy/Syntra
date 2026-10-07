@@ -148,6 +148,8 @@ pub struct FileDropGuard {
     hover_timer: Rc<Timer>,
     #[cfg(target_os = "linux")]
     _wayland: Option<wayland::NativeDrop>,
+    #[cfg(target_os = "linux")]
+    _pen: Option<crate::tablet::NativePen>,
 }
 
 impl Drop for FileDropGuard {
@@ -214,12 +216,23 @@ pub fn install(app: &AppWindow, callback: impl FnMut(FileDropEvent) + 'static) -
                 None
             }
         };
+        // The pen is delivered to a client only through the tablet protocol, so
+        // without this the dashboard cannot be clicked by another device's
+        // independent pointer. Its absence only costs that.
+        let pen = match crate::tablet::NativePen::new(app) {
+            Ok(pen) => Some(pen),
+            Err(error) => {
+                log::info!("native Wayland tablet input unavailable: {error}");
+                None
+            }
+        };
         return FileDropGuard {
             active,
             hovering,
             callback,
             hover_timer,
             _wayland: native,
+            _pen: pen,
         };
     }
     let source = app.window().with_winit_window(PositionSource::new);
@@ -341,6 +354,8 @@ pub fn install(app: &AppWindow, callback: impl FnMut(FileDropEvent) + 'static) -
         hover_timer,
         #[cfg(target_os = "linux")]
         _wayland: None,
+        #[cfg(target_os = "linux")]
+        _pen: None,
     }
 }
 

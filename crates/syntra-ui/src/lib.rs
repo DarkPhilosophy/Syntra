@@ -27,6 +27,7 @@
 pub mod app;
 pub mod bridge;
 pub mod diagnostics;
+pub(crate) mod edge_glow;
 #[cfg(not(target_os = "android"))]
 pub mod file_drop;
 pub mod history;
@@ -34,6 +35,8 @@ pub mod localization;
 pub mod models;
 pub mod platform;
 pub mod settings;
+#[cfg(target_os = "linux")]
+pub(crate) mod tablet;
 
 #[cfg(any(target_os = "android", test))]
 pub mod android;

@@ -1,7 +1,26 @@
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
 import { Translations } from "../localization.slint";
-import { AppButton } from "../components/controls.slint";
+import { AppButton, AppSwitch } from "../components/controls.slint";
+import { ColorPicker } from "../components/color-picker.slint";
+
+// One thing a plugin lets the user change. The daemon described it and holds
+// the value; this only draws the right control and reports the new value.
+export struct PluginSettingEntry {
+    key: string,
+    label: string,
+    // toggle, choice, color or number: decides which control is drawn.
+    kind: string,
+    value: string,
+    // For a choice, the values and the labels, in the same order.
+    option-values: [string],
+    option-labels: [string],
+    // For a number, the inclusive range.
+    min: int,
+    max: int,
+    // For a colour, the value as a colour (the accent while it is empty).
+    colour: color,
+}
 
 // Mirrors syntra_api::PluginStatus. The daemon is authoritative: this page
 // renders what it reports and sends intents back, it never decides plugin
@@ -31,6 +50,69 @@ export struct PluginEntry {
     protocol-version: int,
     supported-protocol-version: int,
     error: string,
+    settings: [PluginSettingEntry],
+}
+
+component PluginSettingRow inherits Rectangle {
+    in property <PluginSettingEntry> setting;
+    in property <bool> active;
+    callback changed(string, string);
+    callback colour-chosen(string, color);
+    height: row.preferred-height;
+    // A twelfth of the range, at least one: a fixed step of four took thirty
+    // six presses to cross the width range and each moved too little to see.
+    property <float> step: Math.max(1, Math.floor((root.setting.max - root.setting.min) / 12));
+    background: transparent;
+    opacity: root.active ? 1 : 0.5;
+    row := HorizontalLayout {
+        spacing: Theme.small-spacing;
+        if root.setting.kind == "toggle": Text {
+            text: root.setting.label; color: Theme.text; font-size: Theme.body-size;
+            horizontal-stretch: 1; vertical-alignment: center; wrap: word-wrap;
+        }
+        if root.setting.kind == "toggle": AppSwitch {
+            enabled: root.active;
+            checked: root.setting.value == "true";
+            a11y-label: root.setting.label;
+            toggled(value) => { root.changed(root.setting.key, value ? "true" : "false"); }
+        }
+        if root.setting.kind == "choice": VerticalLayout {
+            spacing: Theme.small-spacing;
+            Text { text: root.setting.label; color: Theme.text; font-size: Theme.body-size; wrap: word-wrap; }
+            HorizontalLayout {
+                spacing: Theme.small-spacing;
+                for label[index] in root.setting.option-labels: AppButton {
+                    text: label;
+                    enabled: root.active;
+                    primary: root.setting.option-values[index] == root.setting.value;
+                    clicked => { root.changed(root.setting.key, root.setting.option-values[index]); }
+                }
+            }
+        }
+        if root.setting.kind == "number": Text {
+            text: root.setting.label + ": " + root.setting.value;
+            color: Theme.text; font-size: Theme.body-size; horizontal-stretch: 1; vertical-alignment: center;
+        }
+        if root.setting.kind == "number": AppButton {
+            text: "−";
+            enabled: root.active && root.setting.value.to-float() > root.setting.min;
+            clicked => { root.changed(root.setting.key, "" + Math.max(root.setting.min, Math.floor(root.setting.value.to-float() - root.step))); }
+        }
+        if root.setting.kind == "number": AppButton {
+            text: "+";
+            enabled: root.active && root.setting.value.to-float() < root.setting.max;
+            clicked => { root.changed(root.setting.key, "" + Math.min(root.setting.max, Math.floor(root.setting.value.to-float() + root.step))); }
+        }
+        if root.setting.kind == "color": ColorPicker {
+            horizontal-stretch: 1;
+            label: root.setting.label;
+            value: root.setting.colour;
+            // The colour is turned into `#rrggbb` on the Rust side, where it
+            // is tested; here it only travels as the colour it is.
+            selected(value) => { root.colour-chosen(root.setting.key, value); }
+            reset => { root.changed(root.setting.key, ""); }
+        }
+    }
 }
 
 component HealthBadge inherits Rectangle {
@@ -64,6 +146,7 @@ component PluginCard inherits Rectangle {
     in property <PluginEntry> plugin;
     callback toggled(bool);
     callback restart-requested();
+    callback settings-requested();
 
     background: Theme.surface;
     border-radius: Theme.corner-radius;
@@ -195,7 +278,6 @@ component PluginCard inherits Rectangle {
             font-size: Theme.caption-size;
             overflow: elide;
         }
-
         HorizontalLayout {
             spacing: 8px;
             AppButton {
@@ -212,7 +294,77 @@ component PluginCard inherits Rectangle {
                 enabled: plugin.installed && plugin.enabled;
                 clicked => { root.restart-requested(); }
             }
+            // Only a plugin that declared settings has anything to open. The
+            // popup belongs to the page, so this only asks for it.
+            if plugin.settings.length > 0: AppButton {
+                text: Translations.tr("plugin-settings-show");
+                clicked => { root.settings-requested(); }
+            }
             Rectangle { horizontal-stretch: 1; }
+        }
+    }
+}
+
+// The settings of one plugin, as a panel over the page.
+component PluginSettingsPopup inherits Rectangle {
+    in property <PluginEntry> plugin;
+    callback closed();
+    callback change-setting(string, string);
+    callback change-setting-colour(string, color);
+
+    background: #000000a0;
+    TouchArea {
+        // A click outside the panel closes it, as in the other dialogs.
+        clicked => { root.closed(); }
+    }
+    Rectangle {
+        width: min(parent.width - 2 * Theme.content-gap, 560px);
+        height: min(parent.height - 2 * Theme.content-gap, 520px);
+        background: Theme.elevated-surface;
+        border-radius: Theme.corner-radius;
+        border-width: 1px;
+        border-color: Theme.accent;
+        // Swallows clicks so a press inside does not reach the scrim.
+        TouchArea { }
+        VerticalLayout {
+            padding: Theme.content-gap;
+            spacing: Theme.spacing;
+            HorizontalLayout {
+                spacing: 10px;
+                Text {
+                    min-width: 0px;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                    text: root.plugin.name;
+                    color: Theme.text;
+                    font-size: Theme.title-size;
+                    vertical-alignment: center;
+                }
+                AppButton {
+                    text: Translations.tr("plugin-settings-close");
+                    clicked => { root.closed(); }
+                }
+            }
+            Text {
+                text: root.plugin.description;
+                color: Theme.muted-text;
+                font-size: Theme.caption-size;
+                wrap: word-wrap;
+            }
+            ScrollView {
+                vertical-stretch: 1;
+                viewport-width: self.visible-width;
+                VerticalLayout {
+                    spacing: Theme.spacing;
+                    alignment: start;
+                    for setting in root.plugin.settings: PluginSettingRow {
+                        setting: setting;
+                        active: root.plugin.enabled;
+                        changed(key, value) => { root.change-setting(key, value); }
+                        colour-chosen(key, colour) => { root.change-setting-colour(key, colour); }
+                    }
+                }
+            }
         }
     }
 }
@@ -222,7 +374,13 @@ export component PluginsPage inherits Rectangle {
     in property <bool> connected: false;
     callback set-enabled(string, bool);
     callback restart(string);
+    callback change-setting(string, string, string);
+    callback change-setting-colour(string, string, color);
     callback refresh();
+
+    // Id of the plugin whose settings are open, or empty. Held by the page, not
+    // by a card, so a rebuilt card does not close it.
+    in-out property <string> settings-plugin: "";
 
     background: Theme.background;
     vertical-stretch: 1;
@@ -277,8 +435,32 @@ export component PluginsPage inherits Rectangle {
                     plugin: plugin;
                     toggled(enabled) => { root.set-enabled(plugin.id, enabled); }
                     restart-requested => { root.restart(plugin.id); }
+                    settings-requested => { root.settings-plugin = plugin.id; }
                 }
             }
+        }
+    }
+
+    // The settings of one plugin, over the page, and only while open. A popup
+    // that merely was not visible still lay over the whole page, and with a
+    // touch area across it took the mouse wheel before the page could scroll.
+    // Which plugin is open is kept here and not in the card: a change to a
+    // setting makes the daemon send the list again, and a card remembers
+    // nothing across that. Matching by id also means a plugin that has gone
+    // takes its popup with it, rather than the popup showing another plugin.
+    for plugin in root.plugins: Rectangle {
+        // Takes no room of its own: only the popup inside it, when it is open.
+        width: 0px;
+        height: 0px;
+        if plugin.id == root.settings-plugin: PluginSettingsPopup {
+            x: 0px;
+            y: 0px;
+            width: root.width;
+            height: root.height;
+            plugin: plugin;
+            closed => { root.settings-plugin = ""; }
+            change-setting(key, value) => { root.change-setting(plugin.id, key, value); }
+            change-setting-colour(key, colour) => { root.change-setting-colour(plugin.id, key, colour); }
         }
     }
 }

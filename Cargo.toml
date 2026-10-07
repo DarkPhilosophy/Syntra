@@ -21,6 +21,7 @@ members = [
     # tier 3 — plugins
     "plugins/clipboard",
     "plugins/fuse",
+    "plugins/edge-glow",
 ]
 
 [workspace.package]

@@ -7193,6 +7193,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "syntra-plugin-edge-glow"
+version = "0.11.0"
+dependencies = [
+ "glow",
+ "glutin",
+ "glutin-winit",
+ "png",
+ "raw-window-handle",
+ "syntra-plugin-api",
+ "winit",
+ "x11rb",
+]
+
+[[package]]
 name = "syntra-plugin-fuse"
 version = "0.11.0"
 dependencies = [
@@ -7273,6 +7287,7 @@ dependencies = [
  "url",
  "wayland-backend",
  "wayland-client",
+ "wayland-cursor",
  "wayland-protocols",
  "windows 0.61.3",
  "x11rb",

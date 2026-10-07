@@ -30,14 +30,16 @@ jobs:
     - name: Release Build
       run: |
         cargo build --release --features syntra-daemon/layer_shell_capture,syntra-daemon/x11_capture,syntra-daemon/libei_capture,syntra-daemon/wlroots_emulation,syntra-daemon/libei_emulation,syntra-daemon/rdp_emulation,syntra-daemon/uinput_emulation,syntra-daemon/x11_emulation
-        cargo build --release -p syntra-plugin-fuse -p syntra-plugin-clipboard
+        cargo build --release -p syntra-plugin-fuse -p syntra-plugin-clipboard -p syntra-plugin-edge-glow
         cp target/release/syntra syntra-linux-x86_64
         cp target/release/syntra-daemon syntra-daemon-linux-x86_64
         cp target/release/syntra-plugin-fuse syntra-plugin-fuse-linux-x86_64
+        cp target/release/syntra-plugin-edge-glow syntra-plugin-edge-glow-linux-x86_64
         cp target/release/syntra-plugin-clipboard syntra-plugin-clipboard-linux-x86_64
         test -x syntra-linux-x86_64
         test -x syntra-daemon-linux-x86_64
         test -x syntra-plugin-fuse-linux-x86_64
+        test -x syntra-plugin-edge-glow-linux-x86_64
         test -x syntra-plugin-clipboard-linux-x86_64
     - name: Install packagers
       run: cargo install cargo-bundle cargo-generate-rpm cargo-deb --locked
@@ -59,6 +61,7 @@ jobs:
           syntra-linux-x86_64
           syntra-daemon-linux-x86_64
           syntra-plugin-fuse-linux-x86_64
+          syntra-plugin-edge-glow-linux-x86_64
           syntra-plugin-clipboard-linux-x86_64
           target/release/bundle/deb/syntra_*.deb
           target/release/bundle/rpm/syntra-*.rpm
@@ -73,14 +76,16 @@ jobs:
     - name: Release Build
       run: |
         cargo build --release --features syntra-daemon/layer_shell_capture,syntra-daemon/x11_capture,syntra-daemon/libei_capture,syntra-daemon/wlroots_emulation,syntra-daemon/libei_emulation,syntra-daemon/rdp_emulation,syntra-daemon/uinput_emulation,syntra-daemon/x11_emulation
-        cargo build --release -p syntra-plugin-fuse -p syntra-plugin-clipboard
+        cargo build --release -p syntra-plugin-fuse -p syntra-plugin-clipboard -p syntra-plugin-edge-glow
         cp target/release/syntra syntra-linux-arm64
         cp target/release/syntra-daemon syntra-daemon-linux-arm64
         cp target/release/syntra-plugin-fuse syntra-plugin-fuse-linux-arm64
+        cp target/release/syntra-plugin-edge-glow syntra-plugin-edge-glow-linux-arm64
         cp target/release/syntra-plugin-clipboard syntra-plugin-clipboard-linux-arm64
         test -x syntra-linux-arm64
         test -x syntra-daemon-linux-arm64
         test -x syntra-plugin-fuse-linux-arm64
+        test -x syntra-plugin-edge-glow-linux-arm64
         test -x syntra-plugin-clipboard-linux-arm64
     - name: Install cargo bundle
       run: cargo install cargo-bundle
@@ -94,6 +99,7 @@ jobs:
           syntra-linux-arm64
           syntra-daemon-linux-arm64
           syntra-plugin-fuse-linux-arm64
+          syntra-plugin-edge-glow-linux-arm64
           syntra-plugin-clipboard-linux-arm64
           target/release/bundle/deb/syntra_*.deb
           target/release/bundle/appimage/syntra_*.AppImage
@@ -242,12 +248,14 @@ jobs:
           syntra-linux-x86_64/syntra-linux-x86_64
           syntra-linux-x86_64/syntra-daemon-linux-x86_64
           syntra-linux-x86_64/syntra-plugin-fuse-linux-x86_64
+          syntra-linux-x86_64/syntra-plugin-edge-glow-linux-x86_64
           syntra-linux-x86_64/syntra-plugin-clipboard-linux-x86_64
           syntra-linux-x86_64/target/release/bundle/deb/syntra_*.deb
           syntra-linux-x86_64/target/release/bundle/appimage/syntra_*.AppImage
           syntra-linux-arm64/syntra-linux-arm64
           syntra-linux-arm64/syntra-daemon-linux-arm64
           syntra-linux-arm64/syntra-plugin-fuse-linux-arm64
+          syntra-linux-arm64/syntra-plugin-edge-glow-linux-arm64
           syntra-linux-arm64/syntra-plugin-clipboard-linux-arm64
           syntra-linux-arm64/target/release/bundle/deb/syntra_*.deb
           syntra-linux-arm64/target/release/bundle/appimage/syntra_*.AppImage
@@ -269,12 +277,14 @@ jobs:
           syntra-linux-x86_64/syntra-linux-x86_64
           syntra-linux-x86_64/syntra-daemon-linux-x86_64
           syntra-linux-x86_64/syntra-plugin-fuse-linux-x86_64
+          syntra-linux-x86_64/syntra-plugin-edge-glow-linux-x86_64
           syntra-linux-x86_64/syntra-plugin-clipboard-linux-x86_64
           syntra-linux-x86_64/target/release/bundle/deb/syntra_*.deb
           syntra-linux-x86_64/target/release/bundle/appimage/syntra_*.AppImage
           syntra-linux-arm64/syntra-linux-arm64
           syntra-linux-arm64/syntra-daemon-linux-arm64
           syntra-linux-arm64/syntra-plugin-fuse-linux-arm64
+          syntra-linux-arm64/syntra-plugin-edge-glow-linux-arm64
           syntra-linux-arm64/syntra-plugin-clipboard-linux-arm64
           syntra-linux-arm64/target/release/bundle/deb/syntra_*.deb
           syntra-linux-arm64/target/release/bundle/appimage/syntra_*.AppImage

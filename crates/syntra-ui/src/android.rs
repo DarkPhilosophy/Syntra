@@ -63,17 +63,43 @@ impl Drop for MulticastLock {
     }
 }
 
+/// The installed logger's live configuration. Android may re-enter
+/// `android_main` in the same process; the logger can be installed only once.
+#[cfg(target_os = "android")]
+static LOG_CONFIG: std::sync::OnceLock<syntra_log::LogConfig> = std::sync::OnceLock::new();
+
+/// Installs the shared logger with logcat as a second sink.
+///
+/// The service runs inside this process, so nothing else publishes the log
+/// records the in-app diagnostics view reads. stderr goes nowhere on Android;
+/// without the logcat bridge a failing start looks like the app doing nothing.
+#[cfg(target_os = "android")]
+fn init_logging(data_path: Option<&std::path::Path>) -> syntra_log::LogConfig {
+    LOG_CONFIG
+        .get_or_init(|| {
+            let config = syntra_log::LogConfig::from_env(syntra_api::paths::ENV_LOG, "info");
+            let logcat = android_logger::AndroidLogger::new(
+                android_logger::Config::default()
+                    .with_max_level(log::LevelFilter::Trace)
+                    .with_tag("syntra"),
+            );
+            let mirror = data_path
+                .map(|path| syntra_log::Mirror::Datagram(path.join("syntra-diagnostics.sock")))
+                .unwrap_or_default();
+            if let Err(error) =
+                syntra_log::install_with_tee(config.clone(), mirror, Some(Box::new(logcat)))
+            {
+                eprintln!("could not install the logger: {error}");
+            }
+            config
+        })
+        .clone()
+}
+
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 pub fn android_main(app: slint::android::AndroidApp) {
-    // Without this bridge every Rust log line is discarded, which makes a
-    // failing start look like the app simply doing nothing.
-    android_logger::init_once(
-        android_logger::Config::default()
-            .with_max_level(log::LevelFilter::Info)
-            .with_tag("syntra"),
-    );
-    log::info!("Syntra Android entry reached");
+    let log_config = init_logging(app.internal_data_path().as_deref());
     // Emulators and Waydroid expose a GL stack Skia cannot build a direct
     // context on, which aborts start-up. Honour an explicit choice, and
     // otherwise ask for the software renderer, which always works.
@@ -123,7 +149,8 @@ pub fn android_main(app: slint::android::AndroidApp) {
                     return;
                 }
             };
-            let log_config = syntra_log::LogConfig::from_env(syntra_api::paths::ENV_LOG, "info");
+            // `log_config` is the one installed above, so runtime level
+            // changes reach the logger the service writes to.
             let result = runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
                 let config = syntra_core::config::Config::new()?;
                 let mut service = syntra_core::service::Service::new(config, log_config).await?;

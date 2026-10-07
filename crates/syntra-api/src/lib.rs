@@ -583,6 +583,51 @@ pub enum PluginHealth {
     Failed,
 }
 
+/// One thing a plugin lets the user change, described rather than coded: the
+/// interface draws the control from this and knows nothing of the plugin.
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
+pub struct PluginSetting {
+    /// Stable key, unique within the plugin.
+    pub key: String,
+    /// Label shown to the user.
+    pub label: String,
+    /// What kind of value it is, and so what control it gets.
+    pub kind: PluginSettingKind,
+    /// Value used until the user chooses one, in the kind's text form.
+    pub default: String,
+    /// The value in force now: the user's choice, or `default`.
+    pub value: String,
+}
+
+/// The kind of a plugin setting. Values travel as text so a status stays
+/// comparable and a plugin can add a kind without a protocol change.
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+pub enum PluginSettingKind {
+    /// On or off: `"true"` or `"false"`.
+    Toggle,
+    /// One of a fixed list, by the option's value.
+    Choice(Vec<PluginChoice>),
+    /// A colour as `#rrggbb`; empty means the plugin's own default.
+    Color,
+    /// A whole number within an inclusive range.
+    Number {
+        /// Smallest accepted value.
+        min: i64,
+        /// Largest accepted value.
+        max: i64,
+    },
+}
+
+/// One option of a [`PluginSettingKind::Choice`].
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
+pub struct PluginChoice {
+    /// What is stored when this is picked.
+    pub value: String,
+    /// What the user reads.
+    pub label: String,
+}
+
 /// A plugin the daemon knows about, with the metadata from its manifest.
 ///
 /// Plugins are separate processes supervised by the daemon, which is the
@@ -637,6 +682,12 @@ pub struct PluginStatus {
     pub mime_types: Vec<String>,
     /// Shipped with Syntra, so updated with it and not removable here.
     pub bundled: bool,
+    /// What the plugin lets the user change, as the manifest declared it.
+    ///
+    /// Empty for a plugin with nothing to set, which is how every plugin
+    /// written before settings existed reads.
+    #[serde(default)]
+    pub settings: Vec<PluginSetting>,
     /// Absolute path of the manifest this was read from.
     pub manifest_path: String,
     /// Build the plugin reported at handshake; empty until it has connected.
@@ -711,6 +762,24 @@ impl DeviceProfile {
         }
         Ok(())
     }
+}
+
+/// One crossing of a screen edge by a pointer that belongs to another device.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PointerPassage {
+    /// The edge it crossed.
+    pub edge: Position,
+    /// Address of the device that drives the pointer.
+    pub peer: String,
+    /// Fingerprint of that device's certificate, when it is known, so the
+    /// frontend can show the name and colour the user gave it.
+    pub fingerprint: Option<String>,
+    /// Whether it arrived through another device rather than directly.
+    pub relayed: bool,
+    /// Where along the edge it came in, from 0.0 at the start of the edge (top,
+    /// or left) to 1.0 at its end. A share of the edge, so it holds on any
+    /// resolution. `None` when the sending device could not tell.
+    pub along: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -845,6 +914,10 @@ pub enum FrontendEvent {
     HopBypass(bool),
     /// Whether the pointer may travel on through chains of devices.
     MultiHop(bool),
+    /// A pointer driven by another device appeared on this screen.
+    PointerEntered(PointerPassage),
+    /// A pointer driven by another device left this screen.
+    PointerLeft(PointerPassage),
     /// A replacement certificate was saved; active sessions change only on restart.
     IdentityRegenerated {
         /// Carries the fingerprint for this protocol variant.
@@ -1026,6 +1099,19 @@ pub enum FrontendRequest {
     RestartPlugin {
         /// Plugin identifier.
         id: String,
+    },
+    /// Change one setting of a plugin, by [`PluginSetting::key`].
+    ///
+    /// The daemon accepts only a value the plugin declared it understands,
+    /// and replies with a fresh [`FrontendEvent::Plugins`] either way, so a
+    /// refused value shows up as the control returning to what is in force.
+    SetPluginSetting {
+        /// Plugin identifier.
+        id: String,
+        /// Setting key.
+        key: String,
+        /// Requested value, in the form of the setting's kind.
+        value: String,
     },
 }
 

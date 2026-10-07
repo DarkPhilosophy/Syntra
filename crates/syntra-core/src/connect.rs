@@ -196,7 +196,10 @@ impl SyntraConnection {
         handle: ClientHandle,
     ) -> Result<(), SyntraConnectionError> {
         log::trace!("{event} >->->->->-");
-        let requires_remote_ready = matches!(&event, ProtoEvent::Input(_) | ProtoEvent::Enter(_));
+        let requires_remote_ready = matches!(
+            &event,
+            ProtoEvent::Input(_) | ProtoEvent::Enter(_) | ProtoEvent::EnterAt { .. }
+        );
         let buf = event.encode()?;
         if let Some(addr) = self.shared.client_manager.active_addr(handle) {
             let conn = {
@@ -388,6 +391,10 @@ async fn receive_loop(
         match ProtoEvent::decode(&buf[..len]) {
             Ok(event) => {
                 log::trace!("{addr} <==<==<== {event}");
+                // Any datagram proves the peer and the link are alive; a busy
+                // phone answers pings late, and closing a live connection
+                // right as control was handed to it left the pointer lost.
+                ping_response.borrow_mut().insert(addr);
                 match event {
                     ProtoEvent::Pong(remote_ready) => {
                         let changed = pong_is_edge(&client_manager, handle, addr, remote_ready);
@@ -414,9 +421,13 @@ async fn receive_loop(
                         tx.send((handle, fingerprint.clone(), ProtoEvent::Hello { commit }))
                             .expect("channel closed");
                     }
-                    event => tx
-                        .send((handle, fingerprint.clone(), event))
-                        .expect("channel closed"),
+                    event => {
+                        // The service is shutting down when the channel is
+                        // gone: stop reading instead of panicking the daemon.
+                        if tx.send((handle, fingerprint.clone(), event)).is_err() {
+                            break;
+                        }
+                    }
                 }
             }
             // Skip undecodable datagrams without dropping the

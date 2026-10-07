@@ -5,16 +5,123 @@
 //! an outcome: it applies the change, then reports what happened.
 
 use super::*;
-/// Maps a plugin identifier onto the processes the supervisor owns for it.
-///
-/// Returns `None` for a plugin the supervisor does not manage, so a request
-/// naming one is refused rather than silently doing nothing.
-fn plugin_target(id: &str) -> Option<crate::adapter_manager::PluginTarget> {
-    use crate::adapter_manager::PluginTarget;
-    match id {
-        crate::plugins::CLIPBOARD_PLUGIN_ID => Some(PluginTarget::Clipboard),
-        crate::plugins::FUSE_PLUGIN_ID => Some(PluginTarget::Fuse),
-        _ => None,
+use crate::adapter_manager::PluginTarget;
+
+impl Service {
+    /// Maps a plugin identifier onto the processes the supervisor owns for it.
+    ///
+    /// Returns `None` for a plugin the supervisor does not manage, so a request
+    /// naming one is refused rather than silently doing nothing. The two
+    /// built-ins are fixed; any other plugin is managed only if it was
+    /// discovered and declares the pointer capability, so a client cannot name
+    /// an arbitrary id and have the daemon launch it.
+    fn plugin_target(&self, id: &str) -> Option<PluginTarget> {
+        match id {
+            crate::plugins::CLIPBOARD_PLUGIN_ID => Some(PluginTarget::Clipboard),
+            crate::plugins::FUSE_PLUGIN_ID => Some(PluginTarget::Fuse),
+            _ if self.plugins.listens_to_pointer(id) => Some(PluginTarget::Generic(id.to_owned())),
+            _ => None,
+        }
+    }
+
+    /// Launches a discovered pointer plugin with the user's saved settings.
+    ///
+    /// `restart` first stops a copy that is already running, so a restart of a
+    /// stuck plugin does not leave two.
+    pub(super) fn start_pointer_plugin(&mut self, id: &str, restart: bool) {
+        let Some(executable) = self.plugins.executable(id) else {
+            return;
+        };
+        if restart {
+            self.send_plugin_command(ManagerCommand::StopPlugin {
+                plugin: PluginTarget::Generic(id.to_owned()),
+            });
+        }
+        self.send_plugin_command(ManagerCommand::StartPlugin {
+            id: id.to_owned(),
+            executable,
+            settings: self.plugins.settings_of(id),
+        });
+    }
+
+    /// Tells every enabled pointer plugin a pointer crossed an edge.
+    ///
+    /// Sent per crossing, never per motion, so it costs nothing while the
+    /// pointer is simply moving. A plugin that is not running, or is busy,
+    /// misses the event rather than holding it up: the supervisor drops it.
+    pub(super) fn forward_pointer_to_plugins(&mut self, passage: &PointerPassage, entered: bool) {
+        use syntra_plugin_api::{Edge, PointerEvent};
+        let ids = self.plugins.pointer_plugins();
+        log::info!(
+            "[plugin] pointer {} through the {:?} edge -> {} plugin(s) {:?}",
+            if entered { "entered" } else { "left" },
+            passage.edge,
+            ids.len(),
+            ids
+        );
+        if ids.is_empty() {
+            return;
+        }
+        let edge = match passage.edge {
+            Position::Left => Edge::Left,
+            Position::Right => Edge::Right,
+            Position::Top => Edge::Top,
+            Position::Bottom => Edge::Bottom,
+        };
+        let event = if entered {
+            PointerEvent::Entered {
+                edge,
+                along: passage.along,
+                peer: passage.peer.clone(),
+            }
+        } else {
+            PointerEvent::Left {
+                edge,
+                along: passage.along,
+                peer: passage.peer.clone(),
+            }
+        };
+        for id in ids {
+            self.send_plugin_command(ManagerCommand::PluginPointer {
+                id,
+                event: event.clone(),
+            });
+        }
+    }
+
+    /// Tells every enabled pointer plugin how hard an edge is being pushed.
+    ///
+    /// `amount` runs from 0.0 to 1.0 and is 0.0 once the push is over. The
+    /// capture side already limits how often this is called, and the
+    /// supervisor drops it for a plugin that cannot take it, so a burst can
+    /// never queue up behind a slow plugin.
+    pub(super) fn forward_pressure_to_plugins(
+        &mut self,
+        edge: Position,
+        along: Option<f32>,
+        amount: f32,
+    ) {
+        use syntra_plugin_api::{Edge, PointerEvent};
+        let ids = self.plugins.pointer_plugins();
+        if ids.is_empty() {
+            return;
+        }
+        let edge = match edge {
+            Position::Left => Edge::Left,
+            Position::Right => Edge::Right,
+            Position::Top => Edge::Top,
+            Position::Bottom => Edge::Bottom,
+        };
+        for id in ids {
+            self.send_plugin_command(ManagerCommand::PluginPointer {
+                id,
+                event: PointerEvent::Pressure {
+                    edge,
+                    along,
+                    amount,
+                },
+            });
+        }
     }
 }
 
@@ -122,6 +229,12 @@ impl Service {
                 if enabled {
                     if let Some(problem) = crate::gnome_guard::independent_pointer_blocker() {
                         log::warn!("independent pointers refused: {problem}");
+                        // Keep the request: it takes effect by itself when the
+                        // service next starts under a GNOME Shell that has the
+                        // setting, instead of asking the user to enable it
+                        // again after the login.
+                        self.config.set_independent_pointers(true);
+                        self.save_config();
                         self.notify_frontend(FrontendEvent::Error(problem));
                         self.notify_frontend(FrontendEvent::IndependentPointers(false));
                         return false;
@@ -129,6 +242,10 @@ impl Service {
                 }
                 self.config.set_independent_pointers(enabled);
                 self.emulation.set_independent_pointers(enabled);
+                #[cfg(target_os = "linux")]
+                self.capture.set_separate_peer_pointers(
+                    enabled && crate::gnome_guard::peers_have_own_cursor(),
+                );
                 self.save_config();
                 self.notify_frontend(FrontendEvent::IndependentPointers(enabled));
             }
@@ -468,9 +585,12 @@ impl Service {
                     // Recording the preference is not enough: disabling must
                     // actually stop the process, and enabling must start one,
                     // or the control is a label with no effect.
-                    match (plugin_target(&id), enabled) {
+                    match (self.plugin_target(&id), enabled) {
                         (Some(target), false) => {
                             self.send_plugin_command(ManagerCommand::StopPlugin { plugin: target })
+                        }
+                        (Some(PluginTarget::Generic(_)), true) => {
+                            self.start_pointer_plugin(&id, false)
                         }
                         (Some(target), true) => self
                             .send_plugin_command(ManagerCommand::RestartPlugin { plugin: target }),
@@ -488,15 +608,41 @@ impl Service {
                 self.publish_plugins();
             }
             FrontendRequest::RestartPlugin { id } => {
-                match plugin_target(&id) {
+                match self.plugin_target(&id) {
                     Some(target) if self.plugins.is_enabled(&id) => {
                         self.plugins.record_restart(&id);
-                        self.send_plugin_command(ManagerCommand::RestartPlugin { plugin: target });
+                        if let PluginTarget::Generic(_) = target {
+                            self.start_pointer_plugin(&id, true);
+                        } else {
+                            self.send_plugin_command(ManagerCommand::RestartPlugin {
+                                plugin: target,
+                            });
+                        }
                         log::info!("restarting plugin `{id}` on request");
                     }
                     Some(_) => log::info!("ignoring restart for disabled plugin `{id}`"),
                     None => log::warn!("ignoring restart for unknown plugin `{id}`"),
                 }
+                self.publish_plugins();
+            }
+            FrontendRequest::SetPluginSetting { id, key, value } => {
+                if self.plugins.set_setting(&id, &key, &value) {
+                    log::info!("plugin `{id}` setting `{key}` set to `{value}`");
+                    // Stored and saved; now handed to the process too, so the
+                    // change shows without a restart. A plugin that is not
+                    // running is given the stored values when it starts.
+                    if self.plugins.listens_to_pointer(&id) {
+                        self.send_plugin_command(ManagerCommand::PluginSettings {
+                            settings: self.plugins.settings_of(&id),
+                            id: id.clone(),
+                        });
+                    }
+                } else {
+                    // Not an error to retry: the value was not one the plugin
+                    // declared it understands, or the plugin or key is unknown.
+                    log::warn!("ignoring setting `{key}` = `{value}` for plugin `{id}`");
+                }
+                // Reply either way, so the control reverts if it was refused.
                 self.publish_plugins();
             }
         }
@@ -576,6 +722,21 @@ impl Service {
             }
         }
         self.emulation.set_peer_sides(sides, beyond);
+        self.publish_peer_availability();
+    }
+
+    /// Tells emulation which configured devices cannot take input right now
+    /// (not connected, or their emulation is off), so the edge towards one
+    /// is a wall rather than a hand-off that will be refused.
+    pub(super) fn publish_peer_availability(&self) {
+        let unavailable = self
+            .client_manager
+            .get_client_states()
+            .into_iter()
+            .filter(|(_, _, state)| !(state.alive && state.remote_ready))
+            .filter_map(|(handle, ..)| self.client_manager.peer_fingerprint(handle))
+            .collect();
+        self.emulation.set_unavailable_peers(unavailable);
     }
 
     pub(super) fn save_config(&mut self) {
@@ -642,9 +803,14 @@ impl Service {
         self.notify_frontend(FrontendEvent::EmulationStatus(self.emulation_status));
         self.notify_frontend(FrontendEvent::CaptureStatus(self.capture_status));
         self.notify_frontend(FrontendEvent::InputSharing(self.input_sharing));
-        self.notify_frontend(FrontendEvent::IndependentPointers(
-            self.config.independent_pointers(),
-        ));
+        // What is applied, not just what is saved: a saved choice that waits
+        // for a login must not show as on while emulation runs without it.
+        #[cfg(target_os = "linux")]
+        let independent =
+            self.config.independent_pointers() && crate::gnome_guard::independent_pointer_ready();
+        #[cfg(not(target_os = "linux"))]
+        let independent = self.config.independent_pointers();
+        self.notify_frontend(FrontendEvent::IndependentPointers(independent));
         self.notify_frontend(FrontendEvent::HopBypass(self.config.hop_bypass()));
         self.notify_frontend(FrontendEvent::MultiHop(self.config.multi_hop()));
         self.notify_frontend(FrontendEvent::ClipboardSettings(self.clipboard_settings));

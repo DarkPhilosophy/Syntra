@@ -54,9 +54,31 @@ fn edge_matches(entered: Position, edge: syntra_input_emulation::PointerEdge) ->
     )
 }
 
+/// Whether the pointer may be handed on towards `target` through `side`.
+///
+/// Not while that device cannot take input, and not for a moment after it
+/// (or its owner) refused: the edge is a wall then, instead of a request that
+/// hides and redraws the pointer on every push.
+fn handoff_allowed(
+    unavailable: &HashSet<String>,
+    cooldown: &HashMap<Position, Instant>,
+    target: &str,
+    side: Position,
+    now: Instant,
+) -> bool {
+    !unavailable.contains(target) && cooldown.get(&side).is_none_or(|until| now >= *until)
+}
+
 pub(crate) enum EmulationEvent {
     /// No peer's pointer is on this screen any more.
     NoLongerControlled,
+    /// A peer's pointer left this screen. Sent once, from the one place every
+    /// exit passes through, so a frontend can end an effect started on entry.
+    Left {
+        addr: SocketAddr,
+        /// The edge it had entered through, when known.
+        side: Option<syntra_api::Position>,
+    },
     Connected {
         addr: SocketAddr,
         fingerprint: String,
@@ -72,6 +94,14 @@ pub(crate) enum EmulationEvent {
         pos: syntra_api::Position,
         /// certificate fingerprint of the connection
         fingerprint: String,
+        /// The first `Enter` of this crossing: the sender repeats it until
+        /// acknowledged, and only one of the repeats starts a crossing.
+        first: bool,
+        /// The pointer came through another device, not straight from its owner.
+        relayed: bool,
+        /// Where along the edge it came in, as a share of the edge from 0.0 to
+        /// 1.0, when the sender's capture backend knew.
+        along: Option<f32>,
     },
     /// connection closed
     Disconnected {
@@ -157,12 +187,16 @@ enum EmulationRequest {
     StepInside(syntra_input_capture::Position),
     /// Put the local pointer just inside this edge.
     PlacePointer(syntra_input_capture::Position),
+    /// Hide the cursor drawn for a pointer that has left this screen.
+    HidePointer,
     /// Where each configured peer sits on this screen, by address, and
     /// which certificate sits on each side.
     SetPeerSides(
         HashMap<std::net::IpAddr, Position>,
         HashMap<Position, String>,
     ),
+    /// Certificates of configured devices that cannot take input now.
+    SetUnavailablePeers(HashSet<String>),
     SendProto {
         addr: SocketAddr,
         event: ProtoEvent,
@@ -179,6 +213,7 @@ impl Emulation {
         backend: Option<syntra_input_emulation::Backend>,
         listener: SyntraListener,
         last_entry: crate::capture::EntryMark,
+        entry_along: crate::capture::EntryAlong,
     ) -> Self {
         let emulation_proxy = EmulationProxy::new(backend);
         let (request_tx, request_rx) = channel();
@@ -200,6 +235,9 @@ impl Emulation {
             multi_hop: true,
             relay: None,
             last_entry,
+            entry_along,
+            unavailable_peers: HashSet::new(),
+            handoff_cooldown: HashMap::new(),
         };
         let task = spawn_local(emulation_task.run());
         Self {
@@ -246,12 +284,24 @@ impl Emulation {
             .expect("channel closed");
     }
 
+    /// Updates which configured devices cannot take input right now.
+    pub(crate) fn set_unavailable_peers(&self, unavailable: HashSet<String>) {
+        self.request_tx
+            .send(EmulationRequest::SetUnavailablePeers(unavailable))
+            .expect("channel closed");
+    }
+
     pub(crate) fn step_inside(&self, edge: syntra_input_capture::Position) {
         let _ = self.request_tx.send(EmulationRequest::StepInside(edge));
     }
 
     pub(crate) fn place_pointer(&self, edge: syntra_input_capture::Position) {
         let _ = self.request_tx.send(EmulationRequest::PlacePointer(edge));
+    }
+
+    /// Hides the cursor this device drew for a pointer that has left it.
+    pub(crate) fn hide_pointer(&self) {
+        let _ = self.request_tx.send(EmulationRequest::HidePointer);
     }
 
     pub(crate) fn set_backend(&self, backend: Option<syntra_input_emulation::Backend>) {
@@ -348,6 +398,13 @@ struct ListenTask {
     peer_fingerprints: HashMap<SocketAddr, String>,
     /// Tells capture which edge a pointer just entered through.
     last_entry: crate::capture::EntryMark,
+    /// Tells capture where along that edge the pointer came in, as a share of
+    /// the edge, so the release that lets the cursor go can meet it there.
+    entry_along: crate::capture::EntryAlong,
+    /// Certificates of configured devices that cannot take input right now.
+    unavailable_peers: HashSet<String>,
+    /// Edges that refused a hand-off, and until when to stop asking.
+    handoff_cooldown: HashMap<Position, Instant>,
 }
 
 #[derive(Debug)]
@@ -412,6 +469,10 @@ fn input_accepted(
 /// own ping window (4 pings, 500 ms apart) so both sides agree.
 const PEER_SILENCE_TIMEOUT: Duration = Duration::from_secs(3);
 
+/// After a device refused a hand-off, pushing against the same edge does not
+/// ask again for this long.
+const HANDOFF_COOLDOWN: Duration = Duration::from_secs(3);
+
 impl ListenTask {
     /// Whether a peer may drive input here. Local capture is only needed to
     /// hand the shared pointer back; an independent pointer returns control
@@ -420,15 +481,43 @@ impl ListenTask {
     /// Stops treating `addr` as controlling this screen, and tells the
     /// service when no peer controls it any more.
     fn end_control(&mut self, addr: SocketAddr) {
-        if self.active_inputs.remove(&addr) && self.active_inputs.is_empty() {
+        let was_active = self.active_inputs.remove(&addr);
+        if was_active {
+            let _ = self.event_tx.send(EmulationEvent::Left {
+                addr,
+                side: self.entered_from.get(&addr).map(|side| to_ipc_pos(*side)),
+            });
+        }
+        if was_active && self.active_inputs.is_empty() {
             let _ = self.event_tx.send(EmulationEvent::NoLongerControlled);
         }
+        self.where_are_the_peers("a peer left");
+    }
+
+    /// One line that says which peers' pointers are on this screen and
+    /// through which edge each entered, as this device sees it.
+    fn where_are_the_peers(&self, why: &str) {
+        let peers = self
+            .active_inputs
+            .iter()
+            .map(|addr| match self.entered_from.get(addr) {
+                Some(side) => format!("{addr} via {side}"),
+                None => format!("{addr} via ?"),
+            })
+            .collect::<Vec<_>>();
+        log::info!("[where] {why}: peers on this screen: {peers:?}");
     }
 
     /// A peer asks to move its pointer onto this screen. `through` is the
     /// side of the device it arrived through after a handoff; otherwise our
     /// own map's side for the peer wins over the side it assumed.
-    async fn handle_enter(&mut self, addr: SocketAddr, pos: Position, through: Option<Position>) {
+    async fn handle_enter(
+        &mut self,
+        addr: SocketAddr,
+        pos: Position,
+        through: Option<Position>,
+        along: Option<f32>,
+    ) {
         if !self.accepts_input() {
             log::warn!("rejecting entry from {addr}: remote input is unavailable");
             self.emulation_proxy.remove(addr);
@@ -449,7 +538,8 @@ impl ListenTask {
             .map(|(side, _)| *side)
             .or_else(|| self.peer_sides.get(&addr.ip()).copied());
         let side = through.or(layout_side).unwrap_or(pos);
-        if self.active_inputs.insert(addr) {
+        let first_enter = self.active_inputs.insert(addr);
+        if first_enter {
             let source = if through.is_some() {
                 "via the device it was handed on by"
             } else if layout_side.is_some() {
@@ -460,6 +550,24 @@ impl ListenTask {
             log::info!("[route] IN  {addr} enters on the {side} edge ({source})");
         }
         self.entered_from.insert(addr, side);
+        self.where_are_the_peers("a peer entered");
+        // Marked before the capture is asked to release, so the release can
+        // put the cursor on the entry edge instead of where the last capture
+        // began.
+        let places = first_enter && (cfg!(target_os = "android") || self.multi_hop);
+        if places {
+            self.last_entry.set(Some((
+                crate::capture::capture_pos(to_ipc_pos(side)),
+                std::time::Instant::now(),
+            )));
+        }
+        // Where along the edge it came in, set before the release is asked for
+        // so that release can put the cursor there. Only the first `Enter` of
+        // a crossing: the repeats must not wipe it, and an entry that gave no
+        // position clears the last one rather than inherit it.
+        if first_enter {
+            self.entry_along.set(along);
+        }
         self.event_tx
             .send(EmulationEvent::ReleaseNotify)
             .expect("channel closed");
@@ -470,16 +578,20 @@ impl ListenTask {
                 addr,
                 pos: to_ipc_pos(side),
                 fingerprint,
+                first: first_enter,
+                relayed: through.is_some(),
+                // The same share of the edge on this screen as on the sender's:
+                // a fraction, not a pixel position.
+                along,
             })
             .expect("channel closed");
         // Phones draw the peer's pointer and put it on the entry side.
         // Desktops keep their pointer where it is unless multi-hop is on.
-        if cfg!(target_os = "android") || self.multi_hop {
-            self.last_entry.set(Some((
-                crate::capture::capture_pos(to_ipc_pos(side)),
-                std::time::Instant::now(),
-            )));
-            self.emulation_proxy.place_pointer(side);
+        // Only the first Enter of an entry places it: the sender repeats
+        // Enter until acknowledged, and each repeat slammed the cursor
+        // against the edge again, so the user lost it.
+        if places {
+            self.emulation_proxy.place_pointer_along(side, along);
         }
         self.listener.reply(addr, ProtoEvent::Ack(0)).await;
     }
@@ -506,6 +618,18 @@ impl ListenTask {
         let Some(target) = self.peer_beyond.get(&side).cloned() else {
             return false;
         };
+        // A device that cannot take input right now (not connected, or its
+        // emulation is off) makes the edge a wall. Asking anyway hides the
+        // pointer, is refused, and puts it back: a flicker on every push.
+        if !handoff_allowed(
+            &self.unavailable_peers,
+            &self.handoff_cooldown,
+            &target,
+            side,
+            Instant::now(),
+        ) {
+            return false;
+        }
         if self.peer_fingerprints.get(&addr) == Some(&target)
             && self
                 .entered_from
@@ -537,6 +661,11 @@ impl ListenTask {
     /// the pointer comes back here.
     fn handoff_refused(&mut self, addr: SocketAddr, target: &str, side: Position) {
         let _ = target;
+        // Pushing against the same edge asks again on every motion event;
+        // each ask hides and redraws the pointer, which reads as flicker.
+        // Treat the edge as a wall for a moment instead.
+        self.handoff_cooldown
+            .insert(side, Instant::now() + HANDOFF_COOLDOWN);
         #[cfg(target_os = "android")]
         if self.hop_bypass && self.relay.is_none() {
             log::info!(
@@ -596,6 +725,7 @@ impl ListenTask {
         let mut last_response = HashMap::new();
         let mut clipboard_transfers: HashMap<(SocketAddr, u64), ClipboardTransfer> = HashMap::new();
         let mut rejected_connections = HashMap::new();
+        let mut stale_leaves: HashMap<SocketAddr, Instant> = HashMap::new();
         loop {
             select! {
                 e = self.listener.next() => {match e {
@@ -611,10 +741,13 @@ impl ListenTask {
                                     .iter()
                                     .find(|(_, fingerprint)| **fingerprint == via)
                                     .map(|(side, _)| *side);
-                                self.handle_enter(addr, side, through).await;
+                                self.handle_enter(addr, side, through, None).await;
                             }
                             ProtoEvent::Enter(pos) => {
-                                self.handle_enter(addr, pos, None).await;
+                                self.handle_enter(addr, pos, None, None).await;
+                            }
+                            ProtoEvent::EnterAt { side, along } => {
+                                self.handle_enter(addr, side, None, Some(along)).await;
                             }
                             ProtoEvent::Leave(_) => {
                                 self.end_control(addr);
@@ -624,6 +757,15 @@ impl ListenTask {
                             ProtoEvent::Input(event) => {
                                 if self.input_sharing && self.active_inputs.contains(&addr) && !self.relay_input(addr, event) {
                                     self.emulation_proxy.consume(event, addr);
+                                } else if !self.active_inputs.contains(&addr)
+                                    && stale_leaves.insert(addr, Instant::now())
+                                        .is_none_or(|i| i.elapsed() >= Duration::from_millis(500))
+                                {
+                                    // A sender still sending after its control here
+                                    // ended missed our Leave and would keep the
+                                    // pointer captured, lost on both screens.
+                                    log::info!("[route] {addr} still sends input after its control ended: sending Leave again");
+                                    self.listener.reply(addr, ProtoEvent::Leave(0)).await;
                                 }
                             }
                             // The owner could not enter the next device (not
@@ -814,6 +956,7 @@ impl ListenTask {
                             syntra_input_capture::Position::Bottom => syntra_input_emulation::PointerEdge::Bottom,
                         });
                     }
+                    EmulationRequest::HidePointer => self.emulation_proxy.hide_pointer(),
                     EmulationRequest::PlacePointer(edge) => {
                         self.emulation_proxy.place_pointer(match edge {
                             syntra_input_capture::Position::Left => Position::Left,
@@ -825,6 +968,9 @@ impl ListenTask {
                     EmulationRequest::SetPeerSides(sides, beyond) => {
                         self.peer_sides = sides;
                         self.peer_beyond = beyond;
+                    }
+                    EmulationRequest::SetUnavailablePeers(unavailable) => {
+                        self.unavailable_peers = unavailable;
                     }
                     EmulationRequest::SetInputSharing(enabled) => {
                         self.input_sharing = enabled;
@@ -903,7 +1049,9 @@ pub(crate) struct EmulationProxy {
 enum ProxyRequest {
     Input(Event, SocketAddr),
     /// Put the pointer on the given side of this screen (entry point).
-    PlacePointer(Position),
+    PlacePointer(Position, Option<f32>),
+    /// Hide the cursor drawn for a pointer that has left this screen.
+    HidePointer,
     /// Move the pointer a little inside from this edge.
     StepInside(syntra_input_emulation::PointerEdge),
     Remove(SocketAddr),
@@ -985,7 +1133,17 @@ impl EmulationProxy {
     }
 
     fn place_pointer(&self, side: Position) {
-        let _ = self.request_tx.send(ProxyRequest::PlacePointer(side));
+        self.place_pointer_along(side, None);
+    }
+
+    fn place_pointer_along(&self, side: Position, along: Option<f32>) {
+        let _ = self
+            .request_tx
+            .send(ProxyRequest::PlacePointer(side, along));
+    }
+
+    fn hide_pointer(&self) {
+        let _ = self.request_tx.send(ProxyRequest::HidePointer);
     }
 
     fn set_independent_pointers(&self, enabled: bool) {
@@ -1077,7 +1235,8 @@ impl EmulationTask {
                     }
                     // Kept in the shared cell; applied on the next backend.
                     ProxyRequest::SetIndependentPointers(_)
-                    | ProxyRequest::PlacePointer(_)
+                    | ProxyRequest::PlacePointer(..)
+                    | ProxyRequest::HidePointer
                     | ProxyRequest::StepInside(_) => {}
                     ProxyRequest::PublishFileClipboard { reply, .. } => {
                         let _ = reply.send(Err("emulation inactive".to_string()));
@@ -1132,7 +1291,8 @@ impl EmulationTask {
                     }
                     ProxyRequest::Input(..)
                     | ProxyRequest::SetIndependentPointers(_)
-                    | ProxyRequest::PlacePointer(_)
+                    | ProxyRequest::PlacePointer(..)
+                    | ProxyRequest::HidePointer
                     | ProxyRequest::StepInside(_) => {}
                     ProxyRequest::PublishFileClipboard { reply, .. } => {
                         let _ = reply.send(Err("emulation not ready".to_string()));
@@ -1240,13 +1400,17 @@ impl EmulationTask {
                         emulation.set_independent_pointers(enabled);
                     }
                     ProxyRequest::StepInside(edge) => emulation.step_inside(edge),
-                    ProxyRequest::PlacePointer(side) => {
-                        emulation.place_pointer(match side {
-                            Position::Left => syntra_input_emulation::PointerEdge::Left,
-                            Position::Right => syntra_input_emulation::PointerEdge::Right,
-                            Position::Top => syntra_input_emulation::PointerEdge::Top,
-                            Position::Bottom => syntra_input_emulation::PointerEdge::Bottom,
-                        });
+                    ProxyRequest::HidePointer => emulation.hide_pointer(),
+                    ProxyRequest::PlacePointer(side, along) => {
+                        emulation.place_pointer_along(
+                            match side {
+                                Position::Left => syntra_input_emulation::PointerEdge::Left,
+                                Position::Right => syntra_input_emulation::PointerEdge::Right,
+                                Position::Top => syntra_input_emulation::PointerEdge::Top,
+                                Position::Bottom => syntra_input_emulation::PointerEdge::Bottom,
+                            },
+                            along,
+                        );
                     }
                     ProxyRequest::SetInputSharing(enabled) => {
                         if !enabled {
@@ -1393,7 +1557,8 @@ async fn wait_for_termination(rx: &mut Receiver<ProxyRequest>) {
             ProxyRequest::Remove(_) => continue,
             ProxyRequest::SetInputSharing(_)
             | ProxyRequest::SetIndependentPointers(_)
-            | ProxyRequest::PlacePointer(_)
+            | ProxyRequest::PlacePointer(..)
+            | ProxyRequest::HidePointer
             | ProxyRequest::StepInside(_) => continue,
             ProxyRequest::Reenable | ProxyRequest::SetBackend(_) => continue,
             ProxyRequest::PublishFileClipboard { reply, .. } => {
@@ -1474,6 +1639,57 @@ mod tests {
         assert!(
             !input_accepted(false, true, true, true),
             "sharing must be on"
+        );
+    }
+
+    /// An edge towards a device that cannot take input, or that just refused,
+    /// is a wall: no hand-off request, so nothing to hide and redraw.
+    #[test]
+    fn edges_towards_unavailable_or_refusing_devices_are_walls() {
+        use super::{Position, handoff_allowed};
+        use std::collections::HashSet;
+        use std::time::{Duration, Instant};
+
+        let now = Instant::now();
+        let none_unavailable = HashSet::new();
+        let mut unavailable = HashSet::new();
+        unavailable.insert("hp".to_owned());
+        let mut cooldown = HashMap::new();
+
+        assert!(handoff_allowed(
+            &none_unavailable,
+            &cooldown,
+            "hp",
+            Position::Right,
+            now
+        ));
+        assert!(
+            !handoff_allowed(&unavailable, &cooldown, "hp", Position::Right, now),
+            "the device is down"
+        );
+        assert!(
+            handoff_allowed(&unavailable, &cooldown, "msi", Position::Left, now),
+            "another device is unaffected"
+        );
+
+        cooldown.insert(Position::Right, now + Duration::from_secs(3));
+        assert!(
+            !handoff_allowed(&none_unavailable, &cooldown, "hp", Position::Right, now),
+            "the edge refused a moment ago"
+        );
+        assert!(
+            handoff_allowed(&none_unavailable, &cooldown, "msi", Position::Left, now),
+            "the cooldown is per edge"
+        );
+        assert!(
+            handoff_allowed(
+                &none_unavailable,
+                &cooldown,
+                "hp",
+                Position::Right,
+                now + Duration::from_secs(4)
+            ),
+            "and it ends"
         );
     }
 
@@ -1634,6 +1850,7 @@ mod tests {
                 let mut emulation = super::Emulation::new(
                     Some(syntra_input_emulation::Backend::Dummy),
                     listener,
+                    Default::default(),
                     Default::default(),
                 );
                 let publication = syntra_plugin_api::PublishFileClipboard {

@@ -11,10 +11,29 @@ impl Service {
             EmulationEvent::ConnectionAttempt { fingerprint } => {
                 self.notify_frontend(FrontendEvent::ConnectionAttempt { fingerprint });
             }
+            EmulationEvent::Left { addr, side } => {
+                if let Some(edge) = side {
+                    // An exit says only which edge the pointer is leaving by:
+                    // how it arrived and where along the edge are not known
+                    // here, so they are left unset rather than guessed.
+                    let passage = PointerPassage {
+                        edge,
+                        peer: addr.to_string(),
+                        fingerprint: self.authenticated_peer_fingerprints.get(&addr).cloned(),
+                        relayed: false,
+                        along: None,
+                    };
+                    self.forward_pointer_to_plugins(&passage, false);
+                    self.notify_frontend(FrontendEvent::PointerLeft(passage));
+                }
+            }
             EmulationEvent::Entered {
                 addr,
                 pos,
                 fingerprint,
+                first,
+                relayed,
+                along,
             } => {
                 if !self.input_sharing {
                     self.emulation.send_leave_event(addr);
@@ -24,6 +43,19 @@ impl Service {
                     fingerprint.clone(),
                     crate::capture::capture_pos(pos),
                 )));
+                // One event per crossing, not one per repeated `Enter`: a
+                // frontend draws an effect from it and must not restart it.
+                if first {
+                    let passage = PointerPassage {
+                        edge: pos,
+                        peer: addr.to_string(),
+                        fingerprint: Some(fingerprint.clone()),
+                        relayed,
+                        along,
+                    };
+                    self.forward_pointer_to_plugins(&passage, true);
+                    self.notify_frontend(FrontendEvent::PointerEntered(passage));
+                }
                 // check if already registered
                 if !self.incoming_conns.contains(&addr) {
                     self.add_incoming(addr, pos, fingerprint.clone());
@@ -298,6 +330,7 @@ impl Service {
             }
             ICaptureEvent::PeerStateChanged(handle) => {
                 self.broadcast_client(handle);
+                self.publish_peer_availability();
                 if self.client_manager.alive(handle) {
                     if self.history_connected_peers.insert(Peer::Capture(handle)) {
                         self.request_history_sync(Peer::Capture(handle), 0);
@@ -357,6 +390,25 @@ impl Service {
                     }
                 }
             }
+            ICaptureEvent::PointerReturned { edge, along } => {
+                self.forward_pointer_to_plugins(
+                    &PointerPassage {
+                        edge: crate::capture::api_pos(edge),
+                        peer: "local".into(),
+                        fingerprint: None,
+                        relayed: false,
+                        along,
+                    },
+                    true,
+                );
+            }
+            ICaptureEvent::EdgePressure {
+                edge,
+                amount,
+                along,
+            } => {
+                self.forward_pressure_to_plugins(crate::capture::api_pos(edge), along, amount);
+            }
             ICaptureEvent::CaptureDisabled => {
                 self.capture_status = Status::Disabled;
                 self.notify_frontend(FrontendEvent::CaptureStatus(self.capture_status));
@@ -371,6 +423,10 @@ impl Service {
                 self.emulation.set_capture_ready(true);
             }
             ICaptureEvent::ClientEntered(handle) => {
+                // Our pointer is on its way to another device: a cursor left
+                // on this screen for it (the phone draws one when the pointer
+                // comes home) would stay behind, on and unable to move.
+                self.emulation.hide_pointer();
                 if self.input_sharing {
                     log::info!("entering client {handle} ...");
                     self.spawn_hook_command(handle);

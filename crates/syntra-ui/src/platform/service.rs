@@ -2,6 +2,8 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 const UNIT_NAME: &str = "syntra.service";
+/// Restarts the service when a graphical session starts.
+const SESSION_UNIT_NAME: &str = "syntra-session.service";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ServiceStatus {
@@ -129,7 +131,7 @@ pub fn disable_autostart() -> Result<(), ServiceError> {
 
 #[cfg(target_os = "linux")]
 mod imp {
-    use super::{ServiceError, ServiceStatus, UNIT_NAME};
+    use super::{SESSION_UNIT_NAME, ServiceError, ServiceStatus, UNIT_NAME};
     use std::collections::HashMap;
     use std::env;
     use std::ffi::OsStr;
@@ -167,27 +169,38 @@ mod imp {
             .ok_or_else(|| ServiceError::Environment("unit path has no parent directory".into()))?;
         fs::create_dir_all(parent)?;
         let escaped_binary = escape_exec_start_path(&binary)?;
-        let contents = format!(
-            "[Unit]\nDescription=Syntra background service\nAfter=graphical-session.target xdg-desktop-portal.service\nBindsTo=graphical-session.target\nStartLimitIntervalSec=500\nStartLimitBurst=5\n\n[Service]\nExecStart={escaped_binary}\nRestart=on-failure\nRestartSec=5s\nKillSignal=SIGINT\nTimeoutStopSec=15\n\n[Install]\nWantedBy=graphical-session.target\n"
-        );
-        write_unit_atomically(&unit_path, contents.as_bytes())?;
+        write_unit_atomically(&unit_path, service_unit(&escaped_binary).as_bytes())?;
+        write_unit_atomically(&unit_path_of(SESSION_UNIT_NAME)?, session_unit().as_bytes())?;
         run_manager_action("daemon-reload")
     }
 
     pub(super) fn uninstall() -> Result<(), ServiceError> {
         run_action("disable")?;
-        match fs::remove_file(unit_path()?) {
-            Ok(()) => run_manager_action("daemon-reload"),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                run_manager_action("daemon-reload")
+        for name in [UNIT_NAME, SESSION_UNIT_NAME] {
+            match fs::remove_file(unit_path_of(name)?) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
             }
-            Err(error) => Err(error.into()),
         }
+        run_manager_action("daemon-reload")
     }
 
     pub(super) fn run_action(action: &'static str) -> Result<(), ServiceError> {
+        run_unit_action(action, UNIT_NAME)?;
+        // The session unit only exists for installs made by this version.
+        let session_installed = unit_path_of(SESSION_UNIT_NAME)
+            .map(|path| path.is_file())
+            .unwrap_or(false);
+        if matches!(action, "enable" | "disable") && session_installed {
+            run_unit_action(action, SESSION_UNIT_NAME)?;
+        }
+        Ok(())
+    }
+
+    fn run_unit_action(action: &'static str, unit: &str) -> Result<(), ServiceError> {
         let output = Command::new("systemctl")
-            .args(["--user", action, UNIT_NAME])
+            .args(["--user", action, unit])
             .output()
             .map_err(|error| command_start_error(action, error))?;
         ensure_success(action, &output)
@@ -295,6 +308,10 @@ mod imp {
     }
 
     fn unit_path() -> Result<PathBuf, ServiceError> {
+        unit_path_of(UNIT_NAME)
+    }
+
+    fn unit_path_of(name: &str) -> Result<PathBuf, ServiceError> {
         let config_home = match env::var_os("XDG_CONFIG_HOME") {
             Some(path) if !path.is_empty() => PathBuf::from(path),
             _ => env::var_os("HOME")
@@ -305,7 +322,29 @@ mod imp {
                     ServiceError::Environment("neither XDG_CONFIG_HOME nor HOME is set".into())
                 })?,
         };
-        Ok(config_home.join("systemd/user").join(UNIT_NAME))
+        Ok(config_home.join("systemd/user").join(name))
+    }
+
+    /// The background service unit.
+    ///
+    /// It belongs to the user manager, not to a graphical session: a machine
+    /// logged out of its desktop (a Steam Deck in game mode, a box nobody sits
+    /// at) must stay controllable. Emulation through uinput needs no session;
+    /// capture backends that do need one fail until it exists, and the
+    /// session unit restarts the daemon when one appears.
+    pub(super) fn service_unit(escaped_binary: &str) -> String {
+        format!(
+            "[Unit]\nDescription=Syntra background service\nAfter=graphical-session.target xdg-desktop-portal.service\nStartLimitIntervalSec=500\nStartLimitBurst=5\n\n[Service]\nExecStart={escaped_binary}\nRestart=on-failure\nRestartSec=5s\nKillSignal=SIGINT\nTimeoutStopSec=15\n\n[Install]\nWantedBy=default.target\n"
+        )
+    }
+
+    /// Restarts the daemon once a graphical session is up, so backends that
+    /// need the desktop (portals, the compositor) are tried again with the
+    /// session's environment.
+    pub(super) fn session_unit() -> String {
+        format!(
+            "[Unit]\nDescription=Restart Syntra when a graphical session starts\nAfter=graphical-session.target\n\n[Service]\nType=oneshot\nExecStart=systemctl --user try-restart {UNIT_NAME}\n\n[Install]\nWantedBy=graphical-session.target\n"
+        )
     }
 
     fn write_unit_atomically(path: &Path, contents: &[u8]) -> Result<(), ServiceError> {
@@ -432,7 +471,10 @@ mod imp {
 
     #[cfg(test)]
     mod tests {
-        use super::{escape_exec_start_path, parse_status, resolve_install_executable};
+        use super::{
+            escape_exec_start_path, parse_status, resolve_install_executable, service_unit,
+            session_unit,
+        };
         use std::path::Path;
 
         #[test]
@@ -460,6 +502,39 @@ mod imp {
             let escaped =
                 escape_exec_start_path(Path::new("/opt/Syntra/100%/say\"hi\\now")).unwrap();
             assert_eq!(escaped, "\"/opt/Syntra/100%%/say\\\"hi\\\\now\"");
+        }
+
+        /// A machine logged out of its desktop must keep its service: the
+        /// unit may not be tied to, nor started only by, a graphical session.
+        #[test]
+        fn service_outlives_the_graphical_session() {
+            let unit = service_unit("\"/usr/bin/syntra-daemon\"");
+            assert!(
+                !unit.contains("BindsTo"),
+                "stopped with the session:\n{unit}"
+            );
+            assert!(
+                !unit.contains("PartOf"),
+                "stopped with the session:\n{unit}"
+            );
+            assert!(unit.contains("WantedBy=default.target"), "{unit}");
+            assert!(
+                !unit.contains("WantedBy=graphical-session.target"),
+                "{unit}"
+            );
+            assert!(
+                unit.contains("ExecStart=\"/usr/bin/syntra-daemon\""),
+                "{unit}"
+            );
+        }
+
+        /// When a session does start, the daemon restarts to use it.
+        #[test]
+        fn session_unit_restarts_the_service() {
+            let unit = session_unit();
+            assert!(unit.contains("WantedBy=graphical-session.target"), "{unit}");
+            assert!(unit.contains("try-restart syntra.service"), "{unit}");
+            assert!(unit.contains("Type=oneshot"), "{unit}");
         }
 
         #[test]

@@ -2,7 +2,6 @@ use std::cell::Cell;
 use std::error::Error;
 use std::io;
 use std::net::IpAddr;
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, mpsc};
 
@@ -192,10 +191,11 @@ fn bind_install_destination(global: &AppState<'_>, weak: &slint::Weak<AppWindow>
     }
 }
 
-/// One diagnostic as a single plain-text line, for copying.
+/// One diagnostic as a single plain-text line, for copying. It carries the
+/// full date and time: a pasted line must stand on its own.
 fn diagnostic_line(entry: &DiagnosticEntry) -> String {
     [
-        entry.timestamp.as_str(),
+        entry.stamp.as_str(),
         entry.level.as_str(),
         entry.stage.as_str(),
         entry.direction.as_str(),
@@ -209,17 +209,19 @@ fn diagnostic_line(entry: &DiagnosticEntry) -> String {
 }
 
 /// Log records carry UTC RFC 3339 stamps; people read local wall time.
-/// Today's records show only the time, older ones the day as well.
-fn local_log_time(stamp: &str) -> String {
+/// Returns `(day, time, full)`: `29.09`, `07:16:39.800` and
+/// `2026-09-29 07:16:39.800`. The time always has the same width, so the
+/// column lines up whatever day the record is from.
+fn local_log_parts(stamp: &str) -> (String, String, String) {
     let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(stamp) else {
-        return stamp.to_owned();
+        return (String::new(), stamp.to_owned(), stamp.to_owned());
     };
     let local = parsed.with_timezone(&chrono::Local);
-    if local.date_naive() == chrono::Local::now().date_naive() {
-        local.format("%H:%M:%S%.3f").to_string()
-    } else {
-        local.format("%d.%m %H:%M:%S").to_string()
-    }
+    (
+        local.format("%d.%m").to_string(),
+        local.format("%H:%M:%S%.3f").to_string(),
+        local.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
+    )
 }
 
 fn schedule_launch_ready(app: &AppWindow) -> Option<Timer> {
@@ -938,8 +940,16 @@ fn hex_color(value: &str) -> Color {
     Color::from_rgb_u8(113, 131, 85)
 }
 fn apply_appearance(app: &AppWindow, settings: &PresentationSettings) {
-    app.global::<AppState>()
-        .set_suppress_popups(settings.suppress_popups);
+    let state = app.global::<AppState>();
+    state.set_suppress_popups(settings.suppress_popups);
+    // The message column (last) cannot be hidden: a log without it is empty.
+    let shown: Vec<bool> = (0..crate::settings::DIAGNOSTIC_COLUMNS)
+        .map(|index| {
+            index + 1 == crate::settings::DIAGNOSTIC_COLUMNS
+                || settings.hidden_diagnostic_columns & (1 << index) == 0
+        })
+        .collect();
+    state.set_diagnostic_columns(ModelRc::new(VecModel::from(shown)));
     let theme = app.global::<Theme>();
     let dark = matches!(settings.mode, crate::settings::BaseMode::Black);
     let (
@@ -1286,13 +1296,18 @@ fn project_live_diagnostics(
     let rows = store
         .filtered(DIAGNOSTIC_VISIBLE_ROWS)
         .into_iter()
-        .map(|entry| DiagnosticEntry {
-            timestamp: local_log_time(&entry.timestamp).into(),
-            level: entry.level.into(),
-            stage: entry.stage.into(),
-            direction: entry.direction.into(),
-            correlation: entry.correlation.into(),
-            message: entry.message.into(),
+        .map(|entry| {
+            let (date, time, stamp) = local_log_parts(&entry.timestamp);
+            DiagnosticEntry {
+                date: date.into(),
+                timestamp: time.into(),
+                stamp: stamp.into(),
+                level: entry.level.into(),
+                stage: entry.stage.into(),
+                direction: entry.direction.into(),
+                correlation: entry.correlation.into(),
+                message: entry.message.into(),
+            }
         })
         .collect::<Vec<_>>();
 
@@ -1886,7 +1901,8 @@ fn project_app_state(app: &AppWindow, state: &AppViewState, settings: &Presentat
         }
     }
 
-    global.set_plugins(ModelRc::new(VecModel::from(
+    sync_plugins(
+        &global,
         state
             .plugins
             .iter()
@@ -1921,9 +1937,16 @@ fn project_app_state(app: &AppWindow, state: &AppViewState, settings: &Presentat
                 protocol_version: plugin.protocol_version as i32,
                 supported_protocol_version: plugin.supported_protocol_version as i32,
                 error: plugin.error.clone().unwrap_or_default().into(),
+                settings: ModelRc::new(VecModel::from(
+                    plugin
+                        .settings
+                        .iter()
+                        .map(|setting| plugin_setting_entry(setting, &settings.accent))
+                        .collect::<Vec<_>>(),
+                )),
             })
             .collect::<Vec<_>>(),
-    )));
+    );
 
     let mut keys = state
         .authorization
@@ -1935,6 +1958,135 @@ fn project_app_state(app: &AppWindow, state: &AppViewState, settings: &Presentat
     global.set_authorized_keys(ModelRc::new(VecModel::from(keys)));
     if state.navigation.page == "clipboard" {
         project_history(app, state);
+    }
+}
+
+/// One plugin setting as the Slint row draws it: the control is chosen by the
+/// kind, and a colour is shown as the accent while its value is empty.
+fn plugin_setting_entry(setting: &syntra_api::PluginSetting, accent: &str) -> PluginSettingEntry {
+    use syntra_api::PluginSettingKind;
+    let (kind, labels, values, min, max) = match &setting.kind {
+        PluginSettingKind::Toggle => ("toggle", Vec::new(), Vec::new(), 0, 0),
+        PluginSettingKind::Color => ("color", Vec::new(), Vec::new(), 0, 0),
+        PluginSettingKind::Choice(options) => (
+            "choice",
+            options.iter().map(|option| option.label.clone()).collect(),
+            options.iter().map(|option| option.value.clone()).collect(),
+            0,
+            0,
+        ),
+        PluginSettingKind::Number { min, max } => (
+            "number",
+            Vec::new(),
+            Vec::new(),
+            (*min).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+            (*max).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+        ),
+    };
+    let fallback = crate::edge_glow::setting_colour(accent, (113, 131, 85));
+    let (red, green, blue) = crate::edge_glow::setting_colour(&setting.value, fallback);
+    PluginSettingEntry {
+        key: setting.key.clone().into(),
+        label: setting.label.clone().into(),
+        kind: kind.into(),
+        value: setting.value.clone().into(),
+        option_values: ModelRc::new(VecModel::from(
+            values
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<slint::SharedString>>(),
+        )),
+        option_labels: ModelRc::new(VecModel::from(
+            labels
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<slint::SharedString>>(),
+        )),
+        min,
+        max,
+        colour: slint::Color::from_rgb_u8(red, green, blue),
+    }
+}
+
+/// Whether two setting rows would be drawn the same.
+///
+/// The option lists are separate models, and a model is compared by identity,
+/// so two rows with the same options would never be equal; the text is.
+fn same_setting(left: &PluginSettingEntry, right: &PluginSettingEntry) -> bool {
+    let texts = |model: &ModelRc<slint::SharedString>| model.iter().collect::<Vec<_>>();
+    left.key == right.key
+        && left.label == right.label
+        && left.kind == right.kind
+        && left.value == right.value
+        && left.min == right.min
+        && left.max == right.max
+        && left.colour == right.colour
+        && texts(&left.option_values) == texts(&right.option_values)
+        && texts(&left.option_labels) == texts(&right.option_labels)
+}
+
+/// Brings a model of settings to `wanted` in place, touching only rows that
+/// differ, so the rows of an open popup keep their state.
+fn sync_settings(model: &VecModel<PluginSettingEntry>, wanted: Vec<PluginSettingEntry>) {
+    let shared = model.row_count().min(wanted.len());
+    for (row, item) in wanted.iter().enumerate().take(shared) {
+        if model
+            .row_data(row)
+            .is_none_or(|current| !same_setting(&current, item))
+        {
+            model.set_row_data(row, item.clone());
+        }
+    }
+    for item in wanted.iter().skip(shared) {
+        model.push(item.clone());
+    }
+    while model.row_count() > wanted.len() {
+        model.remove(model.row_count() - 1);
+    }
+}
+
+/// Sets the plugin list on the interface without replacing the model.
+///
+/// Replacing it recreates every card and every row of an open settings popup,
+/// which closed the popup and sent the scroll position back to the top on each
+/// press of `+`, since every change makes the daemon send the list again. A
+/// plugin keeps the settings model its row already has, updated in place.
+fn sync_plugins(global: &AppState, mut wanted: Vec<PluginEntry>) {
+    let existing = global.get_plugins();
+    let Some(model) = existing.as_any().downcast_ref::<VecModel<PluginEntry>>() else {
+        global.set_plugins(ModelRc::new(VecModel::from(wanted)));
+        return;
+    };
+    for (index, entry) in wanted.iter_mut().enumerate() {
+        let Some(current) = model.row_data(index) else {
+            continue;
+        };
+        if current.id != entry.id {
+            continue;
+        }
+        let Some(inner) = current
+            .settings
+            .as_any()
+            .downcast_ref::<VecModel<PluginSettingEntry>>()
+        else {
+            continue;
+        };
+        sync_settings(inner, entry.settings.iter().collect());
+        entry.settings = current.settings.clone();
+    }
+    // The rows are compared by value; the settings, now the same model, by
+    // identity, which is equal exactly when nothing else differs.
+    let count = model.row_count().min(wanted.len());
+    for (row, entry) in wanted.iter().enumerate().take(count) {
+        if model.row_data(row).as_ref() != Some(entry) {
+            model.set_row_data(row, entry.clone());
+        }
+    }
+    for entry in wanted.iter().skip(count) {
+        model.push(entry.clone());
+    }
+    while model.row_count() > wanted.len() {
+        model.remove(model.row_count() - 1);
     }
 }
 
@@ -2549,6 +2701,19 @@ fn bind_app_state_callbacks(
         }
     );
     appearance_callback!(
+        on_toggle_diagnostic_column,
+        |saved: &mut PresentationSettings, index: i32| {
+            // The last column is the message and always stays.
+            let hideable = crate::settings::DIAGNOSTIC_COLUMNS - 1;
+            let index = u32::try_from(index)
+                .ok()
+                .filter(|index| *index < hideable)
+                .ok_or_else(|| "Unknown diagnostic column".to_string())?;
+            saved.hidden_diagnostic_columns ^= 1 << index;
+            Ok::<(), String>(())
+        }
+    );
+    appearance_callback!(
         on_change_accent,
         |saved: &mut PresentationSettings, value: SharedString| {
             let value = value.trim();
@@ -2966,6 +3131,28 @@ fn bind_app_state_callbacks(
         let requests = tx.clone();
         global.on_restart_plugin(move |id| {
             let _ = requests.send(FrontendRequest::RestartPlugin { id: id.to_string() });
+        });
+    }
+    {
+        // A setting is changed by the daemon alone: this forwards the intent
+        // and the reply, with the value that is in force, redraws the control.
+        let requests = tx.clone();
+        global.on_change_plugin_setting(move |id, key, value| {
+            let _ = requests.send(FrontendRequest::SetPluginSetting {
+                id: id.to_string(),
+                key: key.to_string(),
+                value: value.to_string(),
+            });
+        });
+    }
+    {
+        let requests = tx.clone();
+        global.on_change_plugin_setting_colour(move |id, key, colour| {
+            let _ = requests.send(FrontendRequest::SetPluginSetting {
+                id: id.to_string(),
+                key: key.to_string(),
+                value: crate::edge_glow::to_hex(colour.red(), colour.green(), colour.blue()),
+            });
         });
     }
     {
@@ -3413,6 +3600,12 @@ fn bind_window_callbacks(
                     if app.global::<Theme>().get_touch_input_active()
                         && crate::file_drop::begin_touch_window_drag(&app)
                     {
+                        return;
+                    }
+                    // A pen has no winit button serial, so the window move is
+                    // asked for with the serial of its last tip-down.
+                    #[cfg(target_os = "linux")]
+                    if crate::tablet::begin_pen_drag(&app) {
                         return;
                     }
                     native_window(&app, |window| {

@@ -14,20 +14,41 @@ use std::path::PathBuf;
 const DROP_IN: &str = "syntra-independent-pointers.conf";
 const FLAG: &str = "disable-direct-scanout";
 
+/// Whether independent pointers can run now: not on GNOME, or the running
+/// GNOME Shell already has direct scanout off. Free of side effects, so it
+/// can be asked whenever the state is reported.
+///
+/// This also decides whether a peer accepts input at all on a desktop with no
+/// capture backend (gamescope): without it the peer reports "not ready" and
+/// the sender refuses every entry.
+pub(crate) fn independent_pointer_ready() -> bool {
+    supports_independent(gnome_session(), shell_has_flag())
+}
+
+fn supports_independent(gnome: bool, shell_flag: bool) -> bool {
+    !gnome || shell_flag
+}
+
+/// Whether the compositor draws a cursor of its own for each peer (GNOME's
+/// pen cursors), as opposed to peers driving the shared pointer.
+pub(crate) fn peers_have_own_cursor() -> bool {
+    syntra_input_emulation::peers_have_pen_cursors()
+}
+
 /// Why independent pointers cannot be turned on right now, if anything.
 ///
 /// Also installs the session setting that removes the reason, so a single
 /// re-login is all the user has to do.
 pub(crate) fn independent_pointer_blocker() -> Option<String> {
-    if !gnome_session() || shell_has_flag() {
+    if independent_pointer_ready() {
         return None;
     }
     let installed = install_drop_in();
     Some(match installed {
         Ok(()) => "Independent pointers need a GNOME setting that takes effect at the next \
                    login (direct scanout off, avoiding a GNOME Shell crash with extra \
-                   cursors). It has been installed: log out and back in, then enable this \
-                   option again."
+                   cursors). It has been installed and your choice is saved: log out and \
+                   back in, and independent pointers turn on by themselves."
             .to_owned(),
         Err(error) => format!(
             "Independent pointers need MUTTER_DEBUG_PAINT={FLAG} in the GNOME session to \
@@ -37,9 +58,7 @@ pub(crate) fn independent_pointer_blocker() -> Option<String> {
 }
 
 fn gnome_session() -> bool {
-    std::env::var("XDG_CURRENT_DESKTOP")
-        .map(|desktops| desktops.split(':').any(|d| d.eq_ignore_ascii_case("gnome")))
-        .unwrap_or(false)
+    syntra_input_emulation::gnome_shell_running()
 }
 
 /// Whether the running GNOME Shell already has direct scanout disabled.
@@ -99,4 +118,20 @@ fn install_drop_in() -> std::io::Result<()> {
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::supports_independent;
+
+    #[test]
+    fn only_an_unprepared_gnome_shell_blocks_independent_pointers() {
+        assert!(supports_independent(true, true));
+        // GNOME before its next login still crashes with extra cursors.
+        assert!(!supports_independent(true, false));
+        // Desktops without GNOME are not blocked; gamescope has no capture
+        // backend and relies on this to accept input at all.
+        assert!(supports_independent(false, false));
+        assert!(supports_independent(false, true));
+    }
 }

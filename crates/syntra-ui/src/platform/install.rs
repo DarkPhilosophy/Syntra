@@ -37,10 +37,18 @@ pub const DAEMON_EXECUTABLE: &str = if cfg!(windows) {
 ///
 /// A plugin left behind is a capability that silently disappears after
 /// installation, which is harder to diagnose than one that was never there.
-pub const PLUGIN_EXECUTABLES: [&str; 2] = if cfg!(windows) {
-    ["syntra-plugin-clipboard.exe", "syntra-plugin-fuse.exe"]
+pub const PLUGIN_EXECUTABLES: [&str; 3] = if cfg!(windows) {
+    [
+        "syntra-plugin-clipboard.exe",
+        "syntra-plugin-fuse.exe",
+        "syntra-plugin-edge-glow.exe",
+    ]
 } else {
-    ["syntra-plugin-clipboard", "syntra-plugin-fuse"]
+    [
+        "syntra-plugin-clipboard",
+        "syntra-plugin-fuse",
+        "syntra-plugin-edge-glow",
+    ]
 };
 
 /// Why installing the binaries failed.

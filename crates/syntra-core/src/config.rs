@@ -120,6 +120,8 @@ struct ConfigToml {
     hop_bypass: Option<bool>,
     /// Pass the pointer on through chains of devices.
     multi_hop: Option<bool>,
+    /// Push needed against an edge before the pointer passes on.
+    edge_pressure: Option<u32>,
     // Tables last: a plain key written after a table belongs to that table,
     // which broke the whole file (and every pairing) after a toggle.
     clients: Option<Vec<TomlClient>>,
@@ -665,6 +667,21 @@ impl Config {
         self.config_toml
             .get_or_insert_with(Default::default)
             .multi_hop = Some(enabled);
+    }
+
+    /// Push, in motion units, needed against an edge before the pointer
+    /// passes on to the next device. Zero passes on at the first touch.
+    pub fn edge_pressure(&self) -> u32 {
+        self.config_toml
+            .as_ref()
+            .and_then(|c| c.edge_pressure)
+            .unwrap_or(crate::capture::DEFAULT_EDGE_PRESSURE)
+    }
+
+    pub fn set_edge_pressure(&mut self, amount: u32) {
+        self.config_toml
+            .get_or_insert_with(Default::default)
+            .edge_pressure = Some(amount);
     }
 
     pub fn set_hop_bypass(&mut self, enabled: bool) {

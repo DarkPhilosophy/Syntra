@@ -1,0 +1,37 @@
+{
+  "$schema": "../manifest.schema.json",
+  "manifest_version": 1,
+  "protocol_version": 1,
+  "id": "edge-glow",
+  "name": "Edge glow",
+  "description": "Lights the edge of the screen a pointer from another device came in through, and builds up as you push against an edge. Draws on the GPU where it can and on the CPU where it cannot.",
+  "version": "0.11.0",
+  "author": "Syntra contributors",
+  "homepage": "https://github.com/DarkPhilosophy/syntra",
+  "source": "https://github.com/DarkPhilosophy/syntra/tree/main/plugins/edge-glow",
+  "update_url": "https://github.com/DarkPhilosophy/syntra/releases",
+  "license": "GPL-3.0-or-later",
+  "bundled": true,
+  "executable": "syntra-plugin-edge-glow",
+  "capabilities": {
+    "pointer_events": true,
+    "mime_types": []
+  },
+  "settings": [
+    { "key": "show_pressure", "label": "Glow while pushing against an edge", "kind": "toggle", "default": "true" },
+    { "key": "rainbow", "label": "Rainbow colours", "kind": "toggle", "default": "false" },
+    { "key": "colour", "label": "Colour", "kind": "color", "default": "#33ccff" },
+    { "key": "width", "label": "Width in pixels", "kind": "number", "default": "56", "min": 16, "max": 160 },
+    {
+      "key": "renderer",
+      "label": "Drawing",
+      "kind": "choice",
+      "default": "auto",
+      "options": [
+        { "value": "auto", "label": "Automatic (GPU, else CPU)" },
+        { "value": "opengl", "label": "OpenGL (GPU)" },
+        { "value": "software", "label": "Software (CPU)" }
+      ]
+    }
+  ]
+}

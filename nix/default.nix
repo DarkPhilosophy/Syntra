@@ -66,6 +66,8 @@ rustPlatform.buildRustPackage {
     "syntra-plugin-clipboard"
     "-p"
     "syntra-plugin-fuse"
+    "-p"
+    "syntra-plugin-edge-glow"
   ];
 
   # Set Environment Variables
@@ -78,6 +80,7 @@ rustPlatform.buildRustPackage {
     ${lib.optionalString stdenv.isLinux ''
       test -x $out/bin/syntra-plugin-clipboard
       test -x $out/bin/syntra-plugin-fuse
+      test -x $out/bin/syntra-plugin-edge-glow
     ''}
     test -x $out/bin/syntra-daemon
     install -Dm444 *.desktop -t $out/share/applications

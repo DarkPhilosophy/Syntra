@@ -129,12 +129,18 @@ export global AppState {
     callback diagnostics-pause(bool);
     callback diagnostics-clear();
     in-out property <string> diagnostics-error;
+    /// Which diagnostics columns are shown: date, time, level, stage,
+    /// direction, event, message. Saved with the appearance settings.
+    in-out property <[bool]> diagnostic-columns: [true, true, true, true, true, true, true];
+    callback toggle-diagnostic-column(int);
 
     // Plugin manager. The daemon owns this list; the callbacks are intents,
     // and the daemon's reply is what updates the property.
     in-out property <[PluginEntry]> plugins;
     callback set-plugin-enabled(string, bool);
     callback restart-plugin(string);
+    callback change-plugin-setting(string, string, string);
+    callback change-plugin-setting-colour(string, string, color);
 
     // Identity of the daemon this dashboard is attached to. "Running" alone
     // tells a user nothing, so the interface reports which daemon answered

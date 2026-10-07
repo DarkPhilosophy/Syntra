@@ -35,7 +35,7 @@ use std::{
 use syntra_api::{
     AsyncFrontendListener, ClientHandle, ClipboardSettings, ClipboardTransferDirection,
     ClipboardTransferState, ClipboardTransferStatus, DeviceProfile, FrontendEvent, FrontendRequest,
-    IpcError, IpcListenerCreationError, Position, Status,
+    IpcError, IpcListenerCreationError, PointerPassage, Position, Status,
 };
 use syntra_plugin_api::{Message as AdapterMessage, Operation};
 use syntra_store::{ImportedHistoryEvent, worker::HistoryWorker};
@@ -256,15 +256,19 @@ impl Service {
         // input capture + emulation
         let capture_backend = config.capture_backend().map(|b| b.into());
         let last_entry = crate::capture::EntryMark::default();
+        let entry_along = crate::capture::EntryAlong::default();
         let capture = Capture::new(
             capture_backend,
             conn,
             config.release_bind(),
             last_entry.clone(),
+            entry_along.clone(),
         );
         capture.set_multi_hop(config.multi_hop());
+        capture.set_edge_pressure(f64::from(config.edge_pressure()));
+        syntra_input_emulation::set_edge_pressure(config.edge_pressure() as f32);
         let emulation_backend = config.emulation_backend().map(|b| b.into());
-        let emulation = Emulation::new(emulation_backend, listener, last_entry);
+        let emulation = Emulation::new(emulation_backend, listener, last_entry, entry_along);
         // Never start pen cursors into a session where they crash GNOME.
         #[cfg(target_os = "linux")]
         let independent = config.independent_pointers()
@@ -272,6 +276,9 @@ impl Service {
         #[cfg(not(target_os = "linux"))]
         let independent = config.independent_pointers();
         emulation.set_independent_pointers(independent);
+        #[cfg(target_os = "linux")]
+        capture
+            .set_separate_peer_pointers(independent && crate::gnome_guard::peers_have_own_cursor());
         emulation.set_hop_bypass(config.hop_bypass());
         emulation.set_multi_hop(config.multi_hop());
         let legacy_clipboard = uses_desktop_clipboard(config.emulation_backend());
@@ -293,16 +300,11 @@ impl Service {
             executable_dir.join(CLIPBOARD_PLUGIN_EXECUTABLE),
             executable_dir.join(FUSE_PLUGIN_EXECUTABLE),
         );
-        let (adapter_manager, adapter_events) = match adapter_paths {
-            Ok(paths) => {
-                let (manager, events) = AdapterProcessManager::start(paths);
-                (Some(manager), Some(events))
-            }
-            Err(error) => {
-                log::warn!("file transfer plugins unavailable: {error}");
-                (None, None)
-            }
-        };
+        // Started regardless of which built-in helpers exist: they are Linux
+        // packaging, and without a supervisor no other plugin, such as the
+        // edge glow, could run on Windows or macOS at all.
+        let (manager, events) = AdapterProcessManager::start(adapter_paths);
+        let (adapter_manager, adapter_events) = (Some(manager), Some(events));
         let (source_result_tx, source_results) = mpsc::channel(SOURCE_RESULT_CAPACITY);
         let (manifest_offer_tx, manifest_offers) = mpsc::channel(SOURCE_RESULT_CAPACITY);
 
@@ -391,12 +393,20 @@ impl Service {
             started_at: std::time::Instant::now(),
             capture_backend: None,
             emulation_backend: None,
-            plugins: crate::plugins::PluginRegistry::discover(
-                &std::env::current_exe().unwrap_or_default(),
-                syntra_api::paths::config_dir()
-                    .ok()
-                    .map(|directory| directory.join("plugins")),
-            ),
+            plugins: {
+                let config = syntra_api::paths::config_dir().ok();
+                let registry = crate::plugins::PluginRegistry::discover(
+                    &std::env::current_exe().unwrap_or_default(),
+                    config.as_ref().map(|directory| directory.join("plugins")),
+                );
+                // Choices live apart from the manifests: what a user dropped
+                // into `plugins` must never be overwritten by what the daemon
+                // saves, and the other way round.
+                match config {
+                    Some(directory) => registry.with_state_dir(directory.join("plugin-state")),
+                    None => registry,
+                }
+            },
         };
         match peer_profile::load_cached(
             service.config.config_path(),
@@ -436,6 +446,12 @@ impl Service {
 
         for handle in active {
             self.activate_client(handle);
+        }
+
+        // A plugin the user switched on in an earlier session must come back
+        // with the daemon; otherwise it stays dead until toggled off and on.
+        for id in self.plugins.pointer_plugins() {
+            self.start_pointer_plugin(&id, false);
         }
 
         let mut profile_tick = tokio::time::interval(Duration::from_secs(1));

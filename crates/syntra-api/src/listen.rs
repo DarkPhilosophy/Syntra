@@ -4,10 +4,12 @@ use std::path::PathBuf;
 use std::{
     io::ErrorKind,
     pin::Pin,
+    sync::Arc,
     task::{Context, Poll},
 };
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf};
+use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader, ReadHalf};
+use tokio::sync::mpsc;
 use tokio_stream::wrappers::LinesStream;
 
 #[cfg(unix)]
@@ -34,10 +36,37 @@ pub struct AsyncFrontendListener {
     line_streams: SelectAll<LinesStream<BufReader<ReadHalf<UnixStream>>>>,
     #[cfg(windows)]
     line_streams: SelectAll<LinesStream<BufReader<ReadHalf<TcpStream>>>>,
-    #[cfg(unix)]
-    tx_streams: Vec<WriteHalf<UnixStream>>,
-    #[cfg(windows)]
-    tx_streams: Vec<WriteHalf<TcpStream>>,
+    tx_streams: Vec<mpsc::Sender<Arc<str>>>,
+}
+
+/// How many events one client may have waiting before it is considered to
+/// have stopped reading. A dashboard drains these within milliseconds, so a
+/// queue this deep is only ever reached by a client that has died or hung.
+const CLIENT_QUEUE: usize = 512;
+
+/// How long the writer waits on one socket write before giving up on the
+/// client, so a hung client frees its resources instead of lingering.
+const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Starts the task that writes one client's events, and returns its queue.
+///
+/// The task ends when the client stops accepting data or the queue is
+/// dropped, which closes the socket's write half.
+fn spawn_writer<W>(mut tx: W) -> mpsc::Sender<Arc<str>>
+where
+    W: AsyncWrite + Unpin + 'static,
+{
+    let (queue, mut lines) = mpsc::channel::<Arc<str>>(CLIENT_QUEUE);
+    tokio::task::spawn_local(async move {
+        while let Some(line) = lines.recv().await {
+            match tokio::time::timeout(WRITE_TIMEOUT, tx.write_all(line.as_bytes())).await {
+                Ok(Ok(())) => {}
+                Ok(Err(_)) | Err(_) => break,
+            }
+        }
+        let _ = tx.shutdown().await;
+    });
+    queue
 }
 
 impl AsyncFrontendListener {
@@ -103,25 +132,29 @@ impl AsyncFrontendListener {
     }
 
     /// Broadcasts one authoritative event to connected frontend clients.
+    ///
+    /// Each client has its own bounded queue and writer, so a client that
+    /// stops reading fills only its own queue. An unbounded or serial write
+    /// would wait on it for ever, holding up every client after it and,
+    /// through them, the whole event stream.
     pub async fn broadcast(&mut self, notify: FrontendEvent) {
-        // encode event
+        // encode event once for every client
         let mut json = serde_json::to_string(&notify).unwrap();
         json.push('\n');
+        let line: Arc<str> = json.into();
 
-        let mut keep = vec![];
-        // TODO do simultaneously
-        for tx in self.tx_streams.iter_mut() {
-            // write len + payload
-            if tx.write_all(json.as_bytes()).await.is_err() {
-                keep.push(false);
-                continue;
-            }
-            keep.push(true);
-        }
-
-        // could not find a better solution because async
-        let mut keep = keep.into_iter();
-        self.tx_streams.retain(|_| keep.next().unwrap());
+        // Only queue: nothing here waits on a socket. A client whose queue is
+        // full has stopped reading and one whose writer ended has gone; both
+        // are dropped, and neither can delay the others or the service.
+        self.tx_streams
+            .retain(|queue| match queue.try_send(line.clone()) {
+                Ok(()) => true,
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    log::warn!("dropping a frontend client that stopped reading");
+                    false
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => false,
+            });
     }
 }
 
@@ -147,7 +180,7 @@ impl Stream for AsyncFrontendListener {
             let lines = buf_reader.lines();
             let lines = LinesStream::new(lines);
             self.line_streams.push(lines);
-            self.tx_streams.push(tx);
+            self.tx_streams.push(spawn_writer(tx));
             sync = true;
         }
         if sync {
@@ -214,6 +247,78 @@ mod tests {
             listener.is_ok(),
             "an abandoned socket must not block a fresh listener"
         );
+        unsafe { std::env::remove_var(crate::paths::ENV_DAEMON_SOCKET) };
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// A client that connects and never reads must not hold anyone up.
+    ///
+    /// This is what froze the dashboard's updates: one dead client filled its
+    /// socket buffer, and a write to it waited for ever, ahead of every
+    /// client after it. The healthy client must receive every event, the
+    /// broadcasts must not wait, and the dead client must be dropped.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_client_that_never_reads_delays_nobody() {
+        use tokio::io::AsyncBufReadExt;
+        let _env = ENV_LOCK.lock().await;
+        let directory = std::env::temp_dir().join("syntra-listen-slow");
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("daemon.sock");
+        unsafe { std::env::set_var(crate::paths::ENV_DAEMON_SOCKET, &path) };
+
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let mut listener = AsyncFrontendListener::new().await.expect("listener");
+                // The dead client connects first, so it is ahead in the list.
+                let dead = UnixStream::connect(&path).await.expect("dead client");
+                let healthy = UnixStream::connect(&path).await.expect("healthy client");
+                // Accepting happens when the listener is polled.
+                let _ = futures::poll!(listener.next());
+                assert_eq!(listener.tx_streams.len(), 2);
+
+                // Far more than a socket buffer and a client queue can hold.
+                let events = 1500;
+                let big = "x".repeat(2_000);
+                let reader = tokio::task::spawn_local(async move {
+                    let mut lines = BufReader::new(healthy).lines();
+                    let mut seen = 0;
+                    while let Ok(Some(_)) = lines.next_line().await {
+                        seen += 1;
+                        if seen == events {
+                            break;
+                        }
+                    }
+                    seen
+                });
+
+                let started = std::time::Instant::now();
+                for _ in 0..events {
+                    listener
+                        .broadcast(FrontendEvent::LogSpec(big.clone()))
+                        .await;
+                    // Let the healthy client's reader and the writers run.
+                    tokio::task::yield_now().await;
+                }
+                let took = started.elapsed();
+
+                assert!(
+                    took < std::time::Duration::from_secs(5),
+                    "broadcasting waited on a client that does not read: {took:?}"
+                );
+                assert_eq!(
+                    reader.await.unwrap(),
+                    events,
+                    "the healthy client lost events"
+                );
+                assert_eq!(
+                    listener.tx_streams.len(),
+                    1,
+                    "the client that never read must have been dropped"
+                );
+                drop(dead);
+            })
+            .await;
         unsafe { std::env::remove_var(crate::paths::ENV_DAEMON_SOCKET) };
         let _ = std::fs::remove_dir_all(&directory);
     }

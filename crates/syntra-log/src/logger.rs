@@ -42,6 +42,9 @@ enum Entry {
 pub struct Logger {
     config: LogConfig,
     sink: SyncSender<Entry>,
+    /// Another logger that also receives every record that passes the filter
+    /// (Android's logcat: stderr goes nowhere there).
+    tee: Option<Box<dyn Log>>,
 }
 
 impl Log for Logger {
@@ -54,6 +57,9 @@ impl Log for Logger {
         // has to be applied here as well.
         if !self.enabled(record.metadata()) {
             return;
+        }
+        if let Some(tee) = &self.tee {
+            tee.log(record);
         }
         let line = format!(
             "[{}][{:<5}][{}] {}\n",
@@ -73,6 +79,9 @@ impl Log for Logger {
     /// immediately after logging would lose them — precisely the fatal error
     /// that explains why it exited. Call this before terminating.
     fn flush(&self) {
+        if let Some(tee) = &self.tee {
+            tee.flush();
+        }
         let (ack, done) = sync_channel(0);
         if self.sink.send(Entry::Flush(ack)).is_ok() {
             let _ = done.recv();
@@ -95,6 +104,19 @@ pub struct InstallError(#[from] log::SetLoggerError);
 ///
 /// Returns [`InstallError`] if a logger was already installed.
 pub fn install(config: LogConfig, mirror: Mirror) -> Result<LogConfig, InstallError> {
+    install_with_tee(config, mirror, None)
+}
+
+/// [`install`], additionally forwarding every record to `tee`.
+///
+/// # Errors
+///
+/// Returns [`InstallError`] if a logger was already installed.
+pub fn install_with_tee(
+    config: LogConfig,
+    mirror: Mirror,
+    tee: Option<Box<dyn Log>>,
+) -> Result<LogConfig, InstallError> {
     let (sink, records) = sync_channel::<Entry>(QUEUE_DEPTH);
 
     // A dedicated thread owns stderr so that a launcher or SSH session which
@@ -150,6 +172,7 @@ pub fn install(config: LogConfig, mirror: Mirror) -> Result<LogConfig, InstallEr
     let logger = Logger {
         config: config.clone(),
         sink,
+        tee,
     };
     log::set_boxed_logger(Box::new(logger))?;
     // Publish the ceiling only after the logger exists, so no record slips
@@ -219,5 +242,46 @@ mod tests {
         std::fs::remove_file(path).unwrap();
         assert!(status.success());
         assert!(result.unwrap(), "the log mirror stopped with stderr");
+    }
+
+    /// A tee sees the records that pass the filter and none that do not.
+    #[test]
+    fn tee_receives_only_records_that_pass_the_filter() {
+        use log::{Level, Log, Metadata, Record};
+        use std::sync::mpsc::{Sender, channel, sync_channel};
+
+        struct Recorder(Sender<String>);
+        impl Log for Recorder {
+            fn enabled(&self, _: &Metadata<'_>) -> bool {
+                true
+            }
+            fn log(&self, record: &Record<'_>) {
+                let _ = self.0.send(record.args().to_string());
+            }
+            fn flush(&self) {}
+        }
+
+        let (seen_tx, seen) = channel();
+        let (sink, _records) = sync_channel(8);
+        let logger = super::Logger {
+            config: crate::LogConfig::new(log::LevelFilter::Warn),
+            sink,
+            tee: Some(Box::new(Recorder(seen_tx))),
+        };
+        logger.log(
+            &Record::builder()
+                .args(format_args!("kept"))
+                .level(Level::Warn)
+                .target("syntra")
+                .build(),
+        );
+        logger.log(
+            &Record::builder()
+                .args(format_args!("dropped"))
+                .level(Level::Info)
+                .target("syntra")
+                .build(),
+        );
+        assert_eq!(seen.try_iter().collect::<Vec<_>>(), vec!["kept".to_owned()]);
     }
 }

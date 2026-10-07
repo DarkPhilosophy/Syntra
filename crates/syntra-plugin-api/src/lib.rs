@@ -255,6 +255,12 @@ pub struct Capabilities {
     #[serde(default)]
     /// Protocol value used by the receiver for this transfer or declaration.
     pub requires_live_mount: bool,
+    /// Receives the passages of other devices' pointers over this screen.
+    ///
+    /// Optional so a plugin written before it existed stays valid. A plugin
+    /// that declares only this has no clipboard role and no MIME types.
+    #[serde(default)]
+    pub pointer_events: bool,
     /// Protocol value used by the receiver for this transfer or declaration.
     pub mime_types: Vec<String>,
 }
@@ -377,6 +383,71 @@ pub enum Message {
         /// Payload associated with `mime_type`.
         value: String,
     },
+    /// Daemon-to-plugin current values of the plugin's declared settings.
+    ///
+    /// Sent once after the handshake and again whenever the user changes one,
+    /// so a plugin never has to read the daemon's configuration itself.
+    Settings {
+        /// Every setting with its present value, as `(key, value)` pairs.
+        ///
+        /// Values are strings in the same form the manifest's setting kinds
+        /// accept: `true`/`false`, a choice id, a number, or `#rrggbb`.
+        values: Vec<(String, String)>,
+    },
+    /// Daemon-to-plugin report that a pointer crossed a screen edge.
+    ///
+    /// Only sent to a plugin that declared `pointer_events`.
+    Pointer(PointerEvent),
+}
+
+/// Which screen edge a pointer crossed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Edge {
+    /// The left edge of the screen.
+    Left,
+    /// The right edge of the screen.
+    Right,
+    /// The top edge of the screen.
+    Top,
+    /// The bottom edge of the screen.
+    Bottom,
+}
+
+/// A pointer crossing an edge of this machine's screen, or pressing on one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PointerEvent {
+    /// A pointer from another device came in through `edge`.
+    Entered {
+        /// The edge it came in through.
+        edge: Edge,
+        /// Position along that edge, `0.0` to `1.0` from its start, when known.
+        along: Option<f32>,
+        /// Name of the device it came from, for display only.
+        peer: String,
+    },
+    /// The pointer left this machine through `edge`.
+    Left {
+        /// The edge it went out through.
+        edge: Edge,
+        /// Position along that edge, `0.0` to `1.0`, when known.
+        along: Option<f32>,
+        /// Name of the device it went to, for display only.
+        peer: String,
+    },
+    /// The pointer is pushing against `edge` to cross to another device.
+    ///
+    /// `amount` runs from `0.0` (no push) to `1.0` (about to cross) and falls
+    /// back to `0.0` once the pointer moves away from the edge.
+    Pressure {
+        /// The edge being pushed against.
+        edge: Edge,
+        /// Position along that edge, `0.0` to `1.0`, when known.
+        along: Option<f32>,
+        /// How close the push is to crossing.
+        amount: f32,
+    },
 }
 
 impl Message {
@@ -497,21 +568,28 @@ impl AdapterManifest {
                 "id, name, and executable are required and id must be identifier-safe".into(),
             ));
         }
-        if self.capabilities.mime_types.is_empty()
-            || self
+        // A plugin must do something, but not necessarily with the clipboard:
+        // one that only watches the pointer has no MIME types to declare.
+        let handles_clipboard = self.capabilities.clipboard_read || self.capabilities.paste;
+        let mime_types_valid = !self.capabilities.mime_types.is_empty()
+            && !self
                 .capabilities
                 .mime_types
                 .iter()
                 .any(|m| m.trim().is_empty())
-            || self
+            && !self
                 .capabilities
                 .mime_types
                 .windows(2)
-                .any(|w| w[0] == w[1])
-            || (!self.capabilities.clipboard_read && !self.capabilities.paste)
-        {
+                .any(|w| w[0] == w[1]);
+        let clipboard_ok = handles_clipboard && mime_types_valid;
+        let pointer_ok = self.capabilities.pointer_events
+            && !handles_clipboard
+            && self.capabilities.mime_types.is_empty();
+        if !(clipboard_ok || pointer_ok) {
             return Err(ApiError::InvalidManifest(
-                "capabilities must advertise unique MIME types and an operation".into(),
+                "capabilities must advertise a clipboard operation with unique MIME types, or pointer events alone"
+                    .into(),
             ));
         }
         let path = if self.executable.is_absolute() {
@@ -537,5 +615,70 @@ impl AdapterManifest {
             }
         }
         Ok(path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn round_trip(message: &Message) -> Message {
+        Message::decode_line(message.encode_line().unwrap().trim_end()).unwrap()
+    }
+
+    /// A plugin written against the documented frame must keep parsing: the
+    /// field and tag names are the contract, not the Rust identifiers.
+    #[test]
+    fn pointer_events_use_the_documented_frame() {
+        let line = r#"{"type":"pointer","data":{"kind":"entered","edge":"left","along":0.25,"peer":"phone"}}"#;
+        let Message::Pointer(PointerEvent::Entered { edge, along, peer }) =
+            Message::decode_line(line).unwrap()
+        else {
+            panic!("expected an entered pointer event");
+        };
+        assert_eq!(edge, Edge::Left);
+        assert_eq!(along, Some(0.25));
+        assert_eq!(peer, "phone");
+    }
+
+    #[test]
+    fn every_pointer_event_survives_the_wire() {
+        for event in [
+            PointerEvent::Entered {
+                edge: Edge::Top,
+                along: None,
+                peer: "a".into(),
+            },
+            PointerEvent::Left {
+                edge: Edge::Right,
+                along: Some(1.0),
+                peer: "b".into(),
+            },
+            PointerEvent::Pressure {
+                edge: Edge::Bottom,
+                along: Some(0.5),
+                amount: 0.75,
+            },
+        ] {
+            let Message::Pointer(back) = round_trip(&Message::Pointer(event.clone())) else {
+                panic!("lost the message type");
+            };
+            assert_eq!(back, event);
+        }
+    }
+
+    #[test]
+    fn settings_keep_their_order_and_values() {
+        let values = vec![
+            ("enabled".to_owned(), "true".to_owned()),
+            ("colour".to_owned(), "#33ccff".to_owned()),
+            ("renderer".to_owned(), "opengl".to_owned()),
+        ];
+        let Message::Settings { values: back } = round_trip(&Message::Settings {
+            values: values.clone(),
+        }) else {
+            panic!("lost the message type");
+        };
+        assert_eq!(back, values);
     }
 }

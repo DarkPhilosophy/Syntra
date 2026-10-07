@@ -469,6 +469,8 @@ export component AppWindow inherits Window {
                 }
                 if selected-page == "diagnostics": DiagnosticsPage {
                     compact: root.mobile;
+                    columns-shown: AppState.diagnostic-columns;
+                    toggle-column(index) => { AppState.toggle-diagnostic-column(index); }
                     entries: AppState.diagnostics;
                     text-filter: AppState.diagnostics-text;
                     paused: AppState.diagnostics-paused;
@@ -483,6 +485,8 @@ export component AppWindow inherits Window {
                     connected: AppState.connected;
                     set-enabled(id, enabled) => { AppState.set-plugin-enabled(id, enabled); }
                     restart(id) => { AppState.restart-plugin(id); }
+                    change-setting(id, key, value) => { AppState.change-plugin-setting(id, key, value); }
+                    change-setting-colour(id, key, colour) => { AppState.change-plugin-setting-colour(id, key, colour); }
                     refresh => { AppState.refresh-plugins(); }
                 }
                 if selected-page == "settings": SettingsPage {
