@@ -1437,6 +1437,7 @@ impl From<Status> for bool {
 /// so plainly.
 pub const BUILD_FINGERPRINT: &str = env!("SYNTRA_BUILD_FINGERPRINT");
 
+pub mod layout;
 pub mod paths;
 
 #[doc(inline)]
