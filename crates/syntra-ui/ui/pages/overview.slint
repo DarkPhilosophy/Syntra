@@ -182,7 +182,8 @@ export component OverviewPage inherits Rectangle {
                 HorizontalLayout {
                     spacing: Theme.small-spacing;
                     StatusPill {
-                        label: device.alive ? (device.remote-ready ? Translations.tr("label-ready") : Translations.tr("label-connected")) : Translations.tr("label-offline");
+                        label: (device.alive ? (device.remote-ready ? Translations.tr("label-ready") : Translations.tr("label-connected")) : Translations.tr("label-offline"))
+                            + (device.alive && device.round-trip != "" ? " · " + device.round-trip : "");
                         tone: device.alive ? (device.remote-ready ? Theme.success : Theme.warning) : Theme.muted-text;
                     }
                     if device.fingerprint != "" : StatusPill {

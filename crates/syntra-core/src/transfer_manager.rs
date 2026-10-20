@@ -1540,3 +1540,80 @@ fn validate_wire_manifest<P: Debug>(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Serving a file range by range must not keep anything per range: each
+    /// kept range held an open descriptor, and a daemon that served a few
+    /// large pastes could no longer open a socket or start a plugin.
+    #[tokio::test]
+    async fn served_ranges_keep_no_file_open() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("large.bin");
+        let chunk = MAX_CLIPBOARD_FILE_CHUNK_SIZE;
+        std::fs::write(&path, vec![7u8; chunk * 3 + 5]).unwrap();
+        let uri = format!("file://{}", path.display());
+        let wire_id = 7;
+        let mut offer = FileOffer::from_uri_list(1, &uri).unwrap();
+        offer.transfer_id = wire_id;
+        let file_id = offer.entries[0].file_id;
+        let size = offer.entries[0].size;
+        let manifest = CopyManifest {
+            transfer_id: "copy-1".into(),
+            operation: Operation::Copy,
+            entries: Vec::new(),
+        };
+        let mut state = TransferState::<u8>::new();
+        state.set_file_clipboard_adapter("clipboard");
+        state
+            .local_copy_manifest(1, wire_id, "clipboard".into(), manifest, offer)
+            .unwrap();
+        let owner = TransferOwner { peer: 1u8, wire_id };
+
+        let mut offset = 0;
+        let mut request_id = 0;
+        while offset < size {
+            request_id += 1;
+            let length = (size - offset).min(chunk as u64);
+            let actions = state
+                .source_file_request(&1, wire_id, file_id, request_id, offset, length)
+                .unwrap();
+            let offer = actions
+                .into_iter()
+                .find_map(|action| match action {
+                    TransferAction::ReadSource { offer, .. } => Some(offer),
+                    _ => None,
+                })
+                .unwrap();
+            // What the service's read task and result handler do per range.
+            let mut file = offer.open(file_id, offset).await.unwrap();
+            let (at, data) = file
+                .next_chunk_bounded(length as usize)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!((at, data.len() as u64), (offset, length));
+            let digest: [u8; 32] = Sha256::digest(&data).into();
+            let eof = file.is_eof();
+            state
+                .insert_outgoing_file(&owner, file_id, request_id, offset, length, file)
+                .unwrap();
+            state
+                .source_chunk(&owner, file_id, request_id, offset, data)
+                .unwrap();
+            if eof {
+                state
+                    .source_complete(&owner, file_id, request_id, offset + length, digest)
+                    .unwrap();
+            }
+            state.source_range_served(&owner, file_id, request_id);
+            offset += length;
+        }
+
+        assert_eq!(request_id, 4, "the file took several ranges");
+        assert!(state.local[&owner].outgoing.is_empty());
+        assert!(state.source_pending.is_empty());
+    }
+}

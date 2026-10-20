@@ -817,6 +817,12 @@ pub(super) fn project_app_state(
                     .into(),
                 alive: state.status.connected && client.alive,
                 remote_ready: state.status.connected && client.remote_ready,
+                round_trip: client
+                    .round_trip_us
+                    .filter(|_| state.status.connected && client.alive)
+                    .map(format_round_trip)
+                    .unwrap_or_default()
+                    .into(),
                 dns_ips: join_addresses(&client.dns_ips).into(),
                 ips: join_addresses(&client.ips).into(),
                 has_pressed_keys: client.has_pressed_keys,
@@ -997,6 +1003,16 @@ fn join_addresses(addresses: &[IpAddr]) -> String {
 
 fn format_peer_commit(commit: [u8; 8]) -> String {
     commit.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// "0.4 ms" below ten milliseconds, whole milliseconds above: sub-millisecond
+/// detail matters on a wired LAN and is noise on Wi-Fi.
+fn format_round_trip(micros: u32) -> String {
+    if micros < 10_000 {
+        format!("{:.1} ms", f64::from(micros) / 1000.0)
+    } else {
+        format!("{} ms", (micros + 500) / 1000)
+    }
 }
 
 pub(crate) fn format_bytes(bytes: u64) -> String {

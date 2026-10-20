@@ -1,6 +1,6 @@
 use std::{
     cell::{Cell, RefCell},
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     future::Future,
     rc::Rc,
     time::{Duration, Instant},
@@ -17,7 +17,7 @@ use syntra_proto::{MAX_CLIPBOARD_CHUNK_SIZE, ProtoEvent};
 use tokio::task::{JoinHandle, spawn_local};
 use tokio_util::sync::CancellationToken;
 
-use crate::connect::SyntraConnection;
+use crate::connect::{SyntraConnection, SyntraSender};
 
 /// How often a lost peer transport is retried while idle.
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(2);
@@ -173,6 +173,7 @@ impl Capture {
             enabled_captures: Default::default(),
             captures: Default::default(),
             conn,
+            clipboard_sends: HashMap::new(),
             event_tx,
             request_rx,
             release_bind: Rc::new(RefCell::new(release_bind)),
@@ -479,6 +480,8 @@ struct CaptureTask {
     enabled_captures: HashSet<CaptureHandle>,
     captures: Vec<(CaptureHandle, Position, CaptureType)>,
     conn: SyntraConnection,
+    /// Clipboard payload being streamed to each peer, at most one per peer.
+    clipboard_sends: HashMap<CaptureHandle, JoinHandle<()>>,
     event_tx: Sender<ICaptureEvent>,
     release_bind: Rc<RefCell<Vec<scancode::Linux>>>,
     request_rx: Receiver<CaptureRequest>,
@@ -699,8 +702,7 @@ impl CaptureTask {
                 data,
                 image_dimensions,
             } => {
-                self.send_clipboard_transfer(handle, transfer_id, data, image_dimensions)
-                    .await;
+                self.send_clipboard_transfer(handle, transfer_id, data, image_dimensions);
             }
         }
         false
@@ -1048,7 +1050,7 @@ impl CaptureTask {
                         self.send_proto_event(handle, event).await;
                     }
                     CaptureRequest::SendClipboard { handle, transfer_id, data, image_dimensions } => {
-                        self.send_clipboard_transfer(handle, transfer_id, data, image_dimensions).await;
+                        self.send_clipboard_transfer(handle, transfer_id, data, image_dimensions);
                     }
                 },
                 _ = self.cancellation_token.cancelled() => {
@@ -1094,53 +1096,84 @@ impl CaptureTask {
                 | ProtoEvent::ProfileChanged
         )
     }
-    async fn send_clipboard_transfer(
+    /// Streams a clipboard payload to `handle` from its own task.
+    ///
+    /// An uncompressed image is tens of thousands of datagrams paced to
+    /// spare the receiver's socket buffer, which takes seconds to minutes.
+    /// Sent inline, that whole time no pointer event was forwarded, so the
+    /// first crossing after copying a screenshot froze the mouse. A newer
+    /// clipboard for the same peer replaces one still being sent.
+    fn send_clipboard_transfer(
         &mut self,
         handle: CaptureHandle,
         transfer_id: u64,
         data: Vec<u8>,
         image_dimensions: Option<(u32, u32)>,
     ) {
-        let Ok(total_len) = u32::try_from(data.len()) else {
-            log::warn!("clipboard payload is too large");
-            return;
-        };
-        let chunks = total_len.div_ceil(MAX_CLIPBOARD_CHUNK_SIZE as u32);
-        let start = match image_dimensions {
-            Some((width, height)) => ProtoEvent::ClipboardImageStart {
-                transfer_id,
-                width,
-                height,
-                total_len,
-                chunks,
-            },
-            None => ProtoEvent::ClipboardStart {
-                transfer_id,
-                total_len,
-                chunks,
-            },
-        };
-        if let Err(e) = self.conn.send(start, handle).await {
-            log::warn!("failed to send clipboard start to client {handle}: {e}");
-            return;
+        self.clipboard_sends.retain(|_, send| !send.is_finished());
+        if let Some(previous) = self.clipboard_sends.remove(&handle) {
+            previous.abort();
         }
-        for (index, chunk) in data.chunks(MAX_CLIPBOARD_CHUNK_SIZE).enumerate() {
-            let event = ProtoEvent::ClipboardChunk {
-                transfer_id,
-                index: index as u32,
-                data: chunk.to_vec(),
-            };
-            if let Err(e) = self.conn.send(event, handle).await {
-                log::warn!("failed to send clipboard chunk to client {handle}: {e}");
-                return;
-            }
-            // DTLS preserves message boundaries but does not provide reliable
-            // delivery. Avoid overflowing the receiver's UDP socket when an
-            // uncompressed image expands into hundreds of datagrams.
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
+        let sender = self.conn.sender();
+        let send = spawn_local(stream_clipboard(
+            sender,
+            handle,
+            transfer_id,
+            data,
+            image_dimensions,
+        ));
+        self.clipboard_sends.insert(handle, send);
     }
+}
 
+async fn stream_clipboard(
+    sender: SyntraSender,
+    handle: CaptureHandle,
+    transfer_id: u64,
+    data: Vec<u8>,
+    image_dimensions: Option<(u32, u32)>,
+) {
+    let Ok(total_len) = u32::try_from(data.len()) else {
+        log::warn!("clipboard payload is too large");
+        return;
+    };
+    let chunks = total_len.div_ceil(MAX_CLIPBOARD_CHUNK_SIZE as u32);
+    let start = match image_dimensions {
+        Some((width, height)) => ProtoEvent::ClipboardImageStart {
+            transfer_id,
+            width,
+            height,
+            total_len,
+            chunks,
+        },
+        None => ProtoEvent::ClipboardStart {
+            transfer_id,
+            total_len,
+            chunks,
+        },
+    };
+    if let Err(e) = sender.send(start, handle).await {
+        log::warn!("failed to send clipboard start to client {handle}: {e}");
+        return;
+    }
+    for (index, chunk) in data.chunks(MAX_CLIPBOARD_CHUNK_SIZE).enumerate() {
+        let event = ProtoEvent::ClipboardChunk {
+            transfer_id,
+            index: index as u32,
+            data: chunk.to_vec(),
+        };
+        if let Err(e) = sender.send(event, handle).await {
+            log::warn!("failed to send clipboard chunk to client {handle}: {e}");
+            return;
+        }
+        // DTLS preserves message boundaries but does not provide reliable
+        // delivery. Avoid overflowing the receiver's UDP socket when an
+        // uncompressed image expands into hundreds of datagrams.
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+}
+
+impl CaptureTask {
     async fn handle_capture_event(
         &mut self,
         capture: &mut InputCapture,
@@ -1877,6 +1910,7 @@ mod tests {
                 Certificate::generate_self_signed(["ignored".to_owned()]).unwrap(),
                 ClientManager::default(),
             ),
+            clipboard_sends: HashMap::new(),
             event_tx,
             request_rx,
             release_bind: Rc::new(RefCell::new(Vec::new())),

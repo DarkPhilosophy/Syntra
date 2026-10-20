@@ -133,6 +133,8 @@ pub struct Service {
     next_history_request: u64,
     /// Current reconciliation page and bounded retry count for each authenticated peer.
     history_sync_progress: HashMap<Peer, (u64, u64, u8)>,
+    /// Round trip last shown to the frontend for each peer, in microseconds.
+    shown_round_trips: HashMap<ClientHandle, u32>,
     /// Values just written from the network and expected to echo through a portal observer.
     pending_remote_history_echoes: VecDeque<syntra_store::HistoryContent>,
     /// The RemoteDesktop portal owns clipboard observation for libei/xdp.
@@ -358,6 +360,7 @@ impl Service {
             history_clear: None,
             history_connected_peers: Default::default(),
             history_sync_progress: HashMap::new(),
+            shown_round_trips: HashMap::new(),
             next_history_request: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
@@ -478,6 +481,7 @@ impl Service {
                 },
                 _ = profile_tick.tick() => {
                     self.retry_profiles();
+                    self.publish_round_trips();
                     #[cfg(target_os = "android")]
                     self.clipboard.read_once();
                     let actions = self.manual_transfers.tick(std::time::Instant::now());

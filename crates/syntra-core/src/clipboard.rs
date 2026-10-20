@@ -88,8 +88,12 @@ impl Clipboard {
         let (write_tx, write_requests) = sync_channel(1);
         let (result_tx, read_rx) = mpsc::channel(1);
         let state = Arc::new(Mutex::new(ClipboardState::default()));
-        spawn_read_worker(read_requests, result_tx, state.clone());
-        spawn_write_worker(write_requests, state.clone());
+        // Orders the two workers' desktop I/O against each other, so a read
+        // never observes the old selection between a remote write's commit
+        // and its set. Only the workers take it, never the service loop.
+        let desktop = Arc::new(Mutex::new(()));
+        spawn_read_worker(read_requests, result_tx, state.clone(), desktop.clone());
+        spawn_write_worker(write_requests, state.clone(), desktop);
         Self {
             read_tx,
             write_tx,
@@ -154,11 +158,13 @@ fn spawn_read_worker(
     requests: Receiver<()>,
     results: mpsc::Sender<Result<ClipboardContent, arboard::Error>>,
     state: Arc<Mutex<ClipboardState>>,
+    desktop: Arc<Mutex<()>>,
 ) {
     std::thread::Builder::new()
         .name("syntra-clipboard-read".into())
         .spawn(move || {
             while requests.recv().is_ok() {
+                let desktop_io = desktop.lock().expect("clipboard worker poisoned");
                 let result = read_clipboard().and_then(|content| {
                     let observation = state
                         .lock()
@@ -170,6 +176,7 @@ fn spawn_read_worker(
                         Ok(content)
                     }
                 });
+                drop(desktop_io);
                 if results.blocking_send(result).is_err() {
                     break;
                 }
@@ -178,12 +185,17 @@ fn spawn_read_worker(
         .expect("failed to start clipboard read worker");
 }
 
-fn spawn_write_worker(requests: Receiver<QueuedRemote>, state: Arc<Mutex<ClipboardState>>) {
+fn spawn_write_worker(
+    requests: Receiver<QueuedRemote>,
+    state: Arc<Mutex<ClipboardState>>,
+    desktop: Arc<Mutex<()>>,
+) {
     std::thread::Builder::new()
         .name("syntra-clipboard-write".into())
         .spawn(move || {
             while let Ok(QueuedRemote { baseline, content }) = requests.recv() {
                 let queued = QueuedRemote { baseline, content };
+                let _desktop = desktop.lock().expect("clipboard worker poisoned");
                 let mut clipboard = match arboard::Clipboard::new() {
                     Ok(clipboard) => clipboard,
                     Err(e) => {
@@ -191,9 +203,15 @@ fn spawn_write_worker(requests: Receiver<QueuedRemote>, state: Arc<Mutex<Clipboa
                         continue;
                     }
                 };
-                let mut state = state.lock().expect("clipboard state poisoned");
+                // Desktop clipboard I/O can block for seconds (an X11 server
+                // that does not answer). `Clipboard::write` takes this lock on
+                // the service loop, so it is held only for the bookkeeping.
                 let current = read_clipboard().ok();
-                if !state.commit_remote(&queued, current.as_ref()) {
+                if !state
+                    .lock()
+                    .expect("clipboard state poisoned")
+                    .commit_remote(&queued, current.as_ref())
+                {
                     continue;
                 }
                 let result = match queued.content {
@@ -210,6 +228,7 @@ fn spawn_write_worker(requests: Receiver<QueuedRemote>, state: Arc<Mutex<Clipboa
                 };
                 if let Err(e) = result {
                     log::warn!("failed to write clipboard: {e}");
+                    let mut state = state.lock().expect("clipboard state poisoned");
                     state.last = current;
                     state.remote_origin = false;
                 }

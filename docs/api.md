@@ -133,7 +133,7 @@ The examples use empty collections where that keeps the shape readable; field ty
 |---|---|---|
 | `Position` | lowercase string: `left`, `right`, `top`, `bottom` | Display edge. |
 | `ClientConfig` | object | `hostname: string|null` DNS name; `fix_ips: string[]` manual IPs; `port: u16` peer UDP port; `pos: Position`; `cmd: string|null` enter hook. Default: inactive client config uses port 4242, empty IPs, `left`, and null fields (`lib.rs:175-200`). |
-| `ClientState` | object | `active: bool`; `active_addr: SocketAddr|null`; `alive: bool`; `remote_ready: bool`; `dns_ips: IpAddr[]`; `ips: IpAddr[]` (Rust `HashSet`); `has_pressed_keys: bool`; `resolving: bool`; `peer_commit: number[]|null`, exactly eight bytes. |
+| `ClientState` | object | `active: bool`; `active_addr: SocketAddr|null`; `alive: bool`; `remote_ready: bool`; `dns_ips: IpAddr[]`; `ips: IpAddr[]` (Rust `HashSet`); `has_pressed_keys: bool`; `resolving: bool`; `peer_commit: number[]|null`, exactly eight bytes; `round_trip_us: u32|null`, smoothed ping round trip in microseconds while the transport is up, measured from the oldest unanswered ping so late or lost answers read as delay (absent from older daemons, read as null). The daemon re-sends `State` when it moves by more than a quarter and at least 0.5 ms. |
 | `Status` | `"Enabled"` or `"Disabled"` | Boolean-like capability status; unlike lowercase transfer enums, it has no rename rule (`lib.rs:905-920`). |
 | `DeviceProfile` | object | `display_name: string`; `avatar: PeerAvatar|null`; published identity. |
 | `PeerAvatar` | object | `width: u32`; `height: u32`; `rgba: number[]`, exactly `width*height*4` bytes. |

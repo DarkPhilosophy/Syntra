@@ -156,6 +156,23 @@ impl Service {
         self.notify_frontend(event);
     }
 
+    /// Shows each peer's round trip once it has moved noticeably since it
+    /// was last shown; every ping would otherwise redraw the interface.
+    pub(super) fn publish_round_trips(&mut self) {
+        for handle in self.client_manager.registered_clients() {
+            let current = self.client_manager.round_trip_us(handle);
+            let shown = self.shown_round_trips.get(&handle).copied();
+            if !round_trip_moved(shown, current) {
+                continue;
+            }
+            match current {
+                Some(value) => self.shown_round_trips.insert(handle, value),
+                None => self.shown_round_trips.remove(&handle),
+            };
+            self.broadcast_client(handle);
+        }
+    }
+
     pub(super) fn spawn_hook_command(&self, handle: ClientHandle) {
         let Some(cmd) = self.client_manager.get_enter_cmd(handle) else {
             return;
@@ -278,5 +295,36 @@ impl Service {
         self.incoming_conn_info
             .remove(&handle)
             .map(|incoming| incoming.addr)
+    }
+}
+
+/// Whether a round trip is worth redrawing: it appeared, vanished, or moved
+/// by more than a quarter and at least half a millisecond.
+fn round_trip_moved(shown: Option<u32>, current: Option<u32>) -> bool {
+    match (shown, current) {
+        (None, None) => false,
+        (Some(shown), Some(current)) => {
+            let delta = shown.abs_diff(current);
+            delta >= 500 && delta * 4 > shown
+        }
+        _ => true,
+    }
+}
+
+#[cfg(test)]
+mod round_trip_tests {
+    use super::round_trip_moved;
+
+    #[test]
+    fn jitter_is_not_redrawn_but_real_changes_are() {
+        assert!(!round_trip_moved(Some(2_000), Some(2_300)), "jitter");
+        assert!(
+            !round_trip_moved(Some(40_000), Some(48_000)),
+            "within a quarter"
+        );
+        assert!(round_trip_moved(Some(2_000), Some(9_000)));
+        assert!(round_trip_moved(None, Some(2_000)));
+        assert!(round_trip_moved(Some(2_000), None));
+        assert!(!round_trip_moved(None, None));
     }
 }

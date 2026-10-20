@@ -230,6 +230,11 @@ pub struct ClientState {
     /// that predates the Hello event. The frontend uses this to
     /// soft-warn on version mismatch.
     pub peer_commit: Option<[u8; 8]>,
+    /// Smoothed time for a ping to come back from the peer, in microseconds,
+    /// while its transport is up. It includes the peer's own processing, so
+    /// it is the delay input actually sees, not only the network's.
+    #[serde(default)]
+    pub round_trip_us: Option<u32>,
 }
 
 /// Identifies one clipboard transfer across frontend status events.
@@ -1483,6 +1488,7 @@ mod tests {
             has_pressed_keys: true,
             resolving: true,
             peer_commit: Some(*b"12345678"),
+            round_trip_us: Some(1_250),
         }
     }
 

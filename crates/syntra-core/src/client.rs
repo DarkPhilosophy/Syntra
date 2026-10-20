@@ -298,7 +298,24 @@ impl ClientManager {
     pub(crate) fn set_alive(&self, handle: ClientHandle, alive: bool) {
         if let Some((_, s)) = self.clients.borrow_mut().get_mut(&handle) {
             s.alive = alive;
+            if !alive {
+                s.round_trip_us = None;
+            }
         }
+    }
+
+    /// Folds one ping's round trip into the peer's smoothed figure.
+    pub(crate) fn record_round_trip(&self, handle: ClientHandle, sample: std::time::Duration) {
+        if let Some((_, s)) = self.clients.borrow_mut().get_mut(&handle) {
+            s.round_trip_us = Some(smooth_round_trip(s.round_trip_us, sample));
+        }
+    }
+
+    pub(crate) fn round_trip_us(&self, handle: ClientHandle) -> Option<u32> {
+        self.clients
+            .borrow()
+            .get(&handle)
+            .and_then(|(_, s)| s.round_trip_us)
     }
 
     pub(crate) fn set_remote_ready(&self, handle: ClientHandle, ready: bool) {
@@ -384,5 +401,37 @@ mod tests {
         let (_, state) = manager.get_state(current).unwrap();
         assert!(!state.active);
         assert!(!state.alive);
+    }
+}
+
+/// Exponential smoothing (weight 1/4 per sample), seeded by the first sample,
+/// so one late answer moves the figure without making it jump.
+fn smooth_round_trip(previous: Option<u32>, sample: std::time::Duration) -> u32 {
+    let sample = u32::try_from(sample.as_micros()).unwrap_or(u32::MAX);
+    match previous {
+        None => sample,
+        Some(previous) => {
+            let blended = (u64::from(previous) * 3 + u64::from(sample)) / 4;
+            u32::try_from(blended).unwrap_or(u32::MAX)
+        }
+    }
+}
+
+#[cfg(test)]
+mod round_trip_tests {
+    use super::smooth_round_trip;
+    use std::time::Duration;
+
+    #[test]
+    fn one_late_answer_moves_but_does_not_replace_the_figure() {
+        let first = smooth_round_trip(None, Duration::from_millis(2));
+        assert_eq!(first, 2_000);
+        let after_spike = smooth_round_trip(Some(first), Duration::from_millis(102));
+        assert_eq!(after_spike, 27_000);
+        let mut settled = after_spike;
+        for _ in 0..20 {
+            settled = smooth_round_trip(Some(settled), Duration::from_millis(2));
+        }
+        assert!(settled < 2_100, "{settled}");
     }
 }

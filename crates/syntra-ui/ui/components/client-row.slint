@@ -22,6 +22,8 @@ export struct ClientItem {
     active-address: string,
     alive: bool,
     remote-ready: bool,
+    /// Measured round trip, already formatted ("3 ms"); empty when unknown.
+    round-trip: string,
     dns-ips: string,
     ips: string,
     has-pressed-keys: bool,
@@ -163,7 +165,8 @@ export component ClientRow inherits Rectangle {
                 overflow: elide;
             }
             StatusPill {
-                label: client.alive ? (client.remote-ready ? root.label-ready : root.label-connected) : root.label-offline;
+                label: (client.alive ? (client.remote-ready ? root.label-ready : root.label-connected) : root.label-offline)
+                    + (client.alive && client.round-trip != "" ? " · " + client.round-trip : "");
                 tone: client.alive ? (client.remote-ready ? Theme.success : Theme.warning) : Theme.muted-text;
             }
             if !root.compact: ClientActions {

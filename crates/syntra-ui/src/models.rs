@@ -72,6 +72,7 @@ pub struct ClientView {
     pub has_pressed_keys: bool,
     pub resolving: bool,
     pub peer_commit: Option<[u8; 8]>,
+    pub round_trip_us: Option<u32>,
 }
 impl ClientView {
     fn from_wire(handle: ClientHandle, c: ClientConfig, s: ClientState) -> Self {
@@ -93,6 +94,7 @@ impl ClientView {
             has_pressed_keys: s.has_pressed_keys,
             resolving: s.resolving,
             peer_commit: s.peer_commit,
+            round_trip_us: s.round_trip_us,
         }
     }
 }

@@ -1,13 +1,13 @@
 use crate::{client::ClientManager, config::local_commit, crypto};
 use local_channel::mpsc::{Receiver, Sender, channel};
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
     io,
     net::SocketAddr,
     rc::Rc,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use syntra_api::{ClientHandle, DEFAULT_PORT};
 use syntra_proto::{MAX_DATAGRAM_SIZE, ProtoEvent};
@@ -115,37 +115,53 @@ pub(crate) struct ConnectionShared {
 }
 
 pub(crate) struct SyntraConnection {
+    sender: SyntraSender,
+    recv_rx: Receiver<(ClientHandle, String, ProtoEvent)>,
+}
+
+/// The sending half of [`SyntraConnection`], cheap to clone.
+///
+/// Bulk sends (clipboard images can span tens of thousands of datagrams) run
+/// from their own task through a clone, so they never hold up input.
+#[derive(Clone)]
+pub(crate) struct SyntraSender {
     cert: Certificate,
     shared: ConnectionShared,
-    recv_rx: Receiver<(ClientHandle, String, ProtoEvent)>,
 }
 
 impl SyntraConnection {
     /// This machine's own certificate fingerprint.
     pub(crate) fn own_fingerprint(&self) -> String {
-        crate::crypto::certificate_fingerprint(&self.cert)
+        crate::crypto::certificate_fingerprint(&self.sender.cert)
     }
 
     pub(crate) fn new(cert: Certificate, client_manager: ClientManager) -> Self {
         let (recv_tx, recv_rx) = channel();
         Self {
-            cert,
-            shared: ConnectionShared {
-                client_manager,
-                conns: Default::default(),
-                peer_fingerprints: Default::default(),
-                connecting: Default::default(),
-                tx: recv_tx,
-                ping_response: Default::default(),
+            sender: SyntraSender {
+                cert,
+                shared: ConnectionShared {
+                    client_manager,
+                    conns: Default::default(),
+                    peer_fingerprints: Default::default(),
+                    connecting: Default::default(),
+                    tx: recv_tx,
+                    ping_response: Default::default(),
+                },
             },
             recv_rx,
         }
     }
 
+    /// A sender sharing this connection's transports.
+    pub(crate) fn sender(&self) -> SyntraSender {
+        self.sender.clone()
+    }
+
     pub(crate) async fn recv(&mut self) -> (ClientHandle, String, ProtoEvent) {
         loop {
             let event = self.recv_rx.recv().await.expect("channel closed");
-            if self.shared.client_manager.contains(event.0) {
+            if self.sender.shared.client_manager.contains(event.0) {
                 return event;
             }
         }
@@ -156,6 +172,37 @@ impl SyntraConnection {
     /// This makes pairing and peer-version discovery independent of reaching
     /// an input-capture barrier.
     pub(crate) async fn connect(&self, handle: ClientHandle) {
+        self.sender.connect(handle).await;
+    }
+
+    /// The peer has an authenticated transport, independently of whether
+    /// either portal currently allows remote input.
+    pub(crate) fn peer_connected(&self, handle: ClientHandle) -> bool {
+        self.sender.peer_connected(handle)
+    }
+
+    /// Certificate the configured client presented, once authenticated.
+    pub(crate) fn client_fingerprint(&self, handle: ClientHandle) -> Option<String> {
+        self.sender.shared.client_manager.peer_fingerprint(handle)
+    }
+
+    /// The destination explicitly confirmed that both receiving input and
+    /// returning control are currently available.
+    pub(crate) fn remote_ready(&self, handle: ClientHandle) -> bool {
+        self.sender.remote_ready(handle)
+    }
+
+    pub(crate) async fn send(
+        &self,
+        event: ProtoEvent,
+        handle: ClientHandle,
+    ) -> Result<(), SyntraConnectionError> {
+        self.sender.send(event, handle).await
+    }
+}
+
+impl SyntraSender {
+    async fn connect(&self, handle: ClientHandle) {
         if !self.shared.client_manager.contains(handle)
             || self.shared.client_manager.active_addr(handle).is_some()
         {
@@ -173,20 +220,11 @@ impl SyntraConnection {
         ));
     }
 
-    /// The peer has an authenticated transport, independently of whether
-    /// either portal currently allows remote input.
-    pub(crate) fn peer_connected(&self, handle: ClientHandle) -> bool {
+    fn peer_connected(&self, handle: ClientHandle) -> bool {
         self.shared.client_manager.active_addr(handle).is_some()
     }
 
-    /// The destination explicitly confirmed that both receiving input and
-    /// returning control are currently available.
-    /// Certificate the configured client presented, once authenticated.
-    pub(crate) fn client_fingerprint(&self, handle: ClientHandle) -> Option<String> {
-        self.shared.client_manager.peer_fingerprint(handle)
-    }
-
-    pub(crate) fn remote_ready(&self, handle: ClientHandle) -> bool {
+    fn remote_ready(&self, handle: ClientHandle) -> bool {
         self.peer_connected(handle) && self.shared.client_manager.remote_ready(handle)
     }
 
@@ -329,11 +367,25 @@ async fn connect_to_handle(
             log::debug!("hello send to {addr} failed: {e}");
         }
 
-        // poll connection for active
-        spawn_local(ping_pong(addr, conn.clone(), ping_response.clone()));
+        // poll connection for active; the two tasks share when the last
+        // ping left, so its pong gives the round trip
+        let ping_sent = Rc::new(Cell::new(None));
+        spawn_local(ping_pong(
+            addr,
+            conn.clone(),
+            ping_response.clone(),
+            ping_sent.clone(),
+        ));
 
         // receiver
-        spawn_local(receive_loop(shared, handle, addr, conn, fingerprint));
+        spawn_local(receive_loop(
+            shared,
+            handle,
+            addr,
+            conn,
+            fingerprint,
+            ping_sent,
+        ));
         return Ok(());
     }
     connecting.lock().await.remove(&handle);
@@ -344,6 +396,7 @@ async fn ping_pong(
     addr: SocketAddr,
     conn: Arc<dyn Conn + Send + Sync>,
     ping_response: Rc<RefCell<HashSet<SocketAddr>>>,
+    ping_sent: Rc<Cell<Option<Instant>>>,
 ) {
     loop {
         let buf = ProtoEvent::Ping.encode().expect("Ping always encodes");
@@ -354,6 +407,12 @@ async fn ping_pong(
                 log::warn!("{addr}: send error `{e}`, closing connection");
                 let _ = conn.close().await;
                 break;
+            }
+            // Time from the oldest unanswered ping: a late or lost answer
+            // must show as delay, never be paired with a newer ping and look
+            // faster than it was.
+            if ping_sent.get().is_none() {
+                ping_sent.set(Some(Instant::now()));
             }
             log::trace!("PING >->->->->- {addr}");
 
@@ -384,6 +443,7 @@ async fn receive_loop(
     addr: SocketAddr,
     conn: Arc<dyn Conn + Send + Sync>,
     fingerprint: String,
+    ping_sent: Rc<Cell<Option<Instant>>>,
 ) {
     let ConnectionShared {
         client_manager,
@@ -416,6 +476,12 @@ async fn receive_loop(
                         let changed = pong_is_edge(&client_manager, handle, addr, remote_ready);
                         client_manager.set_active_addr(handle, Some(addr));
                         client_manager.set_alive(handle, true);
+                        // Pongs only ever answer pings. The oldest unanswered
+                        // one is the reference, so lateness and loss read as
+                        // delay rather than being hidden.
+                        if let Some(sent) = ping_sent.take() {
+                            client_manager.record_round_trip(handle, sent.elapsed());
+                        }
                         client_manager.set_remote_ready(handle, remote_ready);
                         ping_response.borrow_mut().insert(addr);
                         if changed {
@@ -543,6 +609,7 @@ mod tests {
         let certificate = Certificate::generate_self_signed(["test".to_owned()]).unwrap();
         let mut connection = SyntraConnection::new(certificate, manager.clone());
         connection
+            .sender
             .shared
             .tx
             .send((deleted, "old-peer".into(), ProtoEvent::Pong(true)))
@@ -550,6 +617,7 @@ mod tests {
         manager.remove_client(deleted);
         let replacement = manager.add_client();
         connection
+            .sender
             .shared
             .tx
             .send((replacement, "new-peer".into(), ProtoEvent::Pong(false)))
