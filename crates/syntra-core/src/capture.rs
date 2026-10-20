@@ -2607,7 +2607,6 @@ mod tests {
         assert_eq!(task.input_target(phone, false), Some(hp), "after hand-off");
     }
 
-    /// Choosing another backend restarts capture with it at once.
     /// A clipboard image is streamed from its own task: the request returns
     /// before a single chunk went out, so the loop keeps forwarding input,
     /// and a newer clipboard for the same peer cancels the one in flight.
@@ -2644,6 +2643,7 @@ mod tests {
             .await;
     }
 
+    /// Choosing another backend restarts capture with it at once.
     #[tokio::test(flavor = "current_thread")]
     async fn choosing_a_backend_restarts_capture_with_it() {
         let (mut task, _requests, _events) = capture_task();
