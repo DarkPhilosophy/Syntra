@@ -225,11 +225,10 @@ impl State {
                     since: now,
                 });
             }
-            PointerEvent::Left { edge, .. } => {
-                // The pointer has gone, so what depended on it being there (a
-                // push) goes with it. An entry is short and plays out: wiping
-                // it made a quick in-and-out crossing show nothing at all.
+            PointerEvent::Left { edge, along, .. } => {
                 let index = slot(edge);
+                // A brief entry still plays out. Otherwise an exit has its own
+                // fade, including independent cursors with no pressure events.
                 if !matches!(
                     self.edges[index],
                     Some(Active {
@@ -237,7 +236,18 @@ impl State {
                         ..
                     })
                 ) {
-                    self.edges[index] = None;
+                    let place = along
+                        .map(|value| along_or_middle(Some(value)))
+                        .or(self.last_along[index])
+                        .unwrap_or(0.5);
+                    self.last_along[index] = Some(place);
+                    self.edges[index] = Some(Active {
+                        kind: Kind::Fading {
+                            along: place,
+                            level: 1.0,
+                        },
+                        since: now,
+                    });
                 }
             }
             PointerEvent::Pressure {
@@ -440,18 +450,43 @@ mod tests {
         })
     }
 
-    /// Leaving ends what depends on the pointer being there (a push), on that
-    /// edge only.
+    /// Leaving fades the crossed edge without disturbing a different push.
     #[test]
-    fn leaving_ends_a_push_on_that_edge_only() {
+    fn leaving_fades_only_the_crossed_edge() {
         let start = Instant::now();
         let mut state = State::default();
         state.handle(pressure(Edge::Left, 0.8), start);
         state.handle(pressure(Edge::Right, 0.8), start);
         state.handle(left(Edge::Left), start);
         let strips = state.frame(start);
-        assert_eq!(strips.len(), 1);
-        assert_eq!(strips[0].edge, Edge::Right);
+        assert!(
+            strips.iter().any(
+                |strip| strip.edge == Edge::Left && matches!(strip.light, Light::Fading { .. })
+            )
+        );
+        assert!(strips.iter().any(|strip| strip.edge == Edge::Right && matches!(strip.light, Light::Push { .. })));
+        let later = state.frame(start + glow::RELEASE_DURATION + Duration::from_millis(1));
+        assert_eq!(later.len(), 1);
+        assert_eq!(later[0].edge, Edge::Right);
+    }
+
+    #[test]
+    fn an_independent_pointer_exit_is_visible_without_pressure_events() {
+        let start = Instant::now();
+        let mut state = State::default();
+        state.handle(entered(Edge::Left, Some(0.2)), start);
+        let departed = start + glow::ENTRY_DURATION + Duration::from_millis(1);
+        assert!(state.frame(departed).is_empty());
+        state.handle(left(Edge::Left), departed);
+        assert!(matches!(
+            state.frame(departed)[0].light,
+            Light::Fading { along: 0.2, .. }
+        ));
+        assert!(
+            state
+                .frame(departed + glow::RELEASE_DURATION + Duration::from_millis(1))
+                .is_empty()
+        );
     }
 
     /// An entry is short and plays out: a crossing that is followed at once by

@@ -11,17 +11,16 @@ impl Service {
             EmulationEvent::ConnectionAttempt { fingerprint } => {
                 self.notify_frontend(FrontendEvent::ConnectionAttempt { fingerprint });
             }
-            EmulationEvent::Left { addr, side } => {
+            EmulationEvent::Left { addr, side, along } => {
                 if let Some(edge) = side {
-                    // An exit says only which edge the pointer is leaving by:
-                    // how it arrived and where along the edge are not known
-                    // here, so they are left unset rather than guessed.
+                    // How it arrived is not known here; where along the edge
+                    // it left is, for an independent pointer's own exit.
                     let passage = PointerPassage {
                         edge,
                         peer: addr.to_string(),
                         fingerprint: self.authenticated_peer_fingerprints.get(&addr).cloned(),
                         relayed: false,
-                        along: None,
+                        along,
                     };
                     self.forward_pointer_to_plugins(&passage, false);
                     self.notify_frontend(FrontendEvent::PointerLeft(passage));
@@ -36,7 +35,7 @@ impl Service {
                 along,
             } => {
                 if !self.input_sharing {
-                    self.emulation.send_leave_event(addr);
+                    self.emulation.send_leave_event(addr, None);
                     return;
                 }
                 self.capture.set_controller(Some((
@@ -228,14 +227,22 @@ impl Service {
             EmulationEvent::ClipboardFallback(crate::emulation::ClipboardFallback::Adapter(
                 publication,
             )) => {
-                if let Some(manager) = self.adapter_manager.as_ref() {
-                    if let Err(error) =
-                        manager.try_send(ManagerCommand::PublishFileClipboard(publication))
-                    {
-                        log::warn!("file clipboard adapter publication failed: {error}");
+                // Delivered to whichever plugin provides the file clipboard
+                // now. With none, the publication is reported and dropped:
+                // input sharing does not depend on it.
+                match (
+                    self.adapter_manager.as_ref(),
+                    self.file_clipboard_provider(),
+                ) {
+                    (Some(manager), Some(provider)) => {
+                        if let Err(error) = manager.try_send(ManagerCommand::PublishFileClipboard {
+                            id: provider,
+                            publication,
+                        }) {
+                            log::warn!("file clipboard provider publication failed: {error}");
+                        }
                     }
-                } else {
-                    log::warn!("file clipboard publication failed: clipboard adapter unavailable");
+                    _ => log::warn!("file clipboard publication dropped: no provider is active"),
                 }
             }
             EmulationEvent::ClipboardProtocol { addr, event } => {
@@ -307,8 +314,12 @@ impl Service {
                 log::info!(
                     "native clipboard selection routed from capture handle={handle} mime={mime_type}"
                 );
-                if let Some(manager) = self.adapter_manager.as_ref() {
+                if let (Some(manager), Some(provider)) = (
+                    self.adapter_manager.as_ref(),
+                    self.file_clipboard_provider(),
+                ) {
                     let _ = manager.try_send(ManagerCommand::ClipboardData {
+                        id: provider,
                         transfer_id: format!("portal-{handle}"),
                         mime_type,
                         value,
@@ -345,6 +356,7 @@ impl Service {
                 controller,
                 target,
                 side,
+                along,
             } => {
                 let owner = self
                     .incoming_conn_info
@@ -354,13 +366,19 @@ impl Service {
                 match owner {
                     Some(addr) => {
                         log::info!("handing the pointer of {addr} on through the {side} edge");
-                        self.emulation
-                            .send_proto(addr, syntra_proto::ProtoEvent::Handoff { target, side });
+                        if target == controller {
+                            self.emulation.send_leave_event(addr, along);
+                        } else {
+                            self.emulation.send_proto(
+                                addr,
+                                syntra_proto::ProtoEvent::Handoff { target, side },
+                            );
+                        }
                     }
                     None => log::warn!("cannot hand the pointer on: its owner is not connected"),
                 }
             }
-            ICaptureEvent::CaptureBegin(handle) => {
+            ICaptureEvent::CaptureBegin { handle, along } => {
                 // The shared pointer a peer controls here touched one of our
                 // edges. Towards the peer itself: hand control back. Towards
                 // another device of ours: ask the peer to enter it directly
@@ -386,21 +404,30 @@ impl Service {
                                 },
                             );
                         }
-                        _ => self.emulation.send_leave_event(addr),
+                        _ => self.emulation.send_leave_event(addr, along),
                     }
                 }
             }
-            ICaptureEvent::PointerReturned { edge, along } => {
-                self.forward_pointer_to_plugins(
-                    &PointerPassage {
-                        edge: crate::capture::api_pos(edge),
-                        peer: "local".into(),
-                        fingerprint: None,
-                        relayed: false,
-                        along,
-                    },
-                    true,
-                );
+            event @ (ICaptureEvent::PointerReturned { .. } | ICaptureEvent::PointerLeft { .. }) => {
+                let entered = matches!(event, ICaptureEvent::PointerReturned { .. });
+                let (ICaptureEvent::PointerReturned { edge, along }
+                | ICaptureEvent::PointerLeft { edge, along }) = event
+                else {
+                    unreachable!()
+                };
+                let passage = PointerPassage {
+                    edge: crate::capture::api_pos(edge),
+                    peer: "local".into(),
+                    fingerprint: None,
+                    relayed: false,
+                    along,
+                };
+                self.forward_pointer_to_plugins(&passage, entered);
+                self.notify_frontend(if entered {
+                    FrontendEvent::PointerEntered(passage)
+                } else {
+                    FrontendEvent::PointerLeft(passage)
+                });
             }
             ICaptureEvent::EdgePressure {
                 edge,

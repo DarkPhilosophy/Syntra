@@ -83,7 +83,7 @@ rustPlatform.buildRustPackage {
       test -x $out/bin/syntra-plugin-edge-glow
     ''}
     test -x $out/bin/syntra-daemon
-    install -Dm444 *.desktop -t $out/share/applications
+    install -Dm444 packaging/linux/desktop/*.desktop -t $out/share/applications
     install -Dm444 crates/syntra-ui/ui/assets/shell/syntra.svg $out/share/icons/hicolor/scalable/apps/io.syntra.Syntra.svg
   '';
 

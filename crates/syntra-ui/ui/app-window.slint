@@ -488,6 +488,14 @@ export component AppWindow inherits Window {
                     change-setting(id, key, value) => { AppState.change-plugin-setting(id, key, value); }
                     change-setting-colour(id, key, colour) => { AppState.change-plugin-setting-colour(id, key, colour); }
                     refresh => { AppState.refresh-plugins(); }
+                    open-settings(id) => { AppState.open-plugin-settings(id); }
+                    approve(id, digest) => { AppState.approve-plugin(id, digest); }
+                    revoke(id) => { AppState.revoke-plugin-approval(id); }
+                    uninstall(id) => { AppState.uninstall-plugin(id); }
+                    review(path) => { AppState.review-plugin(path); }
+                    install(path) => { AppState.install-plugin(path); }
+                    update(id, path) => { AppState.update-plugin(id, path); }
+                    set-role-preference(role, id) => { AppState.set-plugin-role-preference(role, id); }
                 }
                 if selected-page == "settings": SettingsPage {
                     mobile: root.mobile;

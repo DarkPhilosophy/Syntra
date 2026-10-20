@@ -26,7 +26,7 @@ Build inside the project container:
 distrobox enter "$SYNTRA_BUILD_CONTAINER" -- bash -lc 'cd "$PWD" && cargo build --workspace --features syntra-daemon/layer_shell_capture,syntra-daemon/x11_capture,syntra-daemon/libei_capture,syntra-daemon/wlroots_emulation,syntra-daemon/libei_emulation,syntra-daemon/rdp_emulation,syntra-daemon/uinput_emulation,syntra-daemon/x11_emulation'
 ```
 
-Run formatting and checks through the workflows in [`.github/workflows/`](workflows/). Documentation changes must keep internal links valid and must keep links valid. Generated sections are refreshed automatically on `main`; to update them locally run `node .scripts/sync-readme.js` and `node .scripts/sync-licenses.js`.
+Run formatting and checks through the workflows in [`.github/workflows/`](workflows/). Documentation changes must keep internal links valid and must keep links valid. Generated sections are refreshed automatically on `main`; to update them locally run `node scripts/sync-readme.js` and `node scripts/sync-licenses.js`.
 
 ## Pull requests
 

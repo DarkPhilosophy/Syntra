@@ -43,6 +43,13 @@ pub enum PointerEdge {
     Bottom,
 }
 
+/// An actual edge crossing and the current fraction along that edge.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PointerExit {
+    pub edge: PointerEdge,
+    pub along: Option<f32>,
+}
+
 /// Push needed against an edge before an independent pointer leaves through
 /// it, in motion units. Shared with the capture side, which reads the same
 /// setting; zero leaves at the first touch.
@@ -81,7 +88,12 @@ pub(crate) fn push_against_edge(
         PointerEdge::Top => -dy,
         PointerEdge::Bottom => dy,
     };
-    let leaked = (so_far - PUSH_LEAK_PER_SECOND * idle.as_secs_f64()).max(0.0);
+    // Match capture: outward motion accumulates regardless of event spacing.
+    let leaked = if outward <= 0.0 {
+        (so_far - PUSH_LEAK_PER_SECOND * idle.as_secs_f64()).max(0.0)
+    } else {
+        so_far
+    };
     let total = (leaked + outward).max(0.0);
     (total, total >= needed)
 }
@@ -316,7 +328,7 @@ impl InputEmulation {
     }
 
     /// See [`Emulation::take_pointer_edge`].
-    pub fn take_pointer_edge(&mut self, handle: EmulationHandle) -> Option<PointerEdge> {
+    pub fn take_pointer_edge(&mut self, handle: EmulationHandle) -> Option<PointerExit> {
         self.emulation.take_pointer_edge(handle)
     }
 
@@ -445,7 +457,7 @@ trait Emulation: Send {
     /// Edge of the desktop the peer's own cursor was last pushed against,
     /// cleared by reading. Only independent pointers report edges; the
     /// shared pointer is watched by local capture instead.
-    fn take_pointer_edge(&mut self, _handle: EmulationHandle) -> Option<PointerEdge> {
+    fn take_pointer_edge(&mut self, _handle: EmulationHandle) -> Option<PointerExit> {
         None
     }
     /// Moves the pointer to the middle of `edge`, where a peer entering

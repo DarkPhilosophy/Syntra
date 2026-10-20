@@ -11,6 +11,9 @@ syntra-plugin-api.workspace = true
 [dev-dependencies]
 png = "0.18"
 
+[build-dependencies]
+slint-build = "1.17.1"
+
 # The windows and the graphics that draw into them are Linux-only for now. On
 # other targets the glow maths, state and protocol still build and test, but no
 # graphics stack is pulled in.
@@ -21,6 +24,8 @@ glutin-winit = { version = "0.5", default-features = false, features = ["egl", "
 raw-window-handle = "0.6"
 winit = { version = "0.30", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
 x11rb = { version = "0.13", default-features = false }
+# The settings window, drawn with Syntra's own Slint controls.
+slint = { version = "1.17.1", default-features = false, features = ["std", "backend-winit", "renderer-femtovg", "renderer-software", "accessibility", "compat-1-2"] }
 
 [lints]
 workspace = true

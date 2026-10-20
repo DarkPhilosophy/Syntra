@@ -45,7 +45,7 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: >-
-          cargo doc --no-deps
+          cargo doc --locked --no-deps
           -p syntra-api -p syntra-plugin-api -p syntra-log
 
       - name: Generate workspace documentation
@@ -54,12 +54,12 @@ jobs:
         env:
           RUSTDOCFLAGS: -D rustdoc::broken_intra_doc_links -D rustdoc::invalid_html_tags
         run: >-
-          cargo doc --workspace --no-deps --document-private-items
+          cargo doc --locked --workspace --no-deps --document-private-items
           --features "${LINUX_FEATURES//[$'\n' ]/}"
 
       - name: Verify documentation examples
         run: >-
-          cargo test --workspace --doc
+          cargo test --locked --workspace --doc
           --features "${LINUX_FEATURES//[$'\n' ]/}"
 
       - name: Publish as an artifact

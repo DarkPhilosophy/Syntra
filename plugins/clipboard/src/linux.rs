@@ -112,15 +112,17 @@ async fn read_file_selection(stream: &gio::InputStream) -> Result<Vec<u8>, glib:
         }
     }
 }
-/// This plugin's own declaration, the single source of truth about it.
+/// This plugin's handshake: what it can do right now.
 ///
-/// The daemon reads it from the handshake, or from `--describe` before the
-/// plugin has ever run, so nothing about it is duplicated in the daemon or in
-/// a file beside the binary.
+/// The `adapter_id` is the plugin's manifest id, which the daemon requires. The
+/// description and provenance are displayed by the plugin manager but grant
+/// nothing: what the plugin may do is what the user approved, and the daemon's
+/// own descriptor for this bundled plugin says where it came from, not this
+/// message.
 fn hello() -> Message {
     Message::Hello {
         protocol_version: syntra_plugin_api::PROTOCOL_VERSION,
-        adapter_id: "gtk-clipboard".into(),
+        adapter_id: "clipboard".into(),
         name: "GNOME Clipboard Source".into(),
         capabilities: syntra_plugin_api::Capabilities {
             clipboard_read: true,
@@ -149,14 +151,6 @@ fn hello() -> Message {
 }
 
 pub fn main() {
-    // `--describe` prints the declaration and exits, so the daemon can list
-    // this plugin accurately without launching a full session.
-    if std::env::args().any(|argument| argument == "--describe") {
-        if let Ok(line) = hello().encode_line() {
-            print!("{line}");
-        }
-        return;
-    }
     // A windowless Wayland client receives no clipboard offers: wl_data_device
     // delivers them only to the keyboard-focused client. Use the XWayland
     // selection bridge when available, without changing the desktop session.

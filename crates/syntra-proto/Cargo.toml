@@ -14,3 +14,9 @@ num_enum = "0.7.2"
 thiserror = "2.0.0"
 syntra-input-event.workspace = true
 paste = "1.0"
+
+# A plain harness, not a framework: the benchmark is deterministic std-only
+# code, so it adds no dependency and runs unprivileged.
+[[bench]]
+name = "protocol_throughput"
+harness = false

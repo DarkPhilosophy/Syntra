@@ -200,6 +200,10 @@ impl SyntraConnection {
             &event,
             ProtoEvent::Input(_) | ProtoEvent::Enter(_) | ProtoEvent::EnterAt { .. }
         );
+        let advertise_return = matches!(
+            event,
+            ProtoEvent::Enter(_) | ProtoEvent::EnterAt { .. } | ProtoEvent::EnterVia { .. }
+        );
         let buf = event.encode()?;
         if let Some(addr) = self.shared.client_manager.active_addr(handle) {
             let conn = {
@@ -210,7 +214,19 @@ impl SyntraConnection {
                 if requires_remote_ready && !self.remote_ready(handle) {
                     return Err(SyntraConnectionError::TargetEmulationDisabled);
                 }
-                if let Err(e) = conn.send(&buf).await {
+                let sent = async {
+                    if advertise_return {
+                        // Advertise on each entry, never on the per-motion path.
+                        let capabilities =
+                            ProtoEvent::InputCapabilities(syntra_proto::CAP_RETURN_POSITION)
+                                .encode()
+                                .expect("fixed-size capability message");
+                        conn.send(&capabilities).await?;
+                    }
+                    conn.send(&buf).await
+                }
+                .await;
+                if let Err(e) = sent {
                     log::warn!("client {handle} failed to send: {e}");
                     if let Some(fingerprint) = disconnect(
                         &self.shared.client_manager,

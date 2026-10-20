@@ -1,7 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/DarkPhilosophy/syntra/plugins/manifest.schema.json",
   "title": "Syntra plugin manifest",
-  "description": "Describes a plugin process the Syntra daemon can supervise. The daemon discovers plugins by reading these manifests, so anything a user should see about a plugin belongs here rather than in the daemon.",
+  "description": "The one manifest contract of an out-of-process Syntra plugin. It is defined by `PluginManifest` in the `syntra-plugin-api` crate, which the daemon's discovery, this schema and every packaged example share. A manifest is a claim, never a grant: what a plugin may do is what the user approved for its content digest.",
   "type": "object",
   "required": [
     "manifest_version",
@@ -12,84 +13,121 @@
     "capabilities"
   ],
   "properties": {
-    "manifest_version": { "const": 1 },
-    "protocol_version": { "const": 1 },
+    "$schema": { "type": "string" },
+    "manifest_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Manifest format. Version 1 is understood by this release; a higher one is listed as unsupported and never launched."
+    },
+    "protocol_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Plugin protocol version the plugin speaks. Version 1 is understood by this release."
+    },
     "id": {
       "type": "string",
       "pattern": "^[A-Za-z0-9._-]+$",
-      "description": "Stable identifier, unique per daemon."
+      "not": { "enum": [".", ".."] },
+      "minLength": 1,
+      "maxLength": 256,
+      "description": "Stable identifier, unique per daemon. It names a directory and a file, so it is limited to letters, digits, `.`, `_` and `-`."
     },
-    "name": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "minLength": 1, "maxLength": 256 },
     "description": {
       "type": "string",
+      "maxLength": 2048,
       "description": "One or two sentences describing the capability this plugin adds, shown in the plugin manager."
     },
-    "version": {
-      "type": "string",
-      "description": "Plugin version, ideally semantic versioning."
-    },
-    "author": {
-      "type": "string",
-      "description": "Person or organisation responsible for the plugin."
-    },
-    "homepage": {
-      "type": "string",
-      "format": "uri",
-      "description": "Project or documentation page."
-    },
+    "version": { "type": "string", "maxLength": 256, "description": "Plugin version, ideally semantic versioning." },
+    "author": { "type": "string", "maxLength": 256, "description": "Person or organisation responsible for the plugin." },
+    "homepage": { "type": "string", "format": "uri", "maxLength": 256, "description": "Project or documentation page." },
     "source": {
       "type": "string",
       "format": "uri",
+      "maxLength": 256,
       "description": "Where the source code lives, so a user can audit a plugin before trusting it with clipboard contents."
     },
-    "update_url": {
-      "type": "string",
-      "format": "uri",
-      "description": "Where newer releases are published."
-    },
-    "license": {
-      "type": "string",
-      "description": "SPDX licence identifier."
-    },
+    "update_url": { "type": "string", "format": "uri", "maxLength": 256, "description": "Where newer releases are published." },
+    "license": { "type": "string", "maxLength": 256, "description": "SPDX licence identifier." },
     "bundled": {
       "type": "boolean",
       "default": false,
-      "description": "True for plugins shipped with Syntra. Bundled plugins are updated with the application and cannot be uninstalled from the plugin manager."
+      "description": "A claim that the plugin ships with Syntra. It is displayed and never trusted: the daemon decides provenance from where it found the plugin, so this cannot make a plugin bundled."
+    },
+    "owns_settings": {
+      "type": "boolean",
+      "default": false,
+      "description": "True when the plugin keeps and validates its own settings and declares them over the API. The manifest's settings are then only shown until it first runs, and changes are passed to the plugin, queued while it is not running."
     },
     "on_demand": {
       "type": "boolean",
       "default": false,
       "description": "True when the daemon starts this plugin only for the duration of a task rather than keeping it running. Such a plugin is reported as available rather than stopped when idle, because not running is its normal state."
     },
-    "executable": { "type": "string", "minLength": 1 },
-    "args": { "type": "array", "items": { "type": "string" } },
+    "executable": {
+      "type": "string",
+      "minLength": 1,
+      "description": "File to run, relative to the manifest or absolute. It is covered by the content digest the user approves."
+    },
+    "args": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "type": "string", "maxLength": 1024, "pattern": "^[^\\u0000]*$" },
+      "default": [],
+      "description": "Arguments passed to the executable at launch, in order and unaltered. They are covered by the content digest."
+    },
+    "handshake_ids": {
+      "type": "array",
+      "maxItems": 8,
+      "items": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$", "minLength": 1, "maxLength": 256 },
+      "default": [],
+      "description": "Other adapter ids the plugin's handshake may use besides its own `id`. Exists so a plugin released before ids were enforced keeps working."
+    },
+    "resources": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "type": "string", "minLength": 1 },
+      "default": [],
+      "description": "Files and directories beside the manifest that are part of the plugin, in addition to the executable, and are covered by the content digest. Relative paths that stay inside the plugin directory; symbolic links that leave it are refused."
+    },
     "capabilities": {
       "type": "object",
-      "description": "What the plugin does. A clipboard or transfer plugin declares the clipboard fields and at least one MIME type. A plugin that only reacts to the pointer declares `pointer_events` and none of those.",
+      "description": "What the plugin claims to do. A clipboard or transfer plugin declares at least one of `clipboard_read` and `paste` and one or more unique MIME types. A plugin that only reacts to the pointer declares `pointer_events` and none of those. The roles it can fill are derived from these fields; no role is chosen by name.",
       "properties": {
-        "clipboard_read": { "type": "boolean" },
-        "paste": { "type": "boolean" },
-        "cancel": { "type": "boolean" },
+        "clipboard_read": { "type": "boolean", "default": false },
+        "paste": { "type": "boolean", "default": false },
+        "cancel": { "type": "boolean", "default": false },
         "requires_live_mount": { "type": "boolean", "default": false },
         "pointer_events": {
           "type": "boolean",
           "default": false,
-          "description": "True when the plugin wants to be told as a pointer enters, leaves or pushes against a screen edge. The daemon then launches it, sends it its settings after the handshake, and forwards those events. Such a plugin only listens; anything it sends other than an error report stops it."
+          "description": "True when the plugin wants to be told as a pointer enters, leaves or pushes against a screen edge. The daemon then launches it, sends it its settings after the handshake, and forwards those events. Such a plugin only listens; anything it sends other than an error report or its settings declaration stops it."
         },
         "mime_types": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 }
+          "maxItems": 32,
+          "uniqueItems": true,
+          "default": [],
+          "items": { "type": "string", "minLength": 1, "maxLength": 256 }
         }
       },
       "oneOf": [
         {
-          "required": ["clipboard_read", "paste", "cancel", "mime_types"],
-          "properties": { "mime_types": { "minItems": 1 } }
+          "properties": {
+            "mime_types": { "minItems": 1 }
+          },
+          "required": ["mime_types"],
+          "anyOf": [
+            { "required": ["clipboard_read"], "properties": { "clipboard_read": { "const": true } } },
+            { "required": ["paste"], "properties": { "paste": { "const": true } } }
+          ]
         },
         {
           "required": ["pointer_events"],
           "properties": {
             "pointer_events": { "const": true },
+            "clipboard_read": { "const": false },
+            "paste": { "const": false },
             "mime_types": { "maxItems": 0 }
           }
         }
@@ -97,7 +135,8 @@
     },
     "settings": {
       "type": "array",
-      "description": "What the user can change. The plugin manager draws a control for each, stores the choice per plugin, and hands the current values to the plugin after its handshake and whenever one changes.",
+      "maxItems": 64,
+      "description": "What the user can change. The plugin manager draws a control for each, stores the choice per plugin, and hands the current values to the plugin after its handshake and whenever one changes. Keys are unique.",
       "items": {
         "type": "object",
         "required": ["key", "label", "kind"],
@@ -105,29 +144,39 @@
           "key": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9_]*$",
+            "maxLength": 256,
             "description": "Name the plugin receives the value under."
           },
-          "label": { "type": "string", "minLength": 1 },
+          "label": { "type": "string", "minLength": 1, "maxLength": 256 },
           "kind": { "enum": ["toggle", "choice", "color", "number"] },
           "default": {
             "type": "string",
-            "description": "Value until the user chooses one, written as the wire form: `true` or `false`, an option value, a number, or `#rrggbb`."
+            "maxLength": 256,
+            "description": "Value until the user chooses one, written as the wire form: `true` or `false`, an option value, a number, or `#rrggbb`. It must be a value the setting accepts."
           },
           "options": {
             "type": "array",
+            "minItems": 1,
+            "maxItems": 64,
             "description": "Required for `choice`.",
             "items": {
               "type": "object",
               "required": ["value", "label"],
               "properties": {
-                "value": { "type": "string", "minLength": 1 },
-                "label": { "type": "string", "minLength": 1 }
+                "value": { "type": "string", "minLength": 1, "maxLength": 256 },
+                "label": { "type": "string", "minLength": 1, "maxLength": 256 }
               }
             }
           },
-          "min": { "type": "integer", "description": "Lowest value of a `number`." },
-          "max": { "type": "integer", "description": "Highest value of a `number`." }
-        }
+          "min": { "type": "integer", "description": "Lowest value of a `number`. Optional: omitted means no lower bound." },
+          "max": { "type": "integer", "description": "Highest value of a `number`. Optional: omitted means no upper bound. `min` must not exceed `max`, which the daemon checks and this schema cannot express." }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "kind": { "const": "choice" } }, "required": ["kind"] },
+            "then": { "required": ["options"] }
+          }
+        ]
       }
     }
   }

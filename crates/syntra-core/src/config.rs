@@ -1,6 +1,4 @@
-use crate::capture_test::TestCaptureArgs;
-use crate::emulation_test::TestEmulationArgs;
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::ValueEnum;
 use notify::event::ModifyKind;
 use notify::{EventKind, RecommendedWatcher, Watcher};
 use serde::{Deserialize, Serialize};
@@ -17,7 +15,6 @@ use toml;
 use toml_edit::{self, DocumentMut};
 
 use syntra_api::{ClipboardSettings, DEFAULT_PORT, FileReceiveSettings, Position};
-use syntra_cli::CliArgs;
 
 use syntra_input_event::scancode::{
     self,
@@ -156,44 +153,26 @@ impl ConfigToml {
     }
 }
 
-#[derive(Parser, Debug)]
-#[command(author, version=build::CLAP_LONG_VERSION, about, long_about = None)]
-struct Args {
-    /// the listen port for syntra
-    #[arg(short, long)]
-    port: Option<u16>,
+/// Long version string (`--version`), embedding the build metadata.
+pub const LONG_VERSION: &str = build::CLAP_LONG_VERSION;
 
+/// Settings that take precedence over the configuration file.
+///
+/// The core does not parse a command line: whichever entry point hosts it
+/// (the daemon binary, the Android service) builds this value and hands it
+/// over, so the core has no dependency on any argument-parsing frontend.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ConfigOverrides {
+    /// listen port override
+    pub port: Option<u16>,
     /// non-default config file location
-    #[arg(short, long)]
-    config: Option<PathBuf>,
-
+    pub config: Option<PathBuf>,
     /// capture backend override
-    #[arg(long)]
-    capture_backend: Option<CaptureBackend>,
-
+    pub capture_backend: Option<CaptureBackend>,
     /// emulation backend override
-    #[arg(long)]
-    emulation_backend: Option<EmulationBackend>,
-
-    /// path to non-default certificate location
-    #[arg(long)]
-    cert_path: Option<PathBuf>,
-
-    /// subcommands
-    #[command(subcommand)]
-    command: Option<Command>,
-}
-
-#[derive(Subcommand, Clone, Debug, Eq, PartialEq)]
-pub enum Command {
-    /// test input emulation
-    TestEmulation(TestEmulationArgs),
-    /// test input capture
-    TestCapture(TestCaptureArgs),
-    /// Syntra commandline interface
-    Cli(CliArgs),
-    /// run in daemon mode
-    Daemon,
+    pub emulation_backend: Option<EmulationBackend>,
+    /// non-default certificate location
+    pub cert_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
@@ -352,8 +331,8 @@ impl Display for EmulationBackend {
 
 #[derive(Debug)]
 pub struct Config {
-    /// command line arguments
-    args: Args,
+    /// overrides supplied by the hosting entry point
+    overrides: ConfigOverrides,
     /// path to the certificate file used
     cert_path: PathBuf,
     /// path to the config file used
@@ -426,11 +405,10 @@ const DEFAULT_RELEASE_KEYS: [scancode::Linux; 4] =
     [KeyLeftCtrl, KeyLeftShift, KeyLeftMeta, KeyLeftAlt];
 
 impl Config {
-    pub fn new() -> Result<Self, ConfigError> {
-        let args = Args::parse();
-
+    /// Loads the configuration, applying `overrides` over the file.
+    pub fn load(overrides: ConfigOverrides) -> Result<Self, ConfigError> {
         // --config <file> overrules default location
-        let config_path = args
+        let config_path = overrides
             .config
             .clone()
             .unwrap_or(default_path()?.join(CONFIG_FILE_NAME));
@@ -440,7 +418,7 @@ impl Config {
             .to_path_buf();
 
         // Ensure the config directory exists and write a default config file
-        // if none is present. Runs on every Config::new(), regardless of which
+        // if none is present. Runs on every Config::load(), regardless of which
         // entry path (GUI main, spawned daemon, CLI, test commands) we're on,
         // so a fresh Mac never hits "No such file or directory" on config.toml
         // and notify::Watcher (which requires the dir to exist on macOS
@@ -462,7 +440,7 @@ impl Config {
         };
 
         // --cert-path <file> overrules default location
-        let cert_path = args
+        let cert_path = overrides
             .cert_path
             .clone()
             .or(config_toml.as_ref().and_then(|c| c.cert_path.clone()))
@@ -476,7 +454,7 @@ impl Config {
             notify::Config::default(),
         )?;
         let mut config = Config {
-            args,
+            overrides,
             cert_path,
             config_path,
             config_dir,
@@ -517,11 +495,6 @@ impl Config {
         }
     }
 
-    /// the command to run
-    pub fn command(&self) -> Option<Command> {
-        self.args.command.clone()
-    }
-
     pub fn config_path(&self) -> &Path {
         &self.config_path
     }
@@ -546,21 +519,21 @@ impl Config {
 
     /// optional input-capture backend override
     pub fn capture_backend(&self) -> Option<CaptureBackend> {
-        self.args
+        self.overrides
             .capture_backend
             .or(self.config_toml.as_ref().and_then(|c| c.capture_backend))
     }
 
     /// optional input-emulation backend override
     pub fn emulation_backend(&self) -> Option<EmulationBackend> {
-        self.args
+        self.overrides
             .emulation_backend
             .or(self.config_toml.as_ref().and_then(|c| c.emulation_backend))
     }
 
     /// the port to use (initially)
     pub fn port(&self) -> u16 {
-        self.args
+        self.overrides
             .port
             .or(self.config_toml.as_ref().and_then(|c| c.port))
             .unwrap_or(DEFAULT_PORT)
@@ -649,7 +622,7 @@ impl Config {
 
     /// Chooses the capture backend; `None` picks one automatically.
     pub fn set_capture_backend(&mut self, backend: Option<CaptureBackend>) {
-        self.args.capture_backend = None;
+        self.overrides.capture_backend = None;
         self.config_toml
             .get_or_insert_with(Default::default)
             .capture_backend = backend;
@@ -657,7 +630,7 @@ impl Config {
 
     /// Chooses the emulation backend; `None` picks one automatically.
     pub fn set_emulation_backend(&mut self, backend: Option<EmulationBackend>) {
-        self.args.emulation_backend = None;
+        self.overrides.emulation_backend = None;
         self.config_toml
             .get_or_insert_with(Default::default)
             .emulation_backend = backend;

@@ -1,8 +1,13 @@
 //! The Syntra peer protocol: what two devices say to each other.
 //!
 //! This is distinct from `syntra_api`, which is the local contract between
-//! a daemon and its clients. This crate is the wire format between machines,
-//! carried over UDP for events and TCP for connection setup, under DTLS.
+//! a daemon and its clients. This crate is the wire format between machines.
+//! Every message travels as one datagram over UDP under DTLS; the transport
+//! itself (sockets, handshakes, certificates) lives in `syntra-core`.
+//!
+//! The only workspace crate it depends on is `syntra-input-event`, whose input
+//! event types are carried in the pointer and keyboard messages. It knows
+//! nothing of the daemon, the UI or the plugin protocol.
 //!
 //! [`ProtoEvent`] is the message set. Encoding is explicit rather than
 //! derived: the peer on the other end may be a different version on a
@@ -11,17 +16,26 @@
 //!
 //! # Compatibility
 //!
-//! `ProtoEvent::Hello` carries the protocol version and build identity, and
-//! peers negotiate from it. Any change to an existing message's encoding
-//! requires a version bump: adding a variant is safe, reshaping one is not.
+//! `ProtoEvent::Hello` carries only the build identity. New optional messages
+//! use appended event ids; peers ignore unknown ids. Existing encodings must
+//! not change. Return coordinates require an explicit capability advertisement.
 
 use num_enum::{IntoPrimitive, TryFromPrimitive, TryFromPrimitiveError};
 use std::fmt::{Debug, Display, Formatter};
 use syntra_input_event::{Event as InputEvent, KeyboardEvent, PointerEvent};
 use thiserror::Error;
 
+mod wire;
+use wire::{
+    get_bool, get_f64, get_i32, get_optional_string, get_optional_u64, get_u8, get_u16, get_u32,
+    get_u64, put_f64, put_i32, put_optional_string, put_optional_u64, put_u16, put_u32, put_u64,
+    take,
+};
+
 /// Largest datagram accepted by the application protocol.
 pub const MAX_DATAGRAM_SIZE: usize = 16 * 1024;
+/// The sender accepts `LeaveAt` with the peer's current exit position.
+pub const CAP_RETURN_POSITION: u32 = 1;
 /// Largest clipboard payload accepted by the protocol.
 pub const MAX_CLIPBOARD_SIZE: usize = 64 * 1024 * 1024;
 const CLIPBOARD_CHUNK_HEADER_SIZE: usize = 1 + 8 + 4;
@@ -287,6 +301,13 @@ impl Display for Position {
 pub enum ProtoEvent {
     Enter(Position),
     Leave(u32),
+    /// Optional input capabilities; unknown bits are ignored.
+    InputCapabilities(u32),
+    /// Return through the owner's paired edge at the current exit fraction.
+    /// Only sent after the owner advertises `CAP_RETURN_POSITION`.
+    LeaveAt {
+        along: f32,
+    },
     /// Multi-hop: the pointer this peer received was pushed past its edge
     /// towards the device with certificate `target`. The capturing machine
     /// takes the pointer back and enters `target` from `side` directly.
@@ -482,6 +503,8 @@ impl Display for ProtoEvent {
             Self::Handoff { side, .. } => write!(f, "Handoff({side})"),
             Self::EnterVia { side, .. } => write!(f, "EnterVia({side})"),
             Self::EnterAt { side, along } => write!(f, "EnterAt({side}, {along:.3})"),
+            Self::InputCapabilities(bits) => write!(f, "InputCapabilities({bits})"),
+            Self::LeaveAt { along } => write!(f, "LeaveAt({along:.3})"),
             Self::ProfileStart {
                 request_id,
                 width,
@@ -701,6 +724,8 @@ pub enum EventType {
     /// Enter that also says where along the edge the pointer came in. Appended
     /// last so every existing id keeps its number.
     EnterAt,
+    InputCapabilities,
+    LeaveAt,
 }
 
 impl ProtoEvent {
@@ -742,6 +767,8 @@ impl ProtoEvent {
             Self::Handoff { .. } => EventType::Handoff,
             Self::EnterVia { .. } => EventType::EnterVia,
             Self::EnterAt { .. } => EventType::EnterAt,
+            Self::InputCapabilities(_) => EventType::InputCapabilities,
+            Self::LeaveAt { .. } => EventType::LeaveAt,
             Self::Ack(_) => EventType::Ack,
             Self::Hello { .. } => EventType::Hello,
             Self::ClipboardStart { .. } => EventType::ClipboardStart,
@@ -898,6 +925,8 @@ impl ProtoEvent {
             Self::Pong(alive) => buf.push(u8::from(alive)),
             Self::Enter(position) => buf.push(position as u8),
             Self::Leave(serial) | Self::Ack(serial) => put_u32(&mut buf, serial),
+            Self::InputCapabilities(bits) => put_u32(&mut buf, bits),
+            Self::LeaveAt { along } => put_u32(&mut buf, along.to_bits()),
             Self::EnterAt { side, along } => {
                 buf.push(side as u8);
                 put_u32(&mut buf, along.to_bits());
@@ -1211,6 +1240,16 @@ impl ProtoEvent {
                 let target = String::from_utf8(take(&mut buf, len)?.to_vec())
                     .map_err(|_| ProtocolError::Truncated)?;
                 Self::Handoff { target, side }
+            }
+            EventType::InputCapabilities => Self::InputCapabilities(get_u32(&mut buf)?),
+            EventType::LeaveAt => {
+                let along = f32::from_bits(get_u32(&mut buf)?);
+                if !along.is_finite() {
+                    return Err(ProtocolError::Truncated);
+                }
+                Self::LeaveAt {
+                    along: along.clamp(0.0, 1.0),
+                }
             }
             EventType::EnterAt => {
                 let side = get_u8(&mut buf)?.try_into()?;
@@ -1586,21 +1625,6 @@ fn validate_history_start(total_len: u32, chunks: u32) -> Result<(), ProtocolErr
     Ok(())
 }
 
-fn put_optional_u64(buf: &mut Vec<u8>, value: Option<u64>) {
-    buf.push(value.is_some() as u8);
-    if let Some(value) = value {
-        put_u64(buf, value);
-    }
-}
-
-fn get_optional_u64(buf: &mut &[u8]) -> Result<Option<u64>, ProtocolError> {
-    Ok(if get_bool(buf)? {
-        Some(get_u64(buf)?)
-    } else {
-        None
-    })
-}
-
 fn encode_history_boundary(
     buf: &mut Vec<u8>,
     boundary: &[(String, u64)],
@@ -1644,30 +1668,6 @@ fn decode_history_boundary(buf: &mut &[u8]) -> Result<Vec<(String, u64)>, Protoc
         boundary.push((device_id, sequence));
     }
     Ok(boundary)
-}
-
-fn put_optional_string(buf: &mut Vec<u8>, value: Option<&str>) -> Result<(), ProtocolError> {
-    match value {
-        None => put_u16(buf, 0),
-        Some(value) => {
-            if value.is_empty() || value.len() > u16::MAX as usize {
-                return Err(ProtocolError::InvalidHistory("invalid error string"));
-            }
-            put_u16(buf, value.len() as u16);
-            buf.extend_from_slice(value.as_bytes());
-        }
-    }
-    Ok(())
-}
-
-fn get_optional_string(buf: &mut &[u8]) -> Result<Option<String>, ProtocolError> {
-    let len = get_u16(buf)? as usize;
-    if len == 0 {
-        return Ok(None);
-    }
-    let value = std::str::from_utf8(take(buf, len)?)
-        .map_err(|_| ProtocolError::InvalidHistory("non-UTF-8 error string"))?;
-    Ok(Some(value.to_owned()))
 }
 
 fn validate_clipboard_start(total_len: u32, chunks: u32) -> Result<(), ProtocolError> {
@@ -1861,20 +1861,8 @@ fn get_nonzero_file_id(buf: &mut &[u8]) -> Result<u64, ProtocolError> {
     }
 }
 
-fn get_bool(buf: &mut &[u8]) -> Result<bool, ProtocolError> {
-    match get_u8(buf)? {
-        0 => Ok(false),
-        1 => Ok(true),
-        value => Err(ProtocolError::InvalidBoolean(value)),
-    }
-}
-
 /// A certificate fingerprint is 95 characters; anything longer is invalid.
 const MAX_HANDOFF_TARGET: usize = 128;
-
-fn put_u16(buf: &mut Vec<u8>, value: u16) {
-    buf.extend_from_slice(&value.to_be_bytes());
-}
 
 fn validate_clipboard_image(
     width: u32,
@@ -1931,56 +1919,6 @@ fn validate_request(offset: u64, length: u64) -> Result<(), ProtocolError> {
     validate_file_position(end)
 }
 
-fn take<'a>(buf: &mut &'a [u8], len: usize) -> Result<&'a [u8], ProtocolError> {
-    if buf.len() < len {
-        return Err(ProtocolError::Truncated);
-    }
-    let (value, rest) = buf.split_at(len);
-    *buf = rest;
-    Ok(value)
-}
-
-fn get_u8(buf: &mut &[u8]) -> Result<u8, ProtocolError> {
-    Ok(take(buf, 1)?[0])
-}
-fn get_u16(buf: &mut &[u8]) -> Result<u16, ProtocolError> {
-    Ok(u16::from_be_bytes(
-        take(buf, 2)?.try_into().expect("length checked"),
-    ))
-}
-fn get_u32(buf: &mut &[u8]) -> Result<u32, ProtocolError> {
-    Ok(u32::from_be_bytes(
-        take(buf, 4)?.try_into().expect("length checked"),
-    ))
-}
-fn get_u64(buf: &mut &[u8]) -> Result<u64, ProtocolError> {
-    Ok(u64::from_be_bytes(
-        take(buf, 8)?.try_into().expect("length checked"),
-    ))
-}
-fn get_i32(buf: &mut &[u8]) -> Result<i32, ProtocolError> {
-    Ok(i32::from_be_bytes(
-        take(buf, 4)?.try_into().expect("length checked"),
-    ))
-}
-fn get_f64(buf: &mut &[u8]) -> Result<f64, ProtocolError> {
-    Ok(f64::from_be_bytes(
-        take(buf, 8)?.try_into().expect("length checked"),
-    ))
-}
-fn put_u32(buf: &mut Vec<u8>, value: u32) {
-    buf.extend_from_slice(&value.to_be_bytes());
-}
-fn put_u64(buf: &mut Vec<u8>, value: u64) {
-    buf.extend_from_slice(&value.to_be_bytes());
-}
-fn put_i32(buf: &mut Vec<u8>, value: i32) {
-    buf.extend_from_slice(&value.to_be_bytes());
-}
-fn put_f64(buf: &mut Vec<u8>, value: f64) {
-    buf.extend_from_slice(&value.to_be_bytes());
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1998,6 +1936,10 @@ mod tests {
         assert_round_trip(ProtoEvent::Enter(Position::Right));
         assert_round_trip(ProtoEvent::Leave(u32::MAX));
         assert_round_trip(ProtoEvent::Ack(17));
+        assert_round_trip(ProtoEvent::InputCapabilities(
+            CAP_RETURN_POSITION | 0x8000_0000,
+        ));
+        assert_round_trip(ProtoEvent::LeaveAt { along: 0.1 });
         assert_round_trip(ProtoEvent::Hello {
             commit: *b"deadbeef",
         });
@@ -2008,6 +1950,26 @@ mod tests {
                 dy: 2.25,
             },
         )));
+    }
+
+    #[test]
+    fn positioned_returns_preserve_legacy_leave_and_reject_invalid_coordinates() {
+        assert_eq!(
+            ProtoEvent::Leave(u32::MAX).encode().unwrap(),
+            vec![9, 255, 255, 255, 255]
+        );
+        assert_eq!(EventType::EnterAt as u8, 43);
+        assert_eq!(EventType::InputCapabilities as u8, 44);
+        assert_eq!(EventType::LeaveAt as u8, 45);
+        for along in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert!(ProtoEvent::decode(&ProtoEvent::LeaveAt { along }.encode().unwrap()).is_err());
+        }
+        for along in [-2.0f32, 2.0] {
+            assert!(
+                matches!(ProtoEvent::decode(&ProtoEvent::LeaveAt { along }.encode().unwrap()).unwrap(),
+                ProtoEvent::LeaveAt { along: decoded } if decoded == along.clamp(0.0, 1.0))
+            );
+        }
     }
 
     /// The entry position survives the wire exactly, and the new event takes

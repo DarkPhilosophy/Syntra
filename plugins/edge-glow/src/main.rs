@@ -2,14 +2,24 @@
 //!
 //! Started by the daemon, it says who it is and then listens: settings and
 //! pointer events arrive on stdin, and it lights the screen edge they name.
-//! `--describe` prints the handshake and exits, which is how the daemon reads a
-//! plugin's description without running it.
+//! `--settings` opens the plugin's own settings window instead. What the
+//! daemon knows about the plugin before it runs is its packaged descriptor,
+//! never an answer from the binary.
 
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "linux")]
+mod settings_window;
 
 #[cfg(target_os = "linux")]
 fn main() {
+    if std::env::args().any(|argument| argument == "--settings") {
+        if let Err(error) = settings_window::run() {
+            eprintln!("syntra-plugin-edge-glow settings: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     linux::main();
 }
 

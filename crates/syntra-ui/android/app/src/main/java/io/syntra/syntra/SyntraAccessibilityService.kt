@@ -124,6 +124,14 @@ class SyntraAccessibilityService : AccessibilityService() {
         return outside
     }
 
+    @Synchronized
+    private fun exitFraction(side: Int): Float {
+        val metrics = resources.displayMetrics
+        val coordinate = if (side <= 2) y else x
+        val extent = if (side <= 2) metrics.heightPixels else metrics.widthPixels
+        return (coordinate / (extent - 1).coerceAtLeast(1)).coerceIn(0f, 1f)
+    }
+
     private fun onMotion() {
         showPointer()
         movePointer()
@@ -216,6 +224,7 @@ class SyntraAccessibilityService : AccessibilityService() {
             service.main.post { service.onMotion() }
             return edge
         }
+        @JvmStatic fun exitAlong(side: Int): Float = instance?.exitFraction(side) ?: Float.NaN
         @JvmStatic fun button(pressed: Boolean) = run { onButton(pressed) }
         @JvmStatic fun scroll(detents: Float) = run { onScroll(detents) }
         @JvmStatic fun text(text: String) = run { onText(text) }

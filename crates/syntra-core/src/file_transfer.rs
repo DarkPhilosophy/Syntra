@@ -245,33 +245,11 @@ impl FileOffer {
         if !metadata.is_file() || !identity.matches(&metadata) {
             return Err(TransferError::SourceChanged { file_id });
         }
-        file.seek(SeekFrom::Start(0)).await?;
-        let mut hasher = Sha256::new();
-        let mut prefix = offset;
-        let mut buffer = vec![0u8; MAX_CLIPBOARD_FILE_CHUNK_SIZE];
-        while prefix > 0 {
-            if !identity.matches(&file.metadata().await?) {
-                return Err(TransferError::SourceChanged { file_id });
-            }
-            let want = prefix.min(buffer.len() as u64) as usize;
-            let read = file.read(&mut buffer[..want]).await?;
-            if read != want {
-                return Err(TransferError::SizeMismatch {
-                    file_id,
-                    expected: offset,
-                    actual: offset - prefix + read as u64,
-                });
-            }
-            if !identity.matches(&file.metadata().await?) {
-                return Err(TransferError::SourceChanged { file_id });
-            }
-            hasher.update(&buffer[..read]);
-            prefix -= read as u64;
-        }
-        if !identity.matches(&file.metadata().await?) {
-            return Err(TransferError::SourceChanged { file_id });
-        }
+        // Each clipboard range is answered by its own open and hashed on its own;
+        // hashing the prefix here read the file again for every range, so a large
+        // paste cost quadratic disk reads. The digest covers bytes from `offset`.
         file.seek(SeekFrom::Start(offset)).await?;
+        let hasher = Sha256::new();
         Ok(OutgoingFile {
             file_id,
             file,

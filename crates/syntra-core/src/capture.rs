@@ -40,6 +40,7 @@ pub(crate) enum ICaptureEvent {
         controller: String,
         target: String,
         side: syntra_proto::Position,
+        along: Option<f32>,
     },
     Clipboard {
         handle: CaptureHandle,
@@ -61,7 +62,10 @@ pub(crate) enum ICaptureEvent {
     /// A Pong or transport loss changed the outgoing client's live state.
     PeerStateChanged(CaptureHandle),
     /// a client was entered
-    CaptureBegin(CaptureHandle),
+    CaptureBegin {
+        handle: CaptureHandle,
+        along: Option<f32>,
+    },
     /// capture disabled
     CaptureDisabled,
     /// Capture became available, carrying the backend that was selected.
@@ -73,6 +77,8 @@ pub(crate) enum ICaptureEvent {
     /// either the remote client leaving its device region,
     /// a new device entering the screen or the release bind.
     ClientEntered(u64),
+    /// The local pointer has successfully left through an edge.
+    PointerLeft { edge: Position, along: Option<f32> },
     /// The captured local pointer came back through an edge.
     PointerReturned { edge: Position, along: Option<f32> },
     /// How hard an edge is being pushed, from 0.0 to 1.0; 0.0 ends it.
@@ -148,6 +154,8 @@ impl Capture {
             held_until_ack: Vec::new(),
             entering_via: None,
             entry_along: None,
+            legacy_entry: false,
+            local_departure: None,
             controller: None,
             last_entry,
             landing_along: entry_along,
@@ -158,6 +166,7 @@ impl Capture {
             last_pressure_amount: 0.0,
             pressure: None,
             last_pass: None,
+            last_return: None,
             backend,
             restart_now: false,
             cancellation_token: cancellation_token.clone(),
@@ -354,16 +363,17 @@ fn advance_pressure(
     dy: f64,
     needed: f64,
 ) -> Pressure {
-    let so_far = if so_far > 0.0 {
-        (so_far - PRESSURE_LEAK_PER_SECOND * idle.as_secs_f64()).max(0.0)
-    } else {
-        so_far
-    };
     let push = match edge {
         Position::Left => -dx,
         Position::Right => dx,
         Position::Top => -dy,
         Position::Bottom => dy,
+    };
+    // Time between outward events is not idle time: never drain an active push.
+    let so_far = if so_far > 0.0 && push <= 0.0 {
+        (so_far - PRESSURE_LEAK_PER_SECOND * idle.as_secs_f64()).max(0.0)
+    } else {
+        so_far
     };
     if !push.is_finite() {
         return Pressure::Building(so_far);
@@ -442,6 +452,8 @@ struct CaptureTask {
     last_pressure_amount: f32,
     /// Edge the owner's pointer was last passed on through, and when.
     last_pass: Option<(Position, Instant)>,
+    /// Edge our own pointer last came back through from a peer, and when.
+    last_return: Option<(Position, Instant)>,
     /// After a handoff: certificate of the device the pointer came through,
     /// named in every enter until the new peer acknowledges.
     entering_via: Option<String>,
@@ -449,6 +461,10 @@ struct CaptureTask {
     /// capture backend. Named in every enter until the peer acknowledges, so
     /// the repeats carry it too.
     entry_along: Option<f32>,
+    /// Retry legacy entry once when a peer does not acknowledge positioned entry.
+    legacy_entry: bool,
+    /// The local crossing stays fixed even if the remote pointer is handed on.
+    local_departure: Option<(Position, Option<f32>)>,
     /// Where along the edge a peer's pointer came in, as a share of the edge,
     /// for the one release that lets the cursor go to meet it. Taken by that
     /// release, so it never outlives it.
@@ -530,6 +546,11 @@ impl CaptureTask {
         matches!(self.last_pass, Some((edge, at)) if edge == pos && at.elapsed() < ENTRY_GRACE)
     }
 
+    /// Whether our own pointer came back through `pos` a moment ago.
+    fn returned_just_now(&self, pos: Position) -> bool {
+        matches!(self.last_return, Some((edge, at)) if edge == pos && at.elapsed() < ENTRY_GRACE)
+    }
+
     /// One line that says where each identity's pointer is, as this device
     /// sees it: who this screen sends to, who controls this screen, and
     /// whether a push is being measured. Compare the lines of all devices.
@@ -574,11 +595,13 @@ impl CaptureTask {
         if self.separate_peer_pointers {
             return false;
         }
-        let Some((controller, _)) = self.controller.as_ref() else {
+        let Some((controller, entered)) = self.controller.as_ref() else {
             return false;
         };
         self.active_client.is_none()
-            && self.conn.client_fingerprint(handle).as_deref() == Some(controller.as_str())
+            && (self.conn.client_fingerprint(handle).as_deref() == Some(controller.as_str())
+                || (self.get_type(handle) == CaptureType::EnterOnly
+                    && self.get_pos(handle) == *entered))
     }
 
     fn defer_to_handoff(&self, handle: CaptureHandle) -> bool {
@@ -881,6 +904,11 @@ impl CaptureTask {
                     match event {
                         ProtoEvent::Ack(_) if self.state == State::WaitingForAck => {
                             log::info!("client {handle} acknowledged entry");
+                            if self.entering_via.is_none() {
+                                if let Some((edge, along)) = self.local_departure {
+                                    let _ = self.event_tx.send(ICaptureEvent::PointerLeft { edge, along });
+                                }
+                            }
                             self.entering_via = None;
                             self.entry_along = None;
                             self.state = State::Sending;
@@ -889,7 +917,13 @@ impl CaptureTask {
                                 let _ = self.conn.send(ProtoEvent::Input(event), handle).await;
                             }
                         }
-                        ProtoEvent::Pong(false) | ProtoEvent::Leave(_) => {
+                        ProtoEvent::Leave(_) => {
+                            self.return_local_pointer(capture, None).await?;
+                        }
+                        ProtoEvent::LeaveAt { along } => {
+                            self.return_local_pointer(capture, Some(along)).await?;
+                        }
+                        ProtoEvent::Pong(false) => {
                             log::info!("releasing capture: remote input unavailable");
                             self.release_capture(capture).await?;
                         }
@@ -925,8 +959,12 @@ impl CaptureTask {
                         std::future::pending::<()>().await;
                     }
                 }, if self.ack_deadline.is_some() => {
-                    log::warn!("releasing capture: peer did not acknowledge entry");
-                    self.release_capture(capture).await?;
+                    if let Some((handle, event)) = self.legacy_entry_retry() {
+                        let _ = self.conn.send(event, handle).await;
+                    } else {
+                        log::warn!("releasing capture: peer did not acknowledge entry");
+                        self.release_capture(capture).await?;
+                    }
                 },
                 e = self.request_rx.recv() => match e.expect("channel closed") {
                     CaptureRequest::Reenable => { /* already active */ },
@@ -1223,6 +1261,7 @@ impl CaptureTask {
         if event == CaptureEvent::Begin
             && self.get_type(handle) == CaptureType::Default
             && !self.conn.remote_ready(handle)
+            && !self.returns_to_controller(handle)
         {
             log::warn!("rejecting capture: client {handle} cannot accept remote input");
             capture.release().await?;
@@ -1263,90 +1302,67 @@ impl CaptureTask {
 
         // The service must not hear of a touch that has not yet been pushed
         // hard enough: it would hand control on at once.
+        if event == CaptureEvent::Begin && self.returned_just_now(self.get_pos(handle)) {
+            // Plain release: no landing, so no second glow entry.
+            log::info!("[route] IGNORE edge touch right after the pointer returned");
+            capture.release().await?;
+            return Ok(());
+        }
+        if event == CaptureEvent::Begin && self.passed_on_just_now(self.get_pos(handle)) {
+            log::info!("[route] IGNORE duplicate edge touch after passing the pointer on");
+            capture.release().await?;
+            return Ok(());
+        }
+        let returning = !self.is_touchpad() && self.returns_to_controller(handle);
         let arm_pressure = event == CaptureEvent::Begin
             && !pressure_met
-            // The phone's control pad is not a pointer pushed against an edge:
-            // it hands control on at once.
             && !cfg!(target_os = "android")
             && !self.is_touchpad()
             && self.edge_pressure > 0.0
-            && self.get_type(handle) == CaptureType::Default
-            && !self.returns_to_controller(handle)
-            && !self.passed_on_just_now(self.get_pos(handle));
-        if event == CaptureEvent::Begin && !arm_pressure {
-            self.event_tx
-                .send(ICaptureEvent::CaptureBegin(handle))
-                .expect("channel closed");
-        }
-
-        // enter only capture (for incoming connections)
-        if self.get_type(handle) == CaptureType::EnterOnly {
-            // if there is no active outgoing connection at the current capture,
-            // we release the capture
-            if !self.is_default_capture_at(self.get_pos(handle)) {
-                log::info!("releasing capture: no active client at this position");
-                capture.release().await?;
-            }
-            // we dont care about events from incoming handles except for releasing the capture
-            return Ok(());
-        }
-
-        // The pointer of the device controlling this one went back towards
-        // it: the incoming barrier on that edge hands control back. Entering
-        // it from here as well would make this device a second owner.
-        if event == CaptureEvent::Begin && !self.is_touchpad() && self.returns_to_controller(handle)
-        {
-            log::info!("[route] BACK pointer returns to its owner, client {handle}");
-            self.where_is_the_pointer("pointer back to its owner");
-            // The same push touches the edge again a moment later: that touch
-            // must neither arm a push nor send this screen's pointer on.
-            self.last_pass = Some((self.get_pos(handle), Instant::now()));
-            capture.release().await?;
-            // The owner may have arrived through another device, so no
-            // incoming barrier sits on this edge to hand control back: ask
-            // the owner to take its pointer home through this edge.
-            if let Some((controller, _)) = self.controller.clone() {
-                self.event_tx
-                    .send(ICaptureEvent::HandOn {
-                        target: controller.clone(),
-                        controller,
-                        side: to_proto_pos(self.get_pos(handle)),
-                    })
-                    .expect("channel closed");
-            }
-            return Ok(());
-        }
-
-        // The shared pointer here belongs to a peer that controls us. At an
-        // edge towards another device, the peer enters that device itself
-        // (multi-hop Handoff); taking the pointer over here as well would
-        // enter it twice.
-        // The phone's own touchpad is this device's input, never a peer's
-        // pointer passing through: it is not deferred.
-        // One gesture can deliver more than one touch of the same edge before
-        // the service has answered the pass-on. The second must not send this
-        // screen's own pointer as well: that is two identities in one push.
-        if event == CaptureEvent::Begin && self.passed_on_just_now(self.get_pos(handle)) {
-            log::info!(
-                "[route] IGNORE {:?} edge touch right after passing the pointer on",
-                self.get_pos(handle)
-            );
-            capture.release().await?;
-            return Ok(());
-        }
-        // Edge pressure: touching the edge is not enough to leave. The push
-        // outwards is added up, and only when it reaches the configured
-        // amount does the pointer pass on. Resting on the edge adds nothing.
+            && (self.get_type(handle) == CaptureType::Default || returning);
         if arm_pressure {
             log::info!(
                 "[route] edge pressure armed at the {:?} edge (needs {:.0})",
                 self.get_pos(handle),
                 self.edge_pressure
             );
-            self.where_is_the_pointer("edge pressure armed");
             self.pressure = Some((handle, 0.0, Instant::now()));
             return Ok(());
         }
+
+        // A return uses the same pressure threshold, but must never make
+        // this screen a second owner or depend on the owner accepting input.
+        if event == CaptureEvent::Begin && returning {
+            log::info!("[route] BACK pointer returns to its owner, client {handle}");
+            self.last_pass = Some((self.get_pos(handle), Instant::now()));
+            capture.release().await?;
+            if let Some((controller, _)) = self.controller.clone() {
+                self.event_tx
+                    .send(ICaptureEvent::HandOn {
+                        target: controller.clone(),
+                        controller,
+                        side: to_proto_pos(self.get_pos(handle)),
+                        along: self.entry_along,
+                    })
+                    .expect("channel closed");
+            }
+            return Ok(());
+        }
+        if event == CaptureEvent::Begin {
+            self.event_tx
+                .send(ICaptureEvent::CaptureBegin {
+                    handle,
+                    along: self.entry_along,
+                })
+                .expect("channel closed");
+        }
+        if self.get_type(handle) == CaptureType::EnterOnly {
+            if !self.is_default_capture_at(self.get_pos(handle)) {
+                capture.release().await?;
+            }
+            return Ok(());
+        }
+
         if event == CaptureEvent::Begin && !self.is_touchpad() && self.defer_to_handoff(handle) {
             self.last_pass = Some((self.get_pos(handle), Instant::now()));
             capture.release().await?;
@@ -1364,6 +1380,7 @@ impl CaptureTask {
                         controller,
                         target,
                         side,
+                        along: self.entry_along,
                     })
                     .expect("channel closed");
                 // The shared pointer is left against the barrier it just
@@ -1384,7 +1401,9 @@ impl CaptureTask {
             );
             self.where_is_the_pointer("own pointer leaves");
             self.state = State::WaitingForAck;
+            self.legacy_entry = false;
             self.ack_deadline = Some(Instant::now() + Duration::from_millis(750));
+            self.local_departure = Some((self.get_pos(handle), self.entry_along));
             self.active_client.replace(handle);
             self.event_tx
                 .send(ICaptureEvent::ClientEntered(handle))
@@ -1445,9 +1464,28 @@ impl CaptureTask {
             },
             // The backend knew where along the edge the pointer came in: a
             // fraction, so it means the same on a screen of any resolution.
-            (None, Some(along)) => ProtoEvent::EnterAt { side, along },
+            (None, Some(along)) if !self.legacy_entry => ProtoEvent::EnterAt { side, along },
+            (None, Some(_)) => ProtoEvent::Enter(side),
             (None, None) => ProtoEvent::Enter(side),
         }
+    }
+    /// Older peers ignore EnterAt. Retry the established entry message once,
+    /// keeping the normal acknowledgement deadline and held input semantics.
+    fn legacy_entry_retry(&mut self) -> Option<(CaptureHandle, ProtoEvent)> {
+        let handle = self.active_client?;
+        if self.state != State::WaitingForAck
+            || self.entering_via.is_some()
+            || self.entry_along.is_none()
+            || self.legacy_entry
+        {
+            return None;
+        }
+        self.legacy_entry = true;
+        self.ack_deadline = Some(Instant::now() + Duration::from_millis(750));
+        Some((
+            handle,
+            self.enter_event(to_proto_pos(self.get_pos(handle).opposite())),
+        ))
     }
 
     async fn send_enter(&mut self, handle: CaptureHandle, side: syntra_proto::Position) {
@@ -1581,7 +1619,7 @@ impl CaptureTask {
         let _ = self.event_tx.send(ICaptureEvent::EdgePressure {
             edge: self.get_pos(handle),
             amount,
-            along: None,
+            along: self.entry_along,
         });
     }
 
@@ -1604,6 +1642,38 @@ impl CaptureTask {
         }
     }
 
+    /// A remote edge return is a crossing, unlike an error or a disconnect.
+    /// Restore the current remote exit position, not the original departure.
+    async fn return_local_pointer(
+        &mut self,
+        capture: &mut InputCapture,
+        exit_along: Option<f32>,
+    ) -> Result<(), CaptureError> {
+        let departure = self
+            .local_departure
+            .filter(|_| self.state == State::Sending);
+        if let Some((edge, old_along)) = departure {
+            if let Some(along) = exit_along {
+                self.clear_pressure();
+                self.landing_along.set(Some(along));
+                self.release_capture_at(capture, Some(edge)).await?;
+            } else {
+                self.release_capture(capture).await?;
+                let _ = self.event_tx.send(ICaptureEvent::PointerReturned {
+                    edge,
+                    along: old_along,
+                });
+            }
+            // The pointer lands 1 px inside the edge while the hand is still
+            // moving towards it: without this grace the leftover motion
+            // re-arms the barrier and sends the pointer straight back.
+            self.last_return = Some((edge, Instant::now()));
+        } else {
+            self.release_capture(capture).await?;
+        }
+        Ok(())
+    }
+
     async fn release_capture(&mut self, capture: &mut InputCapture) -> Result<(), CaptureError> {
         self.clear_pressure();
         self.where_is_the_pointer("capture released");
@@ -1619,6 +1689,7 @@ impl CaptureTask {
     ) -> Result<bool, CaptureError> {
         // The share of the edge to land at belongs to this one release only.
         let along = self.landing_along.take();
+        self.local_departure = None;
         self.ack_deadline = None;
         self.held_until_ack.clear();
         self.state = State::WaitingForAck;
@@ -1784,6 +1855,8 @@ mod tests {
             held_until_ack: Vec::new(),
             entering_via: None,
             entry_along: None,
+            legacy_entry: false,
+            local_departure: None,
             landing_along: EntryAlong::default(),
             controller: None,
             last_entry: EntryMark::default(),
@@ -1794,6 +1867,7 @@ mod tests {
             last_pressure_amount: 0.0,
             pressure: None,
             last_pass: None,
+            last_return: None,
             backend: None,
             restart_now: false,
             cancellation_token: CancellationToken::new(),
@@ -1810,6 +1884,151 @@ mod tests {
             state: State::default(),
         };
         (task, requests, events)
+    }
+
+    #[test]
+    fn positioned_entry_retries_legacy_once_without_changing_handoffs() {
+        let (mut task, _requests, _events) = capture_task();
+        task.add_capture(7, Position::Right, CaptureType::Default);
+        task.active_client = Some(7);
+        task.entry_along = Some(0.2);
+        let side = syntra_proto::Position::Left;
+        assert!(matches!(
+            task.enter_event(side),
+            ProtoEvent::EnterAt { along: 0.2, .. }
+        ));
+        let (_, legacy) = task
+            .legacy_entry_retry()
+            .expect("old peer needs a supported entry");
+        assert!(matches!(
+            legacy,
+            ProtoEvent::Enter(syntra_proto::Position::Left)
+        ));
+        assert!(matches!(task.enter_event(side), ProtoEvent::Enter(_)));
+        assert!(task.legacy_entry_retry().is_none(), "retry remains bounded");
+        task.legacy_entry = false;
+        task.entering_via = Some("intermediate".into());
+        assert!(task.legacy_entry_retry().is_none());
+        assert!(matches!(
+            task.enter_event(side),
+            ProtoEvent::EnterVia { .. }
+        ));
+        task.entering_via = None;
+        task.state = State::Sending;
+        assert!(
+            task.legacy_entry_retry().is_none(),
+            "acknowledged entries are never downgraded"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn remote_edge_return_reports_the_original_local_crossing_once() {
+        let (mut task, _requests, mut events) = capture_task();
+        let mut capture = InputCapture::new(Some(syntra_input_capture::Backend::Dummy))
+            .await
+            .unwrap();
+        task.active_client = Some(9);
+        task.state = State::Sending;
+        task.local_departure = Some((Position::Left, Some(0.2)));
+        task.return_local_pointer(&mut capture, None).await.unwrap();
+        assert!(matches!(
+            events.next().await,
+            Some(ICaptureEvent::PointerReturned {
+                edge: Position::Left,
+                along: Some(0.2)
+            })
+        ));
+        assert!(task.local_departure.is_none());
+        task.return_local_pointer(&mut capture, None).await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), events.next())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn remote_return_uses_exit_height_instead_of_departure_height() {
+        let (mut task, _requests, mut events) = capture_task();
+        let mut capture = InputCapture::new(Some(syntra_input_capture::Backend::Dummy))
+            .await
+            .unwrap();
+        task.active_client = Some(7);
+        task.state = State::Sending;
+        task.local_departure = Some((Position::Left, Some(0.9)));
+        task.return_local_pointer(&mut capture, Some(0.1))
+            .await
+            .unwrap();
+        assert!(matches!(events.next().await,
+            Some(ICaptureEvent::PointerReturned { edge: Position::Left, along: Some(along) })
+            if along == 0.1));
+        assert!(task.local_departure.is_none());
+        assert!(
+            task.returned_just_now(Position::Left),
+            "leftover motion must not send the pointer straight back"
+        );
+        assert!(!task.returned_just_now(Position::Right));
+        assert!(task.landing_along.get().is_none());
+        capture.terminate().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn rejected_entry_and_disconnect_do_not_animate_a_remote_crossing() {
+        let (mut task, _requests, mut events) = capture_task();
+        let mut capture = InputCapture::new(Some(syntra_input_capture::Backend::Dummy))
+            .await
+            .unwrap();
+        task.active_client = Some(7);
+        task.local_departure = Some((Position::Left, Some(0.2)));
+        task.return_local_pointer(&mut capture, None).await.unwrap();
+        task.active_client = Some(7);
+        task.state = State::Sending;
+        task.local_departure = Some((Position::Left, Some(0.2)));
+        task.release_capture(&mut capture).await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), events.next())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn pressure_reports_the_actual_barrier_position() {
+        let (mut task, _requests, mut events) = capture_task();
+        let mut capture = InputCapture::new(Some(syntra_input_capture::Backend::Dummy))
+            .await
+            .unwrap();
+        task.add_capture(7, Position::Left, CaptureType::Default);
+        task.edge_pressure = 80.0;
+        task.handle_capture_event(&mut capture, (7, CaptureEvent::Entry { along: 0.2 }))
+            .await
+            .unwrap();
+        task.report_pressure(7, 40.0, true);
+        assert!(matches!(
+            events.next().await,
+            Some(ICaptureEvent::EdgePressure {
+                edge: Position::Left,
+                amount: 0.5,
+                along: Some(0.2)
+            })
+        ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn edge_pressure_release_clears_accumulation_and_glow() {
+        let (mut task, _requests, mut events) = capture_task();
+        let mut capture = InputCapture::new(Some(syntra_input_capture::Backend::Dummy))
+            .await
+            .unwrap();
+        task.add_capture(7, Position::Left, CaptureType::Default);
+        task.edge_pressure = 80.0;
+        task.pressure = Some((7, 60.0, Instant::now()));
+        task.release_capture(&mut capture).await.unwrap();
+        assert!(task.pressure.is_none());
+        assert!(matches!(
+            events.next().await,
+            Some(ICaptureEvent::EdgePressure { amount: 0.0, .. })
+        ));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1996,6 +2215,91 @@ mod tests {
         );
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn shared_controller_return_waits_for_pressure_without_taking_ownership() {
+        for incoming_only in [false, true] {
+            let (mut task, handles) = capture_task_with_peers(&["owner"]);
+            let (tx, mut events) = channel();
+            task.event_tx = tx;
+            let handle = if incoming_only {
+                crate::client::ENTER_HANDLE_BEGIN
+            } else {
+                handles[0]
+            };
+            task.add_capture(
+                handle,
+                Position::Right,
+                if incoming_only {
+                    CaptureType::EnterOnly
+                } else {
+                    CaptureType::Default
+                },
+            );
+            task.controller = Some(("owner".into(), Position::Right));
+            task.edge_pressure = 80.0;
+            task.entry_along = Some(0.1);
+            task.release_bind
+                .borrow_mut()
+                .push(scancode::Linux::KeyLeftCtrl);
+            let mut capture = InputCapture::new(Some(syntra_input_capture::Backend::Dummy))
+                .await
+                .unwrap();
+            task.handle_capture_event(&mut capture, (handle, CaptureEvent::Begin))
+                .await
+                .unwrap();
+            assert!(task.pressure.is_some(), "return must arm pressure");
+            task.handle_capture_event(
+                &mut capture,
+                (
+                    handle,
+                    CaptureEvent::Input(Event::Pointer(PointerEvent::Motion {
+                        time: 1,
+                        dx: 79.0,
+                        dy: 0.0,
+                    })),
+                ),
+            )
+            .await
+            .unwrap();
+            assert!(matches!(
+                events.next().await,
+                Some(ICaptureEvent::EdgePressure { .. })
+            ));
+            assert!(
+                tokio::time::timeout(Duration::from_millis(1), events.next())
+                    .await
+                    .is_err()
+            );
+            assert!(task.active_client.is_none());
+            task.handle_capture_event(
+                &mut capture,
+                (
+                    handle,
+                    CaptureEvent::Input(Event::Pointer(PointerEvent::Motion {
+                        time: 2,
+                        dx: 1.0,
+                        dy: 0.0,
+                    })),
+                ),
+            )
+            .await
+            .unwrap();
+            assert!(matches!(
+                events.next().await,
+                Some(ICaptureEvent::EdgePressure { amount: 1.0, .. })
+            ));
+            assert!(matches!(
+                events.next().await,
+                Some(ICaptureEvent::EdgePressure { amount: 0.0, .. })
+            ));
+            assert!(
+                matches!(events.next().await, Some(ICaptureEvent::HandOn { target, along: Some(0.1), .. }) if target == "owner")
+            );
+            assert!(task.active_client.is_none());
+            capture.terminate().await.unwrap();
+        }
+    }
+
     /// Going back to the device in control hands control back (its incoming
     /// barrier sends Leave); this screen must not enter it as a second owner.
     #[test]
@@ -2132,6 +2436,29 @@ mod tests {
             advance_pressure(0.0, Duration::ZERO, Position::Bottom, 0.0, 4.0, 10.0),
             Pressure::Building(4.0)
         );
+    }
+
+    #[test]
+    fn edge_pressure_outward_motion_does_not_decay_between_events() {
+        for gap_ms in [8, 150, 298, 500] {
+            let mut total = 0.0;
+            for step in 1..=10 {
+                let result = advance_pressure(
+                    total,
+                    Duration::from_millis(gap_ms),
+                    Position::Left,
+                    -8.0,
+                    0.0,
+                    80.0,
+                );
+                if step == 10 {
+                    assert_eq!(result, Pressure::Reached, "gap {gap_ms} ms");
+                } else {
+                    assert_eq!(result, Pressure::Building(f64::from(step) * 8.0));
+                    total = f64::from(step) * 8.0;
+                }
+            }
+        }
     }
 
     /// A push that is not kept up leaks away; pushing again builds it anew.

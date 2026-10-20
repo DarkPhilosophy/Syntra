@@ -13,6 +13,7 @@
   "license": "GPL-3.0-or-later",
   "bundled": true,
   "executable": "syntra-plugin-clipboard",
+  "handshake_ids": ["gtk-clipboard"],
   "capabilities": {
     "clipboard_read": true,
     "paste": true,

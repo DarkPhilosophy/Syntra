@@ -24,7 +24,7 @@
 
 - [ ] No credentials, private addresses, host names or personal paths in code, logs or screenshots.
 - [ ] User-visible behaviour is documented (README, docs, changelog) where it changed.
-- [ ] Generated sections are current (`node .scripts/sync-readme.js`, `node .scripts/sync-licenses.js`).
+- [ ] Generated sections are current (`node scripts/sync-readme.js`, `node scripts/sync-licenses.js`).
 
 ## Licensing
 

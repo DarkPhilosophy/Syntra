@@ -1,15 +1,20 @@
-//! Message vocabulary spoken by out-of-process Syntra plugins.
+//! Message vocabulary and manifest contract of out-of-process Syntra plugins.
 //!
 //! Plugins communicate with the daemon through newline-delimited JSON frames;
-//! this crate defines the public wire contract shared by both sides.
+//! this crate defines the public wire contract shared by both sides, the one
+//! [`PluginManifest`] every discovery path and schema is defined by, and the
+//! content digest ([`digest_package`]) a user approves.
+//!
+//! The crate has no toolkit, runtime or daemon dependency: a plugin author
+//! compiles against it alone.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
-use std::{
-    io::{BufRead, Write},
-    path::{Path, PathBuf},
-};
+use std::io::{BufRead, Write};
 use thiserror::Error;
+
+pub mod manifest;
+pub mod package;
 
 /// Protocol version used by all newline-delimited JSON frames.
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -243,17 +248,24 @@ pub struct Cancelled {
     pub transfer_id: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 /// Capability declaration exchanged during plugin startup.
+///
+/// Every field is optional on input, so a manifest that declares only what it
+/// does (a pointer plugin has no clipboard fields) stays valid. The Hello
+/// frame still serialises every field, so the wire bytes are unchanged.
 pub struct Capabilities {
-    /// Protocol value used by the receiver for this transfer or declaration.
-    pub clipboard_read: bool,
-    /// Protocol value used by the receiver for this transfer or declaration.
-    pub paste: bool,
-    /// Protocol value used by the receiver for this transfer or declaration.
-    pub cancel: bool,
+    /// Can read the desktop clipboard selection and offer it to the daemon.
     #[serde(default)]
-    /// Protocol value used by the receiver for this transfer or declaration.
+    pub clipboard_read: bool,
+    /// Can publish received files as a desktop paste.
+    #[serde(default)]
+    pub paste: bool,
+    /// Honors a cancellation of a transfer it serves.
+    #[serde(default)]
+    pub cancel: bool,
+    /// Needs a live mounted view for the duration of a transfer.
+    #[serde(default)]
     pub requires_live_mount: bool,
     /// Receives the passages of other devices' pointers over this screen.
     ///
@@ -261,7 +273,8 @@ pub struct Capabilities {
     /// that declares only this has no clipboard role and no MIME types.
     #[serde(default)]
     pub pointer_events: bool,
-    /// Protocol value used by the receiver for this transfer or declaration.
+    /// MIME types the plugin offers or accepts.
+    #[serde(default)]
     pub mime_types: Vec<String>,
 }
 /// Fingerprint of the source this component was built from.
@@ -311,6 +324,56 @@ pub struct PluginMetadata {
     /// Fingerprint of the build this plugin came from.
     #[serde(default)]
     pub build_fingerprint: String,
+}
+
+/// One setting a plugin owns and lets the user change. The plugin keeps the
+/// value and decides what is valid; Syntra only draws the control and passes
+/// the user's change back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SettingControl {
+    /// Stable key, unique within the plugin.
+    pub key: String,
+    /// Label shown to the user.
+    pub label: String,
+    /// Which control is drawn.
+    pub kind: SettingControlKind,
+    /// Value in force now, as text: `true`/`false`, a choice value, a whole
+    /// number or `#rrggbb`.
+    pub value: String,
+    /// What the plugin uses when nothing was chosen.
+    #[serde(default)]
+    pub default: String,
+}
+
+/// The control a [`SettingControl`] is drawn with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SettingControlKind {
+    /// On or off.
+    Toggle,
+    /// A colour.
+    Color,
+    /// One of a fixed list.
+    Choice {
+        /// The options, in display order.
+        options: Vec<SettingOption>,
+    },
+    /// A whole number within an inclusive range.
+    Number {
+        /// Smallest accepted value.
+        min: i64,
+        /// Largest accepted value.
+        max: i64,
+    },
+}
+
+/// One option of a [`SettingControlKind::Choice`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SettingOption {
+    /// What the plugin receives when this is picked.
+    pub value: String,
+    /// What the user reads.
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -393,6 +456,35 @@ pub enum Message {
         /// Values are strings in the same form the manifest's setting kinds
         /// accept: `true`/`false`, a choice id, a number, or `#rrggbb`.
         values: Vec<(String, String)>,
+    },
+    /// Plugin-to-daemon declaration of the settings the plugin owns, with
+    /// their present values.
+    ///
+    /// Sent after the handshake and after every change the plugin accepts.
+    /// A plugin that sends this keeps and stores its own values: the daemon
+    /// only relays them to the interface and the user's changes back as
+    /// [`Message::ChangeSetting`].
+    DeclareSettings {
+        /// Every control, in display order.
+        settings: Vec<SettingControl>,
+    },
+    /// Daemon-to-plugin request from the user to change one owned setting.
+    ///
+    /// The plugin validates it and answers with a fresh
+    /// [`Message::DeclareSettings`], whether it accepted the value or not.
+    ChangeSetting {
+        /// Key of the setting.
+        key: String,
+        /// Requested value, as text.
+        value: String,
+    },
+    /// Daemon-to-plugin request from the user to open the plugin's own
+    /// settings window, drawn in the plugin's process with Syntra's controls.
+    OpenSettings {
+        /// The interface's present colours, `(name, #rrggbb)`, so the window
+        /// looks like the rest of Syntra.
+        #[serde(default)]
+        theme: Vec<(String, String)>,
     },
     /// Daemon-to-plugin report that a pointer crossed a screen edge.
     ///
@@ -528,95 +620,11 @@ pub fn write_message<W: Write>(writer: &mut W, message: &Message) -> Result<(), 
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Manifest describing an installable out-of-process plugin.
-pub struct AdapterManifest {
-    /// Protocol value used by the receiver for this transfer or declaration.
-    pub manifest_version: u32,
-    /// Protocol value used by the receiver for this transfer or declaration.
-    pub protocol_version: u32,
-    /// Protocol value used by the receiver for this transfer or declaration.
-    pub id: String,
-    /// Protocol value used by the receiver for this transfer or declaration.
-    pub name: String,
-    /// Protocol value used by the receiver for this transfer or declaration.
-    pub executable: PathBuf,
-    #[serde(default)]
-    /// Protocol value used by the receiver for this transfer or declaration.
-    pub args: Vec<String>,
-    /// Protocol value used by the receiver for this transfer or declaration.
-    pub capabilities: Capabilities,
-}
-
-impl AdapterManifest {
-    /// Validates this manifest and resolves its executable relative to the manifest file.
-    pub fn resolve_executable(&self, manifest_path: &Path) -> Result<PathBuf, ApiError> {
-        if self.manifest_version != PROTOCOL_VERSION || self.protocol_version != PROTOCOL_VERSION {
-            return Err(ApiError::InvalidManifest(
-                "unsupported manifest or protocol version".into(),
-            ));
-        }
-        if self.id.is_empty()
-            || self.name.is_empty()
-            || self.executable.as_os_str().is_empty()
-            || !self
-                .id
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-        {
-            return Err(ApiError::InvalidManifest(
-                "id, name, and executable are required and id must be identifier-safe".into(),
-            ));
-        }
-        // A plugin must do something, but not necessarily with the clipboard:
-        // one that only watches the pointer has no MIME types to declare.
-        let handles_clipboard = self.capabilities.clipboard_read || self.capabilities.paste;
-        let mime_types_valid = !self.capabilities.mime_types.is_empty()
-            && !self
-                .capabilities
-                .mime_types
-                .iter()
-                .any(|m| m.trim().is_empty())
-            && !self
-                .capabilities
-                .mime_types
-                .windows(2)
-                .any(|w| w[0] == w[1]);
-        let clipboard_ok = handles_clipboard && mime_types_valid;
-        let pointer_ok = self.capabilities.pointer_events
-            && !handles_clipboard
-            && self.capabilities.mime_types.is_empty();
-        if !(clipboard_ok || pointer_ok) {
-            return Err(ApiError::InvalidManifest(
-                "capabilities must advertise a clipboard operation with unique MIME types, or pointer events alone"
-                    .into(),
-            ));
-        }
-        let path = if self.executable.is_absolute() {
-            self.executable.clone()
-        } else {
-            manifest_path
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .join(&self.executable)
-        };
-        let metadata = std::fs::metadata(&path)
-            .map_err(|e| ApiError::InvalidManifest(format!("executable unavailable: {e}")))?;
-        if !metadata.is_file() {
-            return Err(ApiError::InvalidManifest("executable is not a file".into()));
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if metadata.permissions().mode() & 0o111 == 0 {
-                return Err(ApiError::InvalidManifest(
-                    "executable is not executable".into(),
-                ));
-            }
-        }
-        Ok(path)
-    }
-}
+pub use manifest::{
+    AdapterManifest, ChoiceDecl, MANIFEST_VERSION, ManifestLoad, PluginManifest, PluginRole,
+    SettingDecl, is_safe_id,
+};
+pub use package::{PackageDigest, PackageError, digest_package};
 
 #[cfg(test)]
 mod tests {

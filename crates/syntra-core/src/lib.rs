@@ -18,7 +18,8 @@
 //!   files: byte-level primitives, the clipboard-driven state machine, and
 //!   the explicitly approved one respectively. They stay separate because
 //!   their lifecycles and approval rules genuinely differ.
-//! * [`adapter_manager`] — supervises out-of-process plugins.
+//! * [`plugins`] — discovers, authorises, routes and supervises out-of-process
+//!   plugins; see its module documentation for the layout.
 //!
 //! # Talking to clients
 //!
@@ -29,7 +30,6 @@
 // Includes time for an interactive portal grant, but never leaves Retry stuck forever.
 const INPUT_INITIALIZATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
-mod adapter_manager;
 #[cfg(target_os = "android")]
 mod android_clipboard;
 mod capture;

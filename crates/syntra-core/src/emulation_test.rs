@@ -1,5 +1,4 @@
 use crate::config::Config;
-use clap::Args;
 use std::f64::consts::PI;
 use std::time::{Duration, Instant};
 use syntra_input_emulation::{InputEmulation, InputEmulationError};
@@ -8,17 +7,8 @@ use syntra_input_event::{Event, PointerEvent};
 const FREQUENCY_HZ: f64 = 1.0;
 const RADIUS: f64 = 100.0;
 
-#[derive(Args, Clone, Debug, Eq, PartialEq)]
-pub struct TestEmulationArgs {
-    #[arg(long)]
-    mouse: bool,
-    #[arg(long)]
-    keyboard: bool,
-    #[arg(long)]
-    scroll: bool,
-}
-
-pub async fn run(config: Config, _args: TestEmulationArgs) -> Result<(), InputEmulationError> {
+/// Runs the interactive input-emulation test until interrupted.
+pub async fn run(config: Config) -> Result<(), InputEmulationError> {
     log::info!("running input emulation test");
 
     let backend = config.emulation_backend().map(|b| b.into());

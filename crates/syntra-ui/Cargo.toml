@@ -48,7 +48,6 @@ workspace = true
 
 [dependencies]
 syntra-api.workspace = true
-syntra-store.workspace = true
 log = "0.4"
 fluent-bundle = "0.16"
 fluent-syntax = "0.12"
@@ -59,10 +58,6 @@ unic-langid = "0.9"
 hostname = "0.4"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 semver = { version = "1.0", features = ["serde"] }
-flate2 = "1.1"
-tar = "0.4"
-zip = { version = "4.3", default-features = false, features = ["deflate"] }
-sha2.workspace = true
 tempfile = "3.25"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 image = { version = "0.25", default-features = false }

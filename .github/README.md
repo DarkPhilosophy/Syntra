@@ -65,7 +65,7 @@ have explicitly authorised.
    or [build from source](#installing-and-building)).
 2. **Linux only:** allow kernel-level input once per machine:
    ```bash
-   sudo install -Dm644 build-aux/60-syntra-uinput.rules /etc/udev/rules.d/60-syntra-uinput.rules
+   sudo install -Dm644 packaging/linux/udev/60-syntra-uinput.rules /etc/udev/rules.d/60-syntra-uinput.rules
    echo uinput | sudo tee /etc/modules-load.d/syntra-uinput.conf
    sudo modprobe uinput && sudo udevadm control --reload && sudo udevadm trigger --name-match=uinput
    ```
@@ -99,8 +99,8 @@ Command line:
 Run the service from boot on Linux, with or without a desktop session:
 
 ```bash
-install -Dm644 service/syntra.service ~/.config/systemd/user/syntra.service
-install -Dm644 service/syntra-session.service ~/.config/systemd/user/syntra-session.service
+install -Dm644 packaging/linux/systemd/syntra.service ~/.config/systemd/user/syntra.service
+install -Dm644 packaging/linux/systemd/syntra-session.service ~/.config/systemd/user/syntra-session.service
 systemctl --user daemon-reload
 systemctl --user enable --now syntra.service syntra-session.service
 loginctl enable-linger "$USER"   # keep it running while logged out
@@ -222,7 +222,7 @@ Guides: [architecture](../docs/architecture.md) · [client API](../docs/api.md)
 ## Project
 
 - [Contributing](CONTRIBUTING.md) · [Code of conduct](CODE_OF_CONDUCT.md) · [Security policy](SECURITY.md)
-- [Changelog](CHANGELOG.md) · [Third-party notices](THIRD_PARTY_NOTICES.md)
+- [Changelog](CHANGELOG.md) · [Third-party notices](../licenses/THIRD_PARTY_NOTICES.md)
 - [Disclaimer and acceptable use](DISCLAIMER.md)
 - Splash design: [interactive mock](../docs/brand/splash-mock.html)
 

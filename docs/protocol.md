@@ -152,8 +152,8 @@ limits (`crates/syntra-proto/src/lib.rs:728-1494`,
 `Hello` is sent immediately after DTLS setup and contains the local eight-byte
 build commit; the receiving daemon stores it as `peer_commit` and forwards the
 event to state consumers (`crates/syntra-core/src/connect.rs:290-307`,
-`crates/syntra-core/src/connect.rs:397-405`). The protocol module documents this
-field as the version/build identity negotiated by peers (`crates/syntra-proto/src/lib.rs:12-16`).
+`crates/syntra-core/src/connect.rs:397-405`). This is a build identity, not a
+negotiated protocol version.
 
 The compatibility rule is deliberately asymmetric: adding a new event variant
 is safe because each DTLS receive is already message-framed and an unknown or
@@ -168,6 +168,15 @@ under a new meaning.
 A Hello is not a substitute for DTLS authentication. It identifies the software
 build after the certificate has authenticated the machine, but it does not grant
 access or authorise capabilities.
+
+Input return coordinates use appended messages: `InputCapabilities(u32)` (id 44)
+advertises bit 0, and `LeaveAt { along: f32 }` (id 45) returns at the current
+fraction along the owner’s paired edge. Fields are little-endian; non-finite
+fractions are rejected and finite values are clamped to 0–1. The owner advertises
+before entering; a receiver sends `LeaveAt` only after seeing that capability on
+the authenticated connection, otherwise it sends the unchanged `Leave(u32)`.
+Capability state is cleared on reconnection/expiry. Unknown bits are ignored.
+No existing message id or body is repurposed.
 
 ## Complete `ProtoEvent` reference
 

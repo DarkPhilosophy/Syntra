@@ -1,30 +1,28 @@
-import { ScrollView } from "std-widgets.slint";
+import { ScrollView, LineEdit } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
 import { Translations } from "../localization.slint";
-import { AppButton, AppSwitch } from "../components/controls.slint";
-import { ColorPicker } from "../components/color-picker.slint";
+import { AppButton } from "../components/controls.slint";
+import { PluginSettingEntry, PluginSettingRow } from "../components/plugin-setting-row.slint";
 
-// One thing a plugin lets the user change. The daemon described it and holds
-// the value; this only draws the right control and reports the new value.
-export struct PluginSettingEntry {
-    key: string,
-    label: string,
-    // toggle, choice, color or number: decides which control is drawn.
-    kind: string,
-    value: string,
-    // For a choice, the values and the labels, in the same order.
-    option-values: [string],
-    option-labels: [string],
-    // For a number, the inclusive range.
-    min: int,
-    max: int,
-    // For a colour, the value as a colour (the accent while it is empty).
-    colour: color,
+// One role a plugin can fill, and whether it is the one in use.
+export struct PluginRoleEntry {
+    // `file-clipboard`, `mounted-file-receive` or `pointer`.
+    role: string,
+    // This plugin is the provider the daemon uses for the role.
+    active: bool,
+    // The user chose this plugin for the role.
+    preferred: bool,
+    // Why it cannot serve the role right now; empty when it can.
+    unavailable: string,
 }
 
 // Mirrors syntra_api::PluginStatus. The daemon is authoritative: this page
 // renders what it reports and sends intents back, it never decides plugin
 // state for itself.
+//
+// The lifecycle fields (state, trust, ...) come from a daemon that knows plugin
+// approval. `manages-lifecycle` is false for an older one, and the card then
+// shows only what that daemon understands.
 export struct PluginEntry {
     id: string,
     name: string,
@@ -51,80 +49,40 @@ export struct PluginEntry {
     supported-protocol-version: int,
     error: string,
     settings: [PluginSettingEntry],
+    owns-settings: bool,
+    // The shared lifecycle vocabulary: installed, approved, enabled, starting,
+    // ready, running, failed or unsupported.
+    state: string,
+    // A request the daemon has not accepted yet; empty when there is none. A
+    // pending request is shown as pending, never as if it had happened.
+    pending: string,
+    // bundled, unapproved, approved or changed.
+    trust: string,
+    // bundled, drop-in or installed.
+    origin: string,
+    digest: string,
+    approved-digest: string,
+    args: string,
+    roles: [PluginRoleEntry],
+    diagnostics: string,
+    manages-lifecycle: bool,
+    can-approve: bool,
+    can-revoke: bool,
+    can-uninstall: bool,
+    needs-approval: bool,
+    changed-since-approval: bool,
+    // A package that was reviewed and is not installed.
+    candidate: bool,
+    review-path: string,
+    review-files: string,
+    review-replaces: bool,
 }
 
-component PluginSettingRow inherits Rectangle {
-    in property <PluginSettingEntry> setting;
-    in property <bool> active;
-    callback changed(string, string);
-    callback colour-chosen(string, color);
-    height: row.preferred-height;
-    // A twelfth of the range, at least one: a fixed step of four took thirty
-    // six presses to cross the width range and each moved too little to see.
-    property <float> step: Math.max(1, Math.floor((root.setting.max - root.setting.min) / 12));
-    background: transparent;
-    opacity: root.active ? 1 : 0.5;
-    row := HorizontalLayout {
-        spacing: Theme.small-spacing;
-        if root.setting.kind == "toggle": Text {
-            text: root.setting.label; color: Theme.text; font-size: Theme.body-size;
-            horizontal-stretch: 1; vertical-alignment: center; wrap: word-wrap;
-        }
-        if root.setting.kind == "toggle": AppSwitch {
-            enabled: root.active;
-            checked: root.setting.value == "true";
-            a11y-label: root.setting.label;
-            toggled(value) => { root.changed(root.setting.key, value ? "true" : "false"); }
-        }
-        if root.setting.kind == "choice": VerticalLayout {
-            spacing: Theme.small-spacing;
-            Text { text: root.setting.label; color: Theme.text; font-size: Theme.body-size; wrap: word-wrap; }
-            HorizontalLayout {
-                spacing: Theme.small-spacing;
-                for label[index] in root.setting.option-labels: AppButton {
-                    text: label;
-                    enabled: root.active;
-                    primary: root.setting.option-values[index] == root.setting.value;
-                    clicked => { root.changed(root.setting.key, root.setting.option-values[index]); }
-                }
-            }
-        }
-        if root.setting.kind == "number": Text {
-            text: root.setting.label + ": " + root.setting.value;
-            color: Theme.text; font-size: Theme.body-size; horizontal-stretch: 1; vertical-alignment: center;
-        }
-        if root.setting.kind == "number": AppButton {
-            text: "−";
-            enabled: root.active && root.setting.value.to-float() > root.setting.min;
-            clicked => { root.changed(root.setting.key, "" + Math.max(root.setting.min, Math.floor(root.setting.value.to-float() - root.step))); }
-        }
-        if root.setting.kind == "number": AppButton {
-            text: "+";
-            enabled: root.active && root.setting.value.to-float() < root.setting.max;
-            clicked => { root.changed(root.setting.key, "" + Math.min(root.setting.max, Math.floor(root.setting.value.to-float() + root.step))); }
-        }
-        if root.setting.kind == "color": ColorPicker {
-            horizontal-stretch: 1;
-            label: root.setting.label;
-            value: root.setting.colour;
-            // The colour is turned into `#rrggbb` on the Rust side, where it
-            // is tested; here it only travels as the colour it is.
-            selected(value) => { root.colour-chosen(root.setting.key, value); }
-            reset => { root.changed(root.setting.key, ""); }
-        }
-    }
-}
-
-component HealthBadge inherits Rectangle {
-    in property <string> health;
-    // Colour carries the same information as the label, so the state is
-    // readable at a glance without reading every row.
-    property <color> tone:
-        health == "healthy" ? Theme.success
-        : health == "starting" ? Theme.warning
-        : health == "unresponsive" ? Theme.warning
-        : health == "failed" ? Theme.danger
-        : Theme.muted-text;
+// A short badge: the colour carries the tone and the text carries the meaning,
+// so the state is readable without telling colours apart.
+component Badge inherits Rectangle {
+    in property <string> text;
+    in property <color> tone: Theme.muted-text;
 
     height: 24px;
     width: label.preferred-width + 20px;
@@ -134,7 +92,7 @@ component HealthBadge inherits Rectangle {
     border-color: tone.transparentize(0.5);
 
     label := Text {
-        text: Translations.tr("plugin-health-" + root.health);
+        text: root.text;
         color: root.tone;
         font-size: Theme.caption-size;
         vertical-alignment: center;
@@ -142,16 +100,107 @@ component HealthBadge inherits Rectangle {
     }
 }
 
+component HealthBadge inherits Badge {
+    in property <string> health;
+    // Colour carries the same information as the label, so the state is
+    // readable at a glance without reading every row.
+    text: Translations.tr("plugin-health-" + health);
+    tone: health == "healthy" ? Theme.success
+        : health == "starting" ? Theme.warning
+        : health == "unresponsive" ? Theme.warning
+        : health == "failed" ? Theme.danger
+        : Theme.muted-text;
+}
+
+component StateBadge inherits Badge {
+    in property <string> state;
+    text: Translations.tr("plugin-state-" + state);
+    tone: state == "ready" || state == "running" ? Theme.success
+        : state == "starting" ? Theme.warning
+        : state == "failed" ? Theme.danger
+        : state == "unsupported" ? Theme.warning
+        : Theme.muted-text;
+}
+
+component TrustBadge inherits Badge {
+    in property <string> trust;
+    text: Translations.tr("plugin-trust-" + trust);
+    tone: trust == "approved" || trust == "bundled" ? Theme.success
+        : trust == "changed" ? Theme.danger
+        : Theme.warning;
+}
+
+component RoleRow inherits Rectangle {
+    in property <PluginRoleEntry> role;
+    // Frozen while a request about this plugin is pending.
+    in property <bool> frozen;
+    callback use-this();
+    callback use-default();
+
+    height: layout.preferred-height;
+    layout := HorizontalLayout {
+        spacing: Theme.small-spacing;
+        VerticalLayout {
+            horizontal-stretch: 1;
+            Text {
+                text: Translations.tr("plugin-role-" + root.role.role);
+                color: Theme.text;
+                font-size: Theme.body-size;
+                wrap: word-wrap;
+            }
+            if root.role.unavailable != "": Text {
+                text: root.role.unavailable;
+                color: Theme.muted-text;
+                font-size: Theme.caption-size;
+                wrap: word-wrap;
+            }
+        }
+        if root.role.active: Badge {
+            text: Translations.tr("plugin-role-active");
+            tone: Theme.success;
+        }
+        if root.role.preferred: Badge {
+            text: Translations.tr("plugin-role-preferred");
+            tone: Theme.accent;
+        }
+        if root.role.preferred: AppButton {
+            text: Translations.tr("plugin-role-use-default");
+            enabled: !root.frozen;
+            clicked => { root.use-default(); }
+        }
+        if !root.role.preferred && root.role.unavailable == "": AppButton {
+            text: Translations.tr("plugin-role-use");
+            enabled: !root.frozen;
+            clicked => { root.use-this(); }
+        }
+    }
+}
+
 component PluginCard inherits Rectangle {
     in property <PluginEntry> plugin;
+    // Held by the page: a rebuilt card must not fold its settings away.
+    in property <bool> settings-open;
     callback toggled(bool);
     callback restart-requested();
     callback settings-requested();
+    callback open-settings-requested();
+    callback change-setting(string, string);
+    callback change-setting-colour(string, color);
+    callback approve-requested();
+    callback revoke-requested();
+    callback uninstall-requested();
+    callback install-requested();
+    callback role-use(string);
+    callback role-default(string);
+
+    // While a request is pending its controls are frozen, so a second request
+    // is not stacked on a state the daemon has not settled.
+    property <bool> frozen: root.plugin.pending != "";
 
     background: Theme.surface;
     border-radius: Theme.corner-radius;
     border-width: 1px;
-    border-color: Theme.border;
+    border-color: root.plugin.changed-since-approval ? Theme.danger : Theme.border;
 
     VerticalLayout {
         padding: Theme.content-gap;
@@ -165,31 +214,68 @@ component PluginCard inherits Rectangle {
                 min-width: 0px;
                 horizontal-stretch: 1;
                 overflow: elide;
-                text: plugin.name;
+                text: root.plugin.name;
                 color: Theme.text;
                 font-size: Theme.body-size;
                 vertical-alignment: center;
             }
             Text {
-                text: plugin.version == "" ? "" : "v" + plugin.version;
+                text: root.plugin.version == "" ? "" : "v" + root.plugin.version;
                 color: Theme.muted-text;
                 font-size: Theme.caption-size;
                 vertical-alignment: center;
             }
-            if plugin.bundled: Text {
+            if root.plugin.bundled: Text {
                 text: Translations.tr("plugin-bundled");
                 color: Theme.muted-text;
                 font-size: Theme.caption-size;
                 vertical-alignment: center;
             }
+            if !root.plugin.manages-lifecycle: HealthBadge { health: root.plugin.health; }
+            if root.plugin.manages-lifecycle: StateBadge { state: root.plugin.state; }
+        }
+
+        if root.plugin.manages-lifecycle: HorizontalLayout {
+            spacing: Theme.small-spacing;
+            TrustBadge { trust: root.plugin.trust; }
             Rectangle { horizontal-stretch: 1; }
-            HealthBadge { health: plugin.health; }
+        }
+        if root.plugin.manages-lifecycle && root.plugin.pending != "": Text {
+            text: Translations.tr("plugin-pending-" + root.plugin.pending);
+            color: Theme.warning;
+            font-size: Theme.caption-size;
+            wrap: word-wrap;
         }
 
         Text {
-            text: plugin.description;
+            text: root.plugin.description;
             color: Theme.muted-text;
             font-size: Theme.body-size;
+            wrap: word-wrap;
+        }
+
+        if root.plugin.changed-since-approval: Text {
+            text: Translations.tr("plugin-changed-warning");
+            color: Theme.danger;
+            font-size: Theme.caption-size;
+            wrap: word-wrap;
+        }
+        if root.plugin.needs-approval && !root.plugin.changed-since-approval: Text {
+            text: Translations.tr("plugin-needs-approval");
+            color: Theme.warning;
+            font-size: Theme.caption-size;
+            wrap: word-wrap;
+        }
+        if root.plugin.candidate: Text {
+            text: Translations.tr("plugin-review-not-installed");
+            color: Theme.warning;
+            font-size: Theme.caption-size;
+            wrap: word-wrap;
+        }
+        if root.plugin.candidate && root.plugin.review-replaces: Text {
+            text: Translations.tr("plugin-review-replaces");
+            color: Theme.warning;
+            font-size: Theme.caption-size;
             wrap: word-wrap;
         }
 
@@ -198,45 +284,45 @@ component PluginCard inherits Rectangle {
         HorizontalLayout {
             spacing: 16px;
             Text {
-                text: Translations.tr("plugin-author") + ": " + (plugin.author == "" ? "—" : plugin.author);
-                overflow: elide;
+                text: Translations.tr("plugin-author") + ": " + (root.plugin.author == "" ? "-" : root.plugin.author);
                 color: Theme.muted-text;
                 font-size: Theme.caption-size;
+                overflow: elide;
+                min-width: 0px;
             }
-            if plugin.license != "": Text {
-                text: plugin.license;
+            if root.plugin.license != "": Text {
+                text: root.plugin.license;
                 color: Theme.muted-text;
                 font-size: Theme.caption-size;
             }
             Rectangle { horizontal-stretch: 1; }
             // Proof the entry is a live process, not a manifest on disk.
-            if plugin.pid != "": Text {
-                text: Translations.tr("plugin-process") + " " + plugin.pid;
+            if root.plugin.pid != "": Text {
+                text: Translations.tr("plugin-process") + " " + root.plugin.pid;
                 color: Theme.muted-text;
                 font-size: Theme.caption-size;
             }
-            if plugin.restarts > 0: Text {
-                text: Translations.tr("plugin-restarts") + ": " + plugin.restarts;
+            if root.plugin.restarts > 0: Text {
+                text: Translations.tr("plugin-restarts") + ": " + root.plugin.restarts;
                 color: Theme.warning;
                 font-size: Theme.caption-size;
             }
         }
-
-        if plugin.source != "" || plugin.homepage != "": HorizontalLayout {
+        HorizontalLayout {
             spacing: 16px;
-            if plugin.homepage != "": Text {
+            if root.plugin.homepage != "": Text {
                 min-width: 0px;
                 horizontal-stretch: 1;
                 overflow: elide;
-                text: plugin.homepage;
+                text: root.plugin.homepage;
                 color: Theme.accent;
                 font-size: Theme.caption-size;
             }
-            if plugin.source != "": Text {
+            if root.plugin.source != "": Text {
                 min-width: 0px;
                 horizontal-stretch: 1;
                 overflow: elide;
-                text: plugin.source;
+                text: root.plugin.source;
                 color: Theme.accent;
                 font-size: Theme.caption-size;
             }
@@ -244,125 +330,147 @@ component PluginCard inherits Rectangle {
 
         // A plugin built for another protocol may load and then misbehave, so
         // the mismatch is stated rather than left to be discovered.
-        // A plugin from another build speaks the same protocol yet may behave
-        // nothing like its description, which is the failure the protocol
-        // version cannot catch.
-        if plugin.build-mismatch: Text {
-            text: Translations.tr("plugin-build-mismatch") + " (" + plugin.build-fingerprint + ")";
+        if root.plugin.build-mismatch: Text {
+            text: Translations.tr("plugin-build-mismatch") + " (" + root.plugin.build-fingerprint + ")";
             color: Theme.warning;
             font-size: Theme.caption-size;
             wrap: word-wrap;
         }
-        if plugin.protocol-version != plugin.supported-protocol-version: Text {
+        if root.plugin.protocol-version != root.plugin.supported-protocol-version: Text {
             text: Translations.tr("plugin-protocol-mismatch")
-                + " (" + plugin.protocol-version + " ≠ " + plugin.supported-protocol-version + ")";
+                + " (" + root.plugin.protocol-version + " ≠ " + root.plugin.supported-protocol-version + ")";
             color: Theme.warning;
             font-size: Theme.caption-size;
             wrap: word-wrap;
         }
-
-        if plugin.error != "": Text {
-            text: plugin.error;
+        if root.plugin.error != "": Text {
+            text: root.plugin.error;
             color: Theme.danger;
             font-size: Theme.caption-size;
             wrap: word-wrap;
         }
 
-        Text {
-            // A long install path must elide inside the card rather than
-            // stretching it past the window.
-            min-width: 0px;
-            horizontal-stretch: 1;
-            text: plugin.executable;
-            color: Theme.muted-text;
-            font-size: Theme.caption-size;
-            overflow: elide;
-        }
-        HorizontalLayout {
-            spacing: 8px;
-            AppButton {
-                text: plugin.enabled
-                    ? Translations.tr("plugin-disable")
-                    : Translations.tr("plugin-enable");
-                enabled: plugin.installed;
-                clicked => { root.toggled(!plugin.enabled); }
-            }
-            AppButton {
-                text: Translations.tr("plugin-restart");
-                // Restarting only means anything for a plugin that is meant
-                // to be running.
-                enabled: plugin.installed && plugin.enabled;
-                clicked => { root.restart-requested(); }
-            }
-            // Only a plugin that declared settings has anything to open. The
-            // popup belongs to the page, so this only asks for it.
-            if plugin.settings.length > 0: AppButton {
-                text: Translations.tr("plugin-settings-show");
-                clicked => { root.settings-requested(); }
-            }
-            Rectangle { horizontal-stretch: 1; }
-        }
-    }
-}
-
-// The settings of one plugin, as a panel over the page.
-component PluginSettingsPopup inherits Rectangle {
-    in property <PluginEntry> plugin;
-    callback closed();
-    callback change-setting(string, string);
-    callback change-setting-colour(string, color);
-
-    background: #000000a0;
-    TouchArea {
-        // A click outside the panel closes it, as in the other dialogs.
-        clicked => { root.closed(); }
-    }
-    Rectangle {
-        width: min(parent.width - 2 * Theme.content-gap, 560px);
-        height: min(parent.height - 2 * Theme.content-gap, 520px);
-        background: Theme.elevated-surface;
-        border-radius: Theme.corner-radius;
-        border-width: 1px;
-        border-color: Theme.accent;
-        // Swallows clicks so a press inside does not reach the scrim.
-        TouchArea { }
-        VerticalLayout {
-            padding: Theme.content-gap;
-            spacing: Theme.spacing;
-            HorizontalLayout {
-                spacing: 10px;
-                Text {
-                    min-width: 0px;
-                    horizontal-stretch: 1;
-                    overflow: elide;
-                    text: root.plugin.name;
-                    color: Theme.text;
-                    font-size: Theme.title-size;
-                    vertical-alignment: center;
-                }
-                AppButton {
-                    text: Translations.tr("plugin-settings-close");
-                    clicked => { root.closed(); }
-                }
-            }
+        // What would run, exactly: the content the user approves, and the
+        // arguments it is started with.
+        if root.plugin.manages-lifecycle && root.plugin.digest != "": VerticalLayout {
+            spacing: 2px;
             Text {
-                text: root.plugin.description;
+                text: Translations.tr("plugin-digest") + ": " + root.plugin.digest;
+                color: Theme.muted-text;
+                font-size: Theme.caption-size;
+                overflow: elide;
+            }
+            if root.plugin.args != "": Text {
+                text: Translations.tr("plugin-arguments") + ": " + root.plugin.args;
+                color: Theme.muted-text;
+                font-size: Theme.caption-size;
+                overflow: elide;
+            }
+            if root.plugin.candidate && root.plugin.review-files != "": Text {
+                text: Translations.tr("plugin-review-files") + ": " + root.plugin.review-files;
                 color: Theme.muted-text;
                 font-size: Theme.caption-size;
                 wrap: word-wrap;
             }
-            ScrollView {
-                vertical-stretch: 1;
-                viewport-width: self.visible-width;
-                VerticalLayout {
-                    spacing: Theme.spacing;
-                    alignment: start;
-                    for setting in root.plugin.settings: PluginSettingRow {
-                        setting: setting;
-                        active: root.plugin.enabled;
-                        changed(key, value) => { root.change-setting(key, value); }
-                        colour-chosen(key, colour) => { root.change-setting-colour(key, colour); }
-                    }
+        }
+
+        // Which roles it can fill and which provider is in use.
+        if root.plugin.manages-lifecycle && root.plugin.roles.length > 0: VerticalLayout {
+            spacing: 4px;
+            Text {
+                text: Translations.tr("plugin-roles");
+                color: Theme.muted-text;
+                font-size: Theme.caption-size;
+            }
+            for role in root.plugin.roles: RoleRow {
+                role: role;
+                frozen: root.frozen;
+                use-this => { root.role-use(role.role); }
+                use-default => { root.role-default(role.role); }
+            }
+        }
+
+        if root.plugin.diagnostics != "": Text {
+            // A long install path must elide inside the card rather than
+            // stretching it past the window.
+            text: Translations.tr("plugin-diagnostics") + ":\n" + root.plugin.diagnostics;
+            color: Theme.muted-text;
+            font-size: Theme.caption-size;
+            wrap: word-wrap;
+        }
+
+        Text {
+            min-width: 0px;
+            horizontal-stretch: 1;
+            text: root.plugin.executable;
+            color: Theme.muted-text;
+            font-size: Theme.caption-size;
+            overflow: elide;
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            // A candidate is not a plugin: it can only be installed.
+            if root.plugin.candidate: AppButton {
+                text: Translations.tr("plugin-install");
+                primary: true;
+                enabled: root.plugin.review-path != "";
+                clicked => { root.install-requested(); }
+            }
+            if !root.plugin.candidate: AppButton {
+                text: root.plugin.enabled ? Translations.tr("plugin-disable") : Translations.tr("plugin-enable");
+                enabled: root.plugin.installed && !root.frozen;
+                clicked => { root.toggled(!root.plugin.enabled); }
+            }
+            if !root.plugin.candidate: AppButton {
+                text: Translations.tr("plugin-restart");
+                // Restarting only means anything for a plugin that is meant
+                // to be running.
+                enabled: root.plugin.installed && root.plugin.enabled && !root.frozen;
+                clicked => { root.restart-requested(); }
+            }
+            if root.plugin.can-approve: AppButton {
+                text: Translations.tr("plugin-approve");
+                primary: true;
+                clicked => { root.approve-requested(); }
+            }
+            if root.plugin.can-revoke: AppButton {
+                text: Translations.tr("plugin-revoke-approval");
+                clicked => { root.revoke-requested(); }
+            }
+            if root.plugin.can-uninstall: AppButton {
+                text: Translations.tr("plugin-uninstall");
+                clicked => { root.uninstall-requested(); }
+            }
+            // A plugin that owns its settings draws them in its own window;
+            // Syntra only asks it to open. Others are shown inside the card.
+            if root.plugin.owns-settings && !root.plugin.candidate: AppButton {
+                text: Translations.tr("plugin-settings-show");
+                enabled: root.plugin.installed && !root.frozen;
+                clicked => { root.open-settings-requested(); }
+            }
+            if !root.plugin.owns-settings && root.plugin.settings.length > 0: AppButton {
+                text: root.settings-open
+                    ? Translations.tr("plugin-settings-close")
+                    : Translations.tr("plugin-settings-show");
+                clicked => { root.settings-requested(); }
+            }
+        }
+
+        // Settings Syntra keeps for a plugin, inside its card when opened.
+        if root.settings-open && !root.plugin.owns-settings && root.plugin.settings.length > 0: Rectangle {
+            background: Theme.background;
+            border-radius: Theme.corner-radius;
+            border-width: 1px;
+            border-color: Theme.border;
+            VerticalLayout {
+                padding: Theme.content-gap;
+                spacing: Theme.spacing;
+                for setting in root.plugin.settings: PluginSettingRow {
+                    setting: setting;
+                    active: root.plugin.enabled;
+                    changed(key, value) => { root.change-setting(key, value); }
+                    colour-chosen(key, colour) => { root.change-setting-colour(key, colour); }
                 }
             }
         }
@@ -377,10 +485,21 @@ export component PluginsPage inherits Rectangle {
     callback change-setting(string, string, string);
     callback change-setting-colour(string, string, color);
     callback refresh();
+    callback open-settings(string);
+    callback approve(string, string);
+    callback revoke(string);
+    callback uninstall(string);
+    callback review(string);
+    callback install(string);
+    callback update(string, string);
+    callback set-role-preference(string, string);
 
     // Id of the plugin whose settings are open, or empty. Held by the page, not
     // by a card, so a rebuilt card does not close it.
     in-out property <string> settings-plugin: "";
+    // What the user typed to add a plugin. Held by the page for the same
+    // reason.
+    in-out property <string> install-path: "";
 
     background: Theme.background;
     vertical-stretch: 1;
@@ -417,6 +536,45 @@ export component PluginsPage inherits Rectangle {
             wrap: word-wrap;
         }
 
+        // Adding a plugin: reading it first, installing second, approving third.
+        // Nothing runs until the user approves the content they were shown.
+        if connected: Rectangle {
+            background: Theme.surface;
+            border-radius: Theme.corner-radius;
+            border-width: 1px;
+            border-color: Theme.border;
+            VerticalLayout {
+                padding: Theme.content-gap;
+                spacing: 6px;
+                Text {
+                    text: Translations.tr("plugin-install-title");
+                    color: Theme.text;
+                    font-size: Theme.body-size;
+                }
+                Text {
+                    text: Translations.tr("plugin-install-hint");
+                    color: Theme.muted-text;
+                    font-size: Theme.caption-size;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    LineEdit {
+                        horizontal-stretch: 1;
+                        placeholder-text: Translations.tr("plugin-install-path");
+                        accessible-label: Translations.tr("plugin-install-path");
+                        text <=> root.install-path;
+                        accepted => { root.review(root.install-path); }
+                    }
+                    AppButton {
+                        text: Translations.tr("plugin-review");
+                        enabled: root.install-path != "";
+                        clicked => { root.review(root.install-path); }
+                    }
+                }
+            }
+        }
+
         if connected && plugins.length == 0: Text {
             text: Translations.tr("plugin-none-discovered");
             color: Theme.muted-text;
@@ -433,34 +591,23 @@ export component PluginsPage inherits Rectangle {
                 alignment: start;
                 for plugin in plugins: PluginCard {
                     plugin: plugin;
+                    settings-open: plugin.id == root.settings-plugin;
                     toggled(enabled) => { root.set-enabled(plugin.id, enabled); }
                     restart-requested => { root.restart(plugin.id); }
-                    settings-requested => { root.settings-plugin = plugin.id; }
+                    settings-requested => {
+                        root.settings-plugin = root.settings-plugin == plugin.id ? "" : plugin.id;
+                    }
+                    open-settings-requested => { root.open-settings(plugin.id); }
+                    change-setting(key, value) => { root.change-setting(plugin.id, key, value); }
+                    change-setting-colour(key, colour) => { root.change-setting-colour(plugin.id, key, colour); }
+                    approve-requested => { root.approve(plugin.id, plugin.digest); }
+                    revoke-requested => { root.revoke(plugin.id); }
+                    uninstall-requested => { root.uninstall(plugin.id); }
+                    install-requested => { root.install(plugin.review-path); }
+                    role-use(role) => { root.set-role-preference(role, plugin.id); }
+                    role-default(role) => { root.set-role-preference(role, ""); }
                 }
             }
-        }
-    }
-
-    // The settings of one plugin, over the page, and only while open. A popup
-    // that merely was not visible still lay over the whole page, and with a
-    // touch area across it took the mouse wheel before the page could scroll.
-    // Which plugin is open is kept here and not in the card: a change to a
-    // setting makes the daemon send the list again, and a card remembers
-    // nothing across that. Matching by id also means a plugin that has gone
-    // takes its popup with it, rather than the popup showing another plugin.
-    for plugin in root.plugins: Rectangle {
-        // Takes no room of its own: only the popup inside it, when it is open.
-        width: 0px;
-        height: 0px;
-        if plugin.id == root.settings-plugin: PluginSettingsPopup {
-            x: 0px;
-            y: 0px;
-            width: root.width;
-            height: root.height;
-            plugin: plugin;
-            closed => { root.settings-plugin = ""; }
-            change-setting(key, value) => { root.change-setting(plugin.id, key, value); }
-            change-setting-colour(key, colour) => { root.change-setting-colour(plugin.id, key, colour); }
         }
     }
 }

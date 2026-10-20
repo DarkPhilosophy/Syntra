@@ -182,8 +182,22 @@ impl Emulation for AndroidEmulation {
         Ok(())
     }
 
-    fn take_pointer_edge(&mut self, _handle: EmulationHandle) -> Option<PointerEdge> {
-        self.edge.take()
+    fn take_pointer_edge(&mut self, _handle: EmulationHandle) -> Option<crate::PointerExit> {
+        let edge = self.edge.take()?;
+        let side = match edge {
+            PointerEdge::Left => 1,
+            PointerEdge::Right => 2,
+            PointerEdge::Top => 3,
+            PointerEdge::Bottom => 4,
+        };
+        let along = with_service(|env, class| {
+            env.call_static_method(class, "exitAlong", "(I)F", &[JValue::Int(side)])?
+                .f()
+        })
+        .map_err(|error| log::warn!("accessibility exit position: {error}"))
+        .ok()
+        .filter(|value| value.is_finite());
+        Some(crate::PointerExit { edge, along })
     }
 
     fn place_pointer(&mut self, edge: PointerEdge) {

@@ -141,6 +141,18 @@ export global AppState {
     callback restart-plugin(string);
     callback change-plugin-setting(string, string, string);
     callback change-plugin-setting-colour(string, string, color);
+    callback open-plugin-settings(string);
+    // Lifecycle, all intents the daemon decides on. Approval carries the digest
+    // the card showed, so the daemon can refuse it if the content has changed.
+    callback approve-plugin(string, string);
+    callback revoke-plugin-approval(string);
+    callback uninstall-plugin(string);
+    callback review-plugin(string);
+    callback install-plugin(string);
+    callback update-plugin(string, string);
+    // The role (`file-clipboard`, ...) and the plugin chosen for it; an empty
+    // plugin returns the role to its default provider.
+    callback set-plugin-role-preference(string, string);
 
     // Identity of the daemon this dashboard is attached to. "Running" alone
     // tells a user nothing, so the interface reports which daemon answered

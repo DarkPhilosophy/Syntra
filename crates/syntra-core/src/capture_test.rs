@@ -1,15 +1,12 @@
 use crate::config::Config;
-use clap::Args;
 use futures::StreamExt;
 use syntra_input_capture::{
     self, CaptureError, CaptureEvent, InputCapture, InputCaptureError, Position,
 };
 use syntra_input_event::{Event, KeyboardEvent};
 
-#[derive(Args, Clone, Debug, Eq, PartialEq)]
-pub struct TestCaptureArgs {}
-
-pub async fn run(config: Config, _args: TestCaptureArgs) -> Result<(), InputCaptureError> {
+/// Runs the interactive input-capture test until interrupted.
+pub async fn run(config: Config) -> Result<(), InputCaptureError> {
     log::info!("running input capture test");
     log::info!("creating input capture");
     let backend = config.capture_backend().map(|b| b.into());

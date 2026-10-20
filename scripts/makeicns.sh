@@ -20,24 +20,84 @@ ARGUMENTS
             Defaults to ./target/icon.icns
     ICONSET The iconset directory to create
             Defaults to ./target/icon.iconset
-            This is just a temporary directory
+            Intermediate output. An existing directory is reused only when
+            every entry in it is one of the icon files this script writes;
+            anything else is left untouched and the script stops.
 EOF
 }
 
-if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
-    usage
-    exit 0
-fi
+case "${1:-}" in
+    -h | --help) usage; exit 0 ;;
+esac
 
+die() {
+    echo "$0: $*" >&2
+    exit 1
+}
+
+[ $# -le 3 ] || die "too many arguments (see --help)"
 svg="${1:-./crates/syntra-ui/ui/assets/shell/syntra.svg}"
 icns="${2:-./target/icon.icns}"
 iconset="${3:-./target/icon.iconset}"
 
 set -u
 
-workdir="$(dirname "$iconset")/icon-work"
-rm -rf "$iconset" "$workdir"
-mkdir -p "$iconset" "$workdir"
+# Everything is checked before the first change to disk, so a wrong argument or
+# a missing tool leaves the file system exactly as it was.
+[ -f "$svg" ] || die "SVG not found: $svg"
+for tool in rsvg-convert magick; do
+    command -v "$tool" >/dev/null 2>&1 || die "required tool not found: $tool"
+done
+if [ "$(uname -s)" = "Darwin" ]; then
+    command -v iconutil >/dev/null 2>&1 || die "required tool not found: iconutil"
+fi
+
+# The files this script writes into the iconset: a fixed list, the only names
+# it will ever create, overwrite or remove there.
+icon_names="icon_512x512@2x.png icon_512x512.png icon_256x256@2x.png icon_256x256.png
+icon_128x128@2x.png icon_128x128.png icon_32x32@2x.png icon_32x32.png
+icon_16x16@2x.png icon_16x16.png"
+
+is_known_icon() {
+    for known in $icon_names; do
+        [ "$1" = "$known" ] && return 0
+    done
+    return 1
+}
+
+# The iconset is this script's own intermediate output. It is used only when
+# every entry in it is one of the files above, a regular file, never a link, so
+# a directory holding anything else is somebody's data and is left untouched. A
+# link at the iconset path is not followed either. No marker file is involved:
+# what the directory contains is the proof, and the directory handed to
+# iconutil holds nothing but icons.
+[ ! -L "$iconset" ] || die "iconset path is a symbolic link: $iconset"
+if [ -e "$iconset" ]; then
+    [ -d "$iconset" ] || die "iconset path exists and is not a directory: $iconset"
+    for entry in "$iconset"/* "$iconset"/.[!.]* "$iconset"/..?*; do
+        [ -e "$entry" ] || [ -L "$entry" ] || continue
+        name="$(basename "$entry")"
+        if [ -L "$entry" ] || [ ! -f "$entry" ] || ! is_known_icon "$name"; then
+            die "refusing to use $iconset: it contains $name, which this script did not create"
+        fi
+    done
+fi
+
+mkdir -p "$(dirname "$iconset")" "$(dirname "$icns")"
+
+# Scratch space is a fresh directory this script creates and owns; the only
+# recursive removal below is of that directory, never of an argument. The trap
+# names the directory by value, so it needs no shell-specific feature.
+workdir="$(mktemp -d "$(dirname "$iconset")/icon-work.XXXXXX")"
+trap 'rm -rf -- "$workdir"' EXIT HUP INT TERM
+
+# Reusing the iconset: remove only the known icon files, by exact name.
+if [ -d "$iconset" ]; then
+    for name in $icon_names; do
+        rm -f -- "$iconset/$name"
+    done
+fi
+mkdir -p "$iconset"
 
 # Big Sur+ macOS icon template proportions (in a 1024 canvas):
 #   canvas  = 1024

@@ -1,8 +1,9 @@
 //! The plugin's side of the conversation with the daemon.
 //!
-//! The daemon starts the plugin, the plugin says who it is, and from then on
-//! the daemon sends settings and pointer events, one JSON object per line. The
-//! plugin sends nothing else: the daemon stops a plugin that does.
+//! The daemon starts the plugin, the plugin says who it is and which settings
+//! it owns, and from then on the daemon sends pointer events and the user's
+//! setting changes, one JSON object per line. The plugin answers a change with
+//! its settings as they now stand, and sends nothing else.
 
 use std::{
     io::{self, BufRead, Write},

@@ -1,0 +1,72 @@
+// The edge glow's settings window. It runs in the plugin's own process and
+// borrows Syntra's controls, so it looks and behaves like the rest of Syntra
+// while the plugin alone keeps and checks the values.
+import { ScrollView } from "std-widgets.slint";
+// Syntra's controls, through the one surface the dashboard declares for this:
+// the library `syntra-kit`, resolved by this plugin's build script. Nothing
+// else under the dashboard's `ui/` directory is imported.
+import { Theme, Translations, AppButton, PluginSettingEntry, PluginSettingRow } from "@syntra-kit/kit.slint";
+
+export { Theme, Translations }
+
+export component SettingsWindow inherits Window {
+    in property <string> plugin-name: "Edge glow";
+    in property <string> description;
+    in property <[PluginSettingEntry]> settings;
+    callback changed(string, string);
+    callback colour-chosen(string, color);
+    callback close-requested();
+
+    title: root.plugin-name;
+    preferred-width: 640px;
+    preferred-height: 560px;
+    min-width: 420px;
+    min-height: 360px;
+    background: Theme.background;
+
+    VerticalLayout {
+        padding: Theme.content-gap;
+        spacing: Theme.spacing;
+        HorizontalLayout {
+            spacing: Theme.small-spacing;
+            Text {
+                text: root.plugin-name;
+                color: Theme.text;
+                font-size: Theme.title-size;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            AppButton {
+                text: Translations.tr("plugin-settings-close");
+                clicked => { root.close-requested(); }
+            }
+        }
+        if root.description != "": Text {
+            text: root.description;
+            color: Theme.muted-text;
+            font-size: Theme.caption-size;
+            wrap: word-wrap;
+        }
+        Rectangle {
+            vertical-stretch: 1;
+            background: Theme.surface;
+            border-radius: Theme.corner-radius;
+            border-width: 1px;
+            border-color: Theme.border;
+            ScrollView {
+                viewport-width: self.visible-width;
+                VerticalLayout {
+                    padding: Theme.card-padding;
+                    spacing: Theme.spacing;
+                    alignment: start;
+                    for setting in root.settings: PluginSettingRow {
+                        setting: setting;
+                        active: true;
+                        changed(key, value) => { root.changed(key, value); }
+                        colour-chosen(key, colour) => { root.colour-chosen(key, colour); }
+                    }
+                }
+            }
+        }
+    }
+}

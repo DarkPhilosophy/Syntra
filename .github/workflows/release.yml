@@ -19,6 +19,21 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  licensing:
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v6
+    - uses: dtolnay/rust-toolchain@stable
+    - name: Verify third-party notices
+      run: node scripts/sync-licenses.js --check
+    - uses: actions/upload-artifact@v6
+      with:
+        name: licensing
+        path: |
+          LICENSE
+          licenses/THIRD_PARTY_NOTICES.md
+        if-no-files-found: error
+
   linux-release-build:
     runs-on: ubuntu-24.04
     steps:
@@ -115,6 +130,8 @@ jobs:
         mkdir syntra-windows
         Copy-Item target\release\syntra.exe syntra-windows
         Copy-Item target\release\syntra-daemon.exe syntra-windows
+        Copy-Item LICENSE syntra-windows
+        Copy-Item licenses\THIRD_PARTY_NOTICES.md syntra-windows
         if (!(Test-Path syntra-windows\syntra.exe)) { throw "Missing syntra.exe" }
         if (!(Test-Path syntra-windows\syntra-daemon.exe)) { throw "Missing syntra-daemon.exe" }
         Compress-Archive -Path syntra-windows\* -DestinationPath syntra-windows-x86_64.zip
@@ -122,7 +139,7 @@ jobs:
       run: |
         dotnet tool install --global wix --version 5.0.2
         $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages | Where-Object name -eq "syntra-app" | Select-Object -ExpandProperty version
-        wix build build-aux/windows/syntra.wxs -d Version=$version -d BinDir=target\release -arch x64 -o syntra-windows-x86_64.msi
+        wix build packaging/windows/syntra.wxs -d Version=$version -d BinDir=target\release -arch x64 -o syntra-windows-x86_64.msi
         if (!(Test-Path syntra-windows-x86_64.msi)) { throw "Missing MSI" }
     - uses: actions/upload-artifact@v6
       with:
@@ -142,7 +159,7 @@ jobs:
       with:
         # The action names the artifact "<bundle>-<arch>": syntra-x86_64.flatpak/syntra.flatpak
         bundle: syntra.flatpak
-        manifest-path: build-aux/io.syntra.Syntra.yml
+        manifest-path: packaging/flatpak/io.syntra.Syntra.yml
         cache-key: flatpak-${{ github.sha }}
 
   android-release-build:
@@ -224,7 +241,7 @@ jobs:
 
   release:
     name: "Release"
-    needs: [windows-release-build, linux-release-build, linux-arm64-release-build, macos-release-build, macos-arm64-release-build, flatpak-release-build, android-release-build]
+    needs: [licensing, windows-release-build, linux-release-build, linux-arm64-release-build, macos-release-build, macos-arm64-release-build, flatpak-release-build, android-release-build]
     runs-on: "ubuntu-latest"
     # Creating the release and its tag needs write access to the repository.
     permissions:
@@ -245,6 +262,8 @@ jobs:
         prerelease: true
         generate_release_notes: true
         files: |
+          licensing/LICENSE
+          licensing/licenses/THIRD_PARTY_NOTICES.md
           syntra-linux-x86_64/syntra-linux-x86_64
           syntra-linux-x86_64/syntra-daemon-linux-x86_64
           syntra-linux-x86_64/syntra-plugin-fuse-linux-x86_64
@@ -274,6 +293,8 @@ jobs:
         name: ${{ github.ref_name }}
         generate_release_notes: true
         files: |
+          licensing/LICENSE
+          licensing/licenses/THIRD_PARTY_NOTICES.md
           syntra-linux-x86_64/syntra-linux-x86_64
           syntra-linux-x86_64/syntra-daemon-linux-x86_64
           syntra-linux-x86_64/syntra-plugin-fuse-linux-x86_64

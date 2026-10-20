@@ -166,3 +166,172 @@ fn the_contract_crate_stays_dependency_light() {
          compile against it alone, but it reaches {unexpected:?}"
     );
 }
+
+/// The core is a service library, not a command-line application.
+///
+/// Argument parsing and subcommand dispatch belong to the binary that owns
+/// the command line. If the core reached the CLI frontend, every host of the
+/// service (including the in-process Android service) would drag in a client
+/// and see a dependency pointing from the engine back to one of its clients.
+#[test]
+fn the_core_does_not_depend_on_the_cli_frontend() {
+    let packages = workspace_packages();
+    let reachable = reachable_from(&packages, "syntra-core");
+
+    for forbidden in ["syntra-cli", "syntra-ui", "syntra-app"] {
+        assert!(
+            !reachable.contains(forbidden),
+            "syntra-core must not depend on {forbidden}; the core receives typed \
+             configuration overrides from its host. Reached: {reachable:?}"
+        );
+    }
+}
+
+/// The presentation crate talks to the daemon, not to its storage.
+///
+/// History is persisted by the daemon. A UI that linked the store could open
+/// the database directly and bypass the control contract, and it would pull
+/// SQLite into every desktop client.
+#[test]
+fn the_user_interface_does_not_depend_on_the_store() {
+    let packages = workspace_packages();
+
+    for tier in ["syntra-ui", "syntra-app"] {
+        let reachable = reachable_from(&packages, tier);
+        assert!(
+            !reachable.contains("syntra-store"),
+            "{tier} must not depend on syntra-store; history reaches the UI as \
+             syntra-api DTOs. Reached: {reachable:?}"
+        );
+    }
+}
+
+/// The plugin protocol crate must be usable by any plugin on its own.
+///
+/// It may not reach the application, the core, or the dashboard, otherwise a
+/// plugin author would have to build the product to speak the protocol.
+#[test]
+fn the_plugin_protocol_crate_stays_neutral() {
+    let packages = workspace_packages();
+    let reachable = reachable_from(&packages, "syntra-plugin-api");
+
+    for forbidden in [
+        "syntra-core",
+        "syntra-ui",
+        "syntra-app",
+        "syntra-daemon",
+        "syntra-store",
+        "syntra-cli",
+    ] {
+        assert!(
+            !reachable.contains(forbidden),
+            "syntra-plugin-api must not reach {forbidden}. Reached: {reachable:?}"
+        );
+    }
+}
+
+/// Bundled plugins are separate products that use the published surface.
+///
+/// A plugin may depend on the protocol crate (and the wire protocol where it
+/// serves peers), never on the daemon core or the dashboard crates.
+#[test]
+fn bundled_plugins_use_only_the_published_surface() {
+    let packages = workspace_packages();
+
+    for plugin in packages
+        .iter()
+        .filter(|package| package.name.starts_with("syntra-plugin-"))
+        .filter(|package| package.name != "syntra-plugin-api")
+    {
+        let reachable = reachable_from(&packages, &plugin.name);
+        for forbidden in [
+            "syntra-core",
+            "syntra-ui",
+            "syntra-app",
+            "syntra-daemon",
+            "syntra-store",
+        ] {
+            assert!(
+                !reachable.contains(forbidden),
+                "{} must not reach {forbidden}; plugins build against \
+                 syntra-plugin-api only. Reached: {reachable:?}",
+                plugin.name
+            );
+        }
+    }
+}
+
+/// The edge-glow settings window may only import the dashboard's declared UI
+/// surface (`kit.slint`), never its private files.
+///
+/// The dashboard can then reorganise its own UI without breaking a plugin
+/// that is built and shipped separately.
+#[test]
+fn edge_glow_imports_only_the_declared_ui_surface() {
+    let plugin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/edge-glow");
+    let mut stack = vec![plugin.join("ui")];
+    let mut checked = 0;
+    while let Some(directory) = stack.pop() {
+        for entry in std::fs::read_dir(&directory).expect("edge-glow ui directory is readable") {
+            let path = entry.expect("directory entry").path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|ext| ext.to_str()) != Some("slint") {
+                continue;
+            }
+            checked += 1;
+            let source = std::fs::read_to_string(&path).expect("slint source is readable");
+            for line in source
+                .lines()
+                .filter(|line| line.trim_start().starts_with("import"))
+            {
+                assert!(
+                    !line.contains("syntra-ui") && !line.contains("../../crates"),
+                    "{} imports a private dashboard file: {line}",
+                    path.display()
+                );
+                if line.contains("syntra-kit") {
+                    assert!(
+                        line.contains("@syntra-kit/kit.slint"),
+                        "{} must import only @syntra-kit/kit.slint: {line}",
+                        path.display()
+                    );
+                }
+            }
+        }
+    }
+    assert!(checked > 0, "no edge-glow .slint sources were inspected");
+
+    let build = std::fs::read_to_string(plugin.join("build.rs")).expect("build script is readable");
+    assert!(
+        build.contains("../../crates/syntra-ui/ui\""),
+        "the single sanctioned UI path is the kit directory"
+    );
+    assert_eq!(
+        build.matches("crates/syntra-ui").count(),
+        1,
+        "build.rs may name the dashboard UI directory exactly once"
+    );
+}
+
+/// The peer protocol is a wire format, nothing more.
+///
+/// It may use the input event types it carries, and no other workspace
+/// crate: depending on the daemon, the UI or the plugin protocol would tie the
+/// bytes two machines exchange to the release cycle of an unrelated part.
+#[test]
+fn the_peer_protocol_depends_only_on_the_input_event_types() {
+    let packages = workspace_packages();
+    let reachable = reachable_from(&packages, "syntra-proto");
+    let unexpected: Vec<_> = reachable
+        .iter()
+        .filter(|name| !matches!(name.as_str(), "syntra-proto" | "syntra-input-event"))
+        .collect();
+    assert!(
+        unexpected.is_empty(),
+        "syntra-proto must depend on no workspace crate but syntra-input-event, \
+         yet it reaches {unexpected:?}"
+    );
+}

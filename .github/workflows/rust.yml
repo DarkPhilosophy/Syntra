@@ -31,10 +31,34 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # Reads cargo metadata only, so it needs no system libraries and gives
-      # the fastest possible signal that a tier boundary was crossed.
+      # The rules read `cargo metadata`, but `cargo test` still compiles the
+      # daemon crate and its capture and emulation dependencies first, so the
+      # Linux system libraries are required.
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libx11-dev libxtst-dev libei-dev libxkbcommon-dev \
+            libwayland-dev libgtk-4-dev libfuse3-dev pkg-config
       - name: Verify tier boundaries
-        run: cargo test -p syntra-daemon --test architecture
+        run: cargo test --locked -p syntra-daemon --test architecture
+
+  scripts:
+    name: Release and licence scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      # The generator tests use only Node's built-in runner.
+      - name: Script tests
+        run: node --test scripts/test/*.test.js
+      # Fails when licenses/THIRD_PARTY_NOTICES.md is stale or a dependency's
+      # licence cannot be combined with GPL-3.0-or-later.
+      - name: Third-party notices are current
+        run: node scripts/sync-licenses.js --check
 
   ci:
     name: ${{ matrix.job }} ${{ matrix.os }}
@@ -83,12 +107,12 @@ jobs:
       - name: cargo check
         if: matrix.job == 'check'
         shell: bash
-        run: cargo check --workspace --all-targets $FEATURES
+        run: cargo check --locked --workspace --all-targets $FEATURES
 
       - name: cargo test
         if: matrix.job == 'test'
         shell: bash
-        run: cargo test --workspace $FEATURES
+        run: cargo test --locked --workspace $FEATURES
 
       # Ratchet, mirroring the docs job. The dependency-free contract crates
       # are held at zero warnings so the surface plugin authors compile
@@ -101,11 +125,11 @@ jobs:
         if: matrix.job == 'clippy'
         shell: bash
         run: >-
-          cargo clippy --all-targets
+          cargo clippy --locked --all-targets
           -p syntra-api -p syntra-plugin-api -p syntra-log
           -- -D warnings
 
       - name: cargo clippy (report)
         if: matrix.job == 'clippy'
         shell: bash
-        run: cargo clippy --workspace --all-targets $FEATURES
+        run: cargo clippy --locked --workspace --all-targets $FEATURES

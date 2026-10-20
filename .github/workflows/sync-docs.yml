@@ -10,7 +10,9 @@ on:
       - "**/Cargo.toml"
       - Cargo.lock
       - .github/README.md
-      - .scripts/**
+      - scripts/sync-readme.js
+      - scripts/sync-licenses.js
+      - scripts/lib/**
   workflow_dispatch:
 
 permissions:
@@ -31,15 +33,21 @@ jobs:
           node-version: 22
       - name: Regenerate
         run: |
-          node .scripts/sync-readme.js
-          node .scripts/sync-licenses.js
+          node scripts/sync-readme.js
+          node scripts/sync-licenses.js
       - name: Commit changes
         run: |
-          if git diff --quiet; then
+          # Stage exactly the files the generators own. `git commit -a` would
+          # skip a newly created file and `git add -A` would sweep up anything,
+          # so the paths are named. The old notices location is staged too, so
+          # its removal is committed once and never reappears.
+          git add -- .github/README.md licenses/THIRD_PARTY_NOTICES.md
+          git rm --quiet --cached --ignore-unmatch -- .github/THIRD_PARTY_NOTICES.md
+          if git diff --cached --quiet; then
             echo "Generated docs are current."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -am "docs: refresh generated sections"
+          git commit -m "docs: refresh generated sections"
           git push

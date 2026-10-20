@@ -14,7 +14,6 @@ shadow-rs = "1.2.0"
 
 [dependencies]
 syntra-api.workspace = true
-syntra-cli.workspace = true
 syntra-input-capture.workspace = true
 syntra-input-emulation.workspace = true
 syntra-input-event.workspace = true

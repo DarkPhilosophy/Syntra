@@ -188,6 +188,8 @@ pub(crate) struct TransferState<P> {
     adapter_to_owner: HashMap<(AdapterId, String), HashSet<TransferOwner<P>>>,
     source_pending: HashMap<(TransferOwner<P>, u64, u64), (u64, u64)>,
     ui_to_owner: HashMap<UiTransferId, TransferOwner<P>>,
+    /// Plugin id of the provider of the file clipboard role.
+    file_clipboard_adapter: String,
 }
 
 impl<P> Default for TransferState<P> {
@@ -200,6 +202,7 @@ impl<P> Default for TransferState<P> {
             source_pending: HashMap::new(),
             adapter_to_owner: HashMap::new(),
             ui_to_owner: HashMap::new(),
+            file_clipboard_adapter: String::new(),
         }
     }
 }
@@ -210,6 +213,21 @@ where
 {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    /// Sets which plugin provides the file clipboard, by plugin id.
+    ///
+    /// The state machine never names a provider itself: the service tells it
+    /// whichever plugin currently fills the role, so a third-party provider
+    /// takes exactly the paths a bundled one does. Transfers already published
+    /// keep the provider they were published to, because they are keyed by it.
+    pub(crate) fn set_file_clipboard_adapter(&mut self, adapter_id: impl Into<String>) {
+        self.file_clipboard_adapter = adapter_id.into();
+    }
+
+    /// The plugin currently providing the file clipboard; empty when none does.
+    pub(crate) fn file_clipboard_adapter(&self) -> &str {
+        &self.file_clipboard_adapter
     }
 
     pub(crate) fn owners_for_adapter(
@@ -507,7 +525,7 @@ where
             .ok_or_else(|| TransferStateError::UnknownOwner(owner.clone()))?;
         let operation = transfer.operation.clone();
         Ok(vec![TransferAction::Adapter {
-            adapter_id: "gtk-clipboard".to_owned(),
+            adapter_id: self.file_clipboard_adapter.clone(),
             message: AdapterMessage::PublishFileClipboard(
                 syntra_plugin_api::PublishFileClipboard {
                     transfer_id: ready.transfer_id,
@@ -654,9 +672,13 @@ where
 
     pub(crate) fn adapter_released(
         &mut self,
+        adapter_id: &str,
         released: Released,
     ) -> Result<Vec<TransferAction<P>>, TransferStateError<P>> {
-        let key = ("gtk-clipboard".to_owned(), released.transfer_id.clone());
+        // Keyed by the process that sent the release, which is the one the
+        // transfer was registered under, not whichever plugin is the active
+        // provider now.
+        let key = (adapter_id.to_owned(), released.transfer_id.clone());
         let owners = self.adapter_to_owner.remove(&key).ok_or_else(|| {
             TransferStateError::UnknownAdapterTransfer {
                 adapter_id: key.0.clone(),
@@ -895,6 +917,24 @@ where
                 data,
             },
         }])
+    }
+
+    /// Ends a range request that did not reach the end of the file.
+    ///
+    /// Each range opens the source file anew, so the handle must not outlive
+    /// the chunk it served: kept, every paste of a large file leaked one
+    /// descriptor per range until the daemon could no longer open anything.
+    pub(crate) fn source_range_served(
+        &mut self,
+        owner: &TransferOwner<P>,
+        file_id: u64,
+        request_id: u64,
+    ) {
+        if let Some(transfer) = self.local.get_mut(owner) {
+            transfer.outgoing.remove(&(file_id, request_id));
+        }
+        self.source_pending
+            .remove(&(owner.clone(), file_id, request_id));
     }
 
     pub(crate) fn source_complete(

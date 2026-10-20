@@ -1,0 +1,20 @@
+// The UI kit: the one surface other programs may build windows from.
+//
+// A plugin that draws its own window (the edge glow's settings) borrows
+// Syntra's controls so it looks and behaves like the rest of Syntra. It does so
+// through this file, by the library name `syntra-kit`, and through nothing else
+// in this directory: every other file under `ui/` is private to the dashboard
+// and free to change. What is exported here is therefore a compatibility
+// promise, so it stays small and holds no page, no application state and no
+// transport.
+//
+// Semantic roles, not a palette: a consumer asks for `Theme.surface` or
+// `Theme.danger`, never for a colour, so the dashboard can change how a role
+// looks without every consumer following.
+import { Theme } from "theme.slint";
+import { Translations } from "localization.slint";
+import { AppButton, AppSwitch } from "components/controls.slint";
+import { ColorPicker } from "components/color-picker.slint";
+import { PluginSettingEntry, PluginSettingRow } from "components/plugin-setting-row.slint";
+
+export { Theme, Translations, AppButton, AppSwitch, ColorPicker, PluginSettingEntry, PluginSettingRow }

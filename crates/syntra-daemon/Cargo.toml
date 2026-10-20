@@ -21,6 +21,7 @@ syntra-log.workspace = true
 syntra-input-capture.workspace = true
 syntra-input-emulation.workspace = true
 
+clap.workspace = true
 log.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "signal"] }

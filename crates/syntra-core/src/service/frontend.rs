@@ -5,43 +5,139 @@
 //! an outcome: it applies the change, then reports what happened.
 
 use super::*;
-use crate::adapter_manager::PluginTarget;
+use syntra_plugin_api::PluginRole as ManifestRole;
 
 impl Service {
-    /// Maps a plugin identifier onto the processes the supervisor owns for it.
+    /// Launches a resident plugin if, and only if, the registry allows it.
     ///
-    /// Returns `None` for a plugin the supervisor does not manage, so a request
-    /// naming one is refused rather than silently doing nothing. The two
-    /// built-ins are fixed; any other plugin is managed only if it was
-    /// discovered and declares the pointer capability, so a client cannot name
-    /// an arbitrary id and have the daemon launch it.
-    fn plugin_target(&self, id: &str) -> Option<PluginTarget> {
-        match id {
-            crate::plugins::CLIPBOARD_PLUGIN_ID => Some(PluginTarget::Clipboard),
-            crate::plugins::FUSE_PLUGIN_ID => Some(PluginTarget::Fuse),
-            _ if self.plugins.listens_to_pointer(id) => Some(PluginTarget::Generic(id.to_owned())),
-            _ => None,
-        }
-    }
-
-    /// Launches a discovered pointer plugin with the user's saved settings.
+    /// The registry decides: the plugin must be enabled, its executable must
+    /// run here and its content must be approved (or it must be bundled). The
+    /// content digest is recomputed for every launch, so a file changed after
+    /// approval stays stopped. A refusal is recorded against the plugin with a
+    /// reason the user can act on, never swallowed.
     ///
     /// `restart` first stops a copy that is already running, so a restart of a
     /// stuck plugin does not leave two.
-    pub(super) fn start_pointer_plugin(&mut self, id: &str, restart: bool) {
-        let Some(executable) = self.plugins.executable(id) else {
-            return;
+    pub(super) fn start_resident_plugin(
+        &mut self,
+        id: &str,
+        role: Option<ManifestRole>,
+        restart: bool,
+    ) {
+        let plan = match self.plugins.launch_plan(id, role) {
+            Ok(plan) => plan,
+            Err(refusal) => {
+                log::info!("plugin `{id}` not started: {}", refusal.text());
+                if matches!(
+                    refusal,
+                    crate::plugins::registry::Refusal::Unknown
+                        | crate::plugins::registry::Refusal::Disabled
+                ) {
+                    return;
+                }
+                // Disabled and unknown plugins are silent; anything else the
+                // user can fix is shown on the plugin's entry.
+                self.plugins.note_result(id, &Err(refusal.text()));
+                return;
+            }
         };
         if restart {
-            self.send_plugin_command(ManagerCommand::StopPlugin {
-                plugin: PluginTarget::Generic(id.to_owned()),
-            });
+            self.send_plugin_command(ManagerCommand::StopPlugin { id: id.to_owned() });
         }
+        self.plugins.note_result(id, &Ok(()));
         self.send_plugin_command(ManagerCommand::StartPlugin {
             id: id.to_owned(),
-            executable,
-            settings: self.plugins.settings_of(id),
+            spec: plan.spec,
+            settings: plan.settings,
         });
+    }
+
+    /// Brings the running processes in line with what the registry allows.
+    ///
+    /// Idempotent and cheap: it starts the active provider of each resident
+    /// role and stops resident plugins that should no longer run (switched
+    /// off, approval withdrawn, or no longer the active provider). Called
+    /// after every lifecycle change, so a role never ends with two providers
+    /// or with a provider nobody approved.
+    pub(super) fn reconcile_plugins(&mut self) {
+        let wanted = self.plugins.resident_plugins();
+        let running = self.plugins.running_plugins();
+        for id in &running {
+            if !wanted.iter().any(|(wanted_id, _)| wanted_id == id)
+                && !self.plugins.is_on_demand(id)
+            {
+                self.send_plugin_command(ManagerCommand::StopPlugin { id: id.clone() });
+            }
+        }
+        for (id, role) in wanted {
+            if !running.contains(&id) {
+                self.start_resident_plugin(&id, Some(role), false);
+            }
+        }
+        self.sync_file_clipboard_provider();
+    }
+
+    /// The plugin that provides the file clipboard now, if any.
+    ///
+    /// Chosen by the registry from capabilities and approval: the user's
+    /// explicit preference, else a bundled provider, else the smallest id.
+    /// `None` is a normal state; the capability is then unavailable and
+    /// nothing else is affected.
+    pub(super) fn file_clipboard_provider(&self) -> Option<String> {
+        self.plugins.active_provider(ManifestRole::FileClipboard)
+    }
+
+    /// Keeps the transfer state machine pointed at the provider in force.
+    ///
+    /// Called whenever the set of providers can have changed. Transfers
+    /// already published stay keyed by the provider they were published to.
+    pub(super) fn sync_file_clipboard_provider(&mut self) {
+        let provider = self.file_clipboard_provider().unwrap_or_default();
+        if self.transfers.file_clipboard_adapter() != provider {
+            self.transfers.set_file_clipboard_adapter(provider);
+        }
+    }
+
+    /// Starts a process to serve one incoming transfer through a mounted view.
+    ///
+    /// The plugin is chosen by role, exactly as the file clipboard is, and
+    /// goes through the same launch gate. Returns `false` with no provider, or
+    /// one that is refused, so the caller can report the transfer lost and
+    /// the peer is told rather than left waiting.
+    pub(super) fn start_mounted_receive(
+        &mut self,
+        manifest: syntra_plugin_api::RemoteManifest,
+    ) -> bool {
+        let Some(provider) = self
+            .plugins
+            .active_provider(ManifestRole::MountedFileReceive)
+        else {
+            log::warn!("no plugin can receive files through a mount; transfer cancelled");
+            return false;
+        };
+        let plan = match self
+            .plugins
+            .launch_plan(&provider, Some(ManifestRole::MountedFileReceive))
+        {
+            Ok(plan) => plan,
+            Err(refusal) => {
+                log::warn!(
+                    "mounted receive provider `{provider}` not started: {}",
+                    refusal.text()
+                );
+                self.plugins.note_result(&provider, &Err(refusal.text()));
+                self.publish_plugins();
+                return false;
+            }
+        };
+        self.transfer_providers
+            .insert(manifest.transfer_id.clone(), provider.clone());
+        self.send_plugin_command(ManagerCommand::StartTransfer {
+            id: provider,
+            spec: plan.spec,
+            manifest,
+        });
+        true
     }
 
     /// Tells every enabled pointer plugin a pointer crossed an edge.
@@ -584,17 +680,15 @@ impl Service {
                 if self.plugins.set_enabled(&id, enabled) {
                     // Recording the preference is not enough: disabling must
                     // actually stop the process, and enabling must start one,
-                    // or the control is a label with no effect.
-                    match (self.plugin_target(&id), enabled) {
-                        (Some(target), false) => {
-                            self.send_plugin_command(ManagerCommand::StopPlugin { plugin: target })
-                        }
-                        (Some(PluginTarget::Generic(_)), true) => {
-                            self.start_pointer_plugin(&id, false)
-                        }
-                        (Some(target), true) => self
-                            .send_plugin_command(ManagerCommand::RestartPlugin { plugin: target }),
-                        (None, _) => {}
+                    // or the control is a label with no effect. What runs is
+                    // decided by the registry from capabilities and approval,
+                    // never from the plugin's name.
+                    if enabled {
+                        self.reconcile_plugins();
+                    } else {
+                        self.send_plugin_command(ManagerCommand::StopPlugin { id: id.clone() });
+                        // Another provider may now be the active one.
+                        self.reconcile_plugins();
                     }
                     log::info!(
                         "plugin `{id}` {}",
@@ -608,30 +702,41 @@ impl Service {
                 self.publish_plugins();
             }
             FrontendRequest::RestartPlugin { id } => {
-                match self.plugin_target(&id) {
-                    Some(target) if self.plugins.is_enabled(&id) => {
-                        self.plugins.record_restart(&id);
-                        if let PluginTarget::Generic(_) = target {
-                            self.start_pointer_plugin(&id, true);
-                        } else {
-                            self.send_plugin_command(ManagerCommand::RestartPlugin {
-                                plugin: target,
-                            });
-                        }
-                        log::info!("restarting plugin `{id}` on request");
-                    }
-                    Some(_) => log::info!("ignoring restart for disabled plugin `{id}`"),
-                    None => log::warn!("ignoring restart for unknown plugin `{id}`"),
+                if self.plugins.is_enabled(&id) {
+                    self.plugins.record_restart(&id);
+                    let role = self.plugins.resident_role_of(&id);
+                    // Goes through `launch_plan` again: a restart is a launch,
+                    // so approval is re-verified against the files now.
+                    self.start_resident_plugin(&id, role, true);
+                    log::info!("restarting plugin `{id}` on request");
+                } else {
+                    log::info!("ignoring restart for a disabled or unknown plugin `{id}`");
                 }
                 self.publish_plugins();
             }
             FrontendRequest::SetPluginSetting { id, key, value } => {
-                if self.plugins.set_setting(&id, &key, &value) {
+                if self.plugins.owns_settings(&id) {
+                    // The plugin keeps and checks its own values; it answers
+                    // with what is in force, which reaches the interface. A
+                    // change made while it is not running is queued for it.
+                    // Until it answers, the requested value is what is shown:
+                    // in its last declaration, or before it first ran, in the
+                    // manifest's controls.
+                    if !self.plugins.request_owned_setting(&id, &key, &value) {
+                        self.plugins.set_setting(&id, &key, &value);
+                    }
+                    log::info!("plugin `{id}`: asking it to set `{key}`");
+                    self.send_plugin_command(ManagerCommand::PluginChangeSetting {
+                        id: id.clone(),
+                        key,
+                        value,
+                    });
+                } else if self.plugins.set_setting(&id, &key, &value) {
                     log::info!("plugin `{id}` setting `{key}` set to `{value}`");
                     // Stored and saved; now handed to the process too, so the
                     // change shows without a restart. A plugin that is not
                     // running is given the stored values when it starts.
-                    if self.plugins.listens_to_pointer(&id) {
+                    if self.plugins.is_running(&id) {
                         self.send_plugin_command(ManagerCommand::PluginSettings {
                             settings: self.plugins.settings_of(&id),
                             id: id.clone(),
@@ -645,6 +750,91 @@ impl Service {
                 // Reply either way, so the control reverts if it was refused.
                 self.publish_plugins();
             }
+            FrontendRequest::OpenPluginSettings { id, theme } => {
+                if !self.plugins.owns_settings(&id) {
+                    log::warn!("plugin `{id}` has no settings window of its own");
+                } else if self.plugins.is_running(&id) {
+                    log::info!("plugin `{id}`: opening its settings window");
+                    self.send_plugin_command(ManagerCommand::PluginOpenSettings { id, theme });
+                } else {
+                    // A stopped plugin's window opens on its own, which runs
+                    // its code: so it goes through the same gate as any other
+                    // launch. An unapproved or changed plugin does not run
+                    // just to show a settings window.
+                    match self.plugins.launch_plan(&id, None) {
+                        Ok(plan) => {
+                            log::info!(
+                                "plugin `{id}` is not running: opening its settings window alone"
+                            );
+                            self.send_plugin_command(ManagerCommand::OpenSettingsWindow {
+                                id,
+                                spec: plan.spec,
+                                theme,
+                            });
+                        }
+                        Err(refusal) => {
+                            log::info!("plugin `{id}` settings not opened: {}", refusal.text());
+                            self.plugins.note_result(&id, &Err(refusal.text()));
+                            self.publish_plugins();
+                        }
+                    }
+                }
+            }
+            FrontendRequest::ReviewPlugin { path } => {
+                // Reads and hashes files, so it runs off the event loop. It
+                // executes nothing.
+                self.review_plugin(std::path::PathBuf::from(path));
+            }
+            FrontendRequest::InstallPlugin { path } => {
+                self.install_plugin(std::path::PathBuf::from(path), None);
+            }
+            FrontendRequest::UpdatePlugin { id, path } => {
+                self.install_plugin(std::path::PathBuf::from(path), Some(id));
+            }
+            FrontendRequest::ApprovePlugin { id, digest } => {
+                self.plugins
+                    .mark_pending(&id, syntra_api::PluginPending::Approving);
+                let result = self.plugins.approve(&id, &digest);
+                if let Err(reason) = &result {
+                    log::warn!("approval of `{id}` refused: {reason}");
+                }
+                self.plugins.note_result(&id, &result);
+                // Approving does not switch the plugin on: that stays the
+                // user's separate choice. Reconcile only so a role whose
+                // provider just became eligible is served.
+                self.reconcile_plugins();
+                self.publish_plugins();
+            }
+            FrontendRequest::RevokePluginApproval { id } => {
+                self.plugins
+                    .mark_pending(&id, syntra_api::PluginPending::Revoking);
+                // Stop first: once the approval is gone nothing may keep
+                // running on it.
+                self.send_plugin_command(ManagerCommand::StopPlugin { id: id.clone() });
+                let result = self.plugins.revoke(&id);
+                self.plugins.note_result(&id, &result);
+                self.reconcile_plugins();
+                self.publish_plugins();
+            }
+            FrontendRequest::UninstallPlugin { id } => {
+                self.plugins
+                    .mark_pending(&id, syntra_api::PluginPending::Removing);
+                self.uninstall_plugin(&id);
+                self.publish_plugins();
+            }
+            FrontendRequest::SetPluginRolePreference { role, id } => {
+                let result = self.plugins.set_role_preference(role, id.as_deref());
+                if let Err(reason) = &result {
+                    log::warn!("role preference refused: {reason}");
+                }
+                if let Some(id) = &id {
+                    self.plugins.note_result(id, &result);
+                }
+                // The active provider of the role may have changed: the old
+                // one stops and the new one starts.
+                self.reconcile_plugins();
+                self.publish_plugins();
+            }
         }
         false
     }
@@ -653,6 +843,157 @@ impl Service {
     pub(super) fn publish_plugins(&mut self) {
         let snapshot = self.plugins.snapshot();
         self.notify_frontend(FrontendEvent::Plugins(snapshot));
+    }
+
+    /// Starts reviewing a package on the blocking pool; the result comes back
+    /// as a [`PluginJob`], so nothing in the loop waits on file input.
+    pub(super) fn review_plugin(&mut self, source: std::path::PathBuf) {
+        let jobs = self.plugin_jobs_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let review = crate::plugins::registry::inspect_package(&source);
+            let _ = jobs.blocking_send(PluginJob::Reviewed(review));
+        });
+    }
+
+    /// Installs (or, with `replacing`, updates) a package into Syntra's own
+    /// store.
+    ///
+    /// Installing never runs the plugin and never switches it on or approves
+    /// it: the copy lands disabled and unapproved, and the user decides
+    /// afterwards, on the digest shown. An update keeps the plugin's settings
+    /// (they live apart from the package) but its content is new, so any
+    /// earlier approval no longer matches and a fresh one is needed.
+    ///
+    /// The checks that need the registry happen here; the inspection and the
+    /// copy run on the blocking pool and report through [`PluginJob`].
+    pub(super) fn install_plugin(&mut self, source: std::path::PathBuf, replacing: Option<String>) {
+        use crate::plugins::package_store;
+        let Some(store) = self.plugins.store().map(std::path::Path::to_path_buf) else {
+            self.plugin_action_failed(
+                replacing.as_deref(),
+                package_store::StoreError::NoStore.to_string(),
+            );
+            return;
+        };
+        if let Some(id) = &replacing {
+            if !self.plugins.is_installed_package(id) {
+                self.plugin_action_failed(
+                    Some(id),
+                    "only a plugin installed by Syntra can be updated by Syntra".into(),
+                );
+                return;
+            }
+            self.plugins
+                .mark_pending(id, syntra_api::PluginPending::Installing);
+            // The old process must not outlive its replaced files.
+            self.send_plugin_command(ManagerCommand::StopPlugin { id: id.clone() });
+            self.publish_plugins();
+        }
+        let jobs = self.plugin_jobs_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let review = crate::plugins::registry::inspect_package(&source);
+            let outcome = if !review.valid {
+                Err(review
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "the package is not valid".into()))
+            } else if replacing.as_ref().is_some_and(|id| *id != review.id) {
+                Err("the package is a different plugin than the one being updated".to_owned())
+            } else {
+                package_store::install(&source, &store)
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            };
+            let _ = jobs.blocking_send(PluginJob::Installed {
+                id: if review.id.is_empty() {
+                    replacing.unwrap_or_default()
+                } else {
+                    review.id.clone()
+                },
+                review,
+                result: outcome,
+            });
+        });
+    }
+
+    /// Applies the result of plugin work that ran on the blocking pool.
+    pub(super) fn finish_plugin_job(&mut self, job: PluginJob) {
+        match job {
+            PluginJob::Reviewed(review) => {
+                self.plugins.record_review(review);
+            }
+            PluginJob::Installed { id, review, result } => {
+                match &result {
+                    Ok(()) => {
+                        self.plugins.rediscover(
+                            &std::env::current_exe().unwrap_or_default(),
+                            syntra_api::paths::config_dir()
+                                .ok()
+                                .map(|directory| directory.join("plugins"))
+                                .as_deref(),
+                        );
+                        self.plugins.forget_review(&id);
+                    }
+                    Err(reason) => {
+                        log::warn!("plugin install refused: {reason}");
+                        // A package that is not valid has no plugin to carry
+                        // the reason, so it is shown as a candidate with it.
+                        if !review.valid && self.plugins.is_unknown(&id) {
+                            self.plugins.record_review(review);
+                        }
+                    }
+                }
+                if !id.is_empty() {
+                    self.plugins.note_result(&id, &result);
+                }
+                self.reconcile_plugins();
+            }
+        }
+        self.publish_plugins();
+    }
+
+    /// Removes a package Syntra installed, and nothing else.
+    ///
+    /// A drop-in plugin and a bundled one are refused: the first belongs to the
+    /// user, the second to the distribution. The process stops first so no
+    /// running file is deleted, and the plugin's approval and role
+    /// preferences go with it. Its saved settings are kept, so installing it
+    /// again finds them.
+    pub(super) fn uninstall_plugin(&mut self, id: &str) {
+        use crate::plugins::package_store;
+        let result: Result<(), String> = (|| {
+            if !self.plugins.is_installed_package(id) {
+                return Err(package_store::StoreError::NotOwned.to_string());
+            }
+            let store = self
+                .plugins
+                .store()
+                .map(std::path::Path::to_path_buf)
+                .ok_or_else(|| package_store::StoreError::NoStore.to_string())?;
+            self.send_plugin_command(ManagerCommand::StopPlugin { id: id.to_owned() });
+            package_store::uninstall(id, &store).map_err(|error| error.to_string())?;
+            self.plugins.forget(id)?;
+            self.plugins.rediscover(
+                &std::env::current_exe().unwrap_or_default(),
+                syntra_api::paths::config_dir()
+                    .ok()
+                    .map(|directory| directory.join("plugins"))
+                    .as_deref(),
+            );
+            Ok(())
+        })();
+        self.plugins.note_result(id, &result);
+        self.reconcile_plugins();
+    }
+
+    /// Records that a lifecycle request could not be carried out, against the
+    /// plugin it named when there is one, so the interface can show why.
+    fn plugin_action_failed(&mut self, id: Option<&str>, reason: String) {
+        log::warn!("plugin request refused: {reason}");
+        if let Some(id) = id {
+            self.plugins.note_result(id, &Err(reason));
+        }
+        self.publish_plugins();
     }
 
     /// Forwards a command to the plugin supervisor, if one is running.

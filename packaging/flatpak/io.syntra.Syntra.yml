@@ -1,0 +1,56 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/flatpak/flatpak-builder/refs/heads/main/data/flatpak-manifest.schema.json
+app-id: io.syntra.Syntra
+runtime: org.gnome.Platform
+# GNOME 49 (freedesktop 25.08): its rust-stable meets Slint's minimum Rust.
+runtime-version: "49"
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+  - org.freedesktop.Sdk.Extension.llvm20
+command: /app/bin/syntra
+build-options:
+  append-path: "/usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm20/bin"
+  env:
+    "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "clang"
+    "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS": "-C link-arg=-fuse-ld=/usr/lib/sdk/rust-stable/bin/mold"
+    "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "clang"
+    "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS": "-C link-arg=-fuse-ld=/usr/lib/sdk/rust-stable/bin/mold"
+    build-args:
+      "--share=network"
+    prepend-ld-library-path:
+      "/usr/lib/sdk/llvm20/lib"
+
+finish-args:
+  - "--socket=wayland"
+  - "--socket=fallback-x11"
+  - "--device=dri"
+  - "--socket=session-bus"
+  - "--share=network"
+  - "--filesystem=xdg-config"
+  - "--env=RUST_BACKTRACE=1"
+  - "--env=RUST_LOG=syntra=debug"
+modules:
+  - name: syntra
+    buildsystem: simple
+    build-options:
+      build-args:
+        - "--share=network"
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/syntra/cargo
+    build-commands:
+      - cargo fetch --manifest-path Cargo.toml --locked
+      - cargo build --release --locked -p syntra-app -p syntra-daemon -p syntra-plugin-clipboard -p syntra-plugin-fuse -p syntra-plugin-edge-glow --features syntra-daemon/layer_shell_capture,syntra-daemon/x11_capture,syntra-daemon/libei_capture,syntra-daemon/wlroots_emulation,syntra-daemon/libei_emulation,syntra-daemon/rdp_emulation,syntra-daemon/x11_emulation
+      - install -Dm0755 target/release/syntra /app/bin/syntra
+      - install -Dm0755 target/release/syntra-daemon /app/bin/syntra-daemon
+      - install -Dm0755 target/release/syntra-plugin-clipboard /app/bin/syntra-plugin-clipboard
+      - install -Dm0755 target/release/syntra-plugin-fuse /app/bin/syntra-plugin-fuse
+      - install -Dm0755 target/release/syntra-plugin-edge-glow /app/bin/syntra-plugin-edge-glow
+      - install -Dm0644 crates/syntra-ui/ui/assets/shell/syntra.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/${FLATPAK_ID}.svg
+      - install -Dm0644 packaging/linux/desktop/io.syntra.Syntra.desktop ${FLATPAK_DEST}/share/applications/${FLATPAK_ID}.desktop
+      - install -Dm0644 LICENSE ${FLATPAK_DEST}/share/licenses/${FLATPAK_ID}/LICENSE
+      - install -Dm0644 licenses/THIRD_PARTY_NOTICES.md ${FLATPAK_DEST}/share/licenses/${FLATPAK_ID}/THIRD_PARTY_NOTICES.md
+      - desktop-file-edit --set-icon=${FLATPAK_ID} ${FLATPAK_DEST}/share/applications/${FLATPAK_ID}.desktop
+    sources:
+      - type: dir
+        path: ../..

@@ -7,7 +7,7 @@
 //! screen. This is the approach Sunshine uses for remote input.
 //!
 //! Access requires write permission on `/dev/uinput`, normally granted by the
-//! udev rule shipped in `build-aux/60-syntra-uinput.rules`.
+//! udev rule shipped in `packaging/linux/udev/60-syntra-uinput.rules`.
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -272,6 +272,7 @@ struct PenState {
     /// every push outwards, leaks while the user rests, and starts again
     /// from zero once the pen is away from the edges.
     pressure: f64,
+    pressure_edge: Option<PointerEdge>,
     pressure_at: std::time::Instant,
 }
 
@@ -285,6 +286,7 @@ impl PenState {
             in_proximity: false,
             edge: None,
             pressure: 0.0,
+            pressure_edge: None,
             pressure_at: std::time::Instant::now(),
         }
     }
@@ -295,6 +297,7 @@ impl PenState {
         self.position = (f64::from(self.area.0) / 2.0, f64::from(self.area.1) / 2.0);
         self.edge = None;
         self.pressure = 0.0;
+        self.pressure_edge = None;
     }
 
     /// Puts the followed position where the shared pointer lands when a peer
@@ -320,6 +323,61 @@ impl PenState {
         };
         self.edge = None;
         self.pressure = 0.0;
+        self.pressure_edge = None;
+    }
+
+    fn advance_motion(&mut self, dx: f64, dy: f64, needed: f64) {
+        let max = (f64::from(self.area.0 - 1), f64::from(self.area.1 - 1));
+        let target = (self.position.0 + dx, self.position.1 + dy);
+        let crossing = if target.0 < 0.0 {
+            Some(PointerEdge::Left)
+        } else if target.0 > max.0 {
+            Some(PointerEdge::Right)
+        } else if target.1 < 0.0 {
+            Some(PointerEdge::Top)
+        } else if target.1 > max.1 {
+            Some(PointerEdge::Bottom)
+        } else {
+            None
+        };
+        self.position = (target.0.clamp(0.0, max.0), target.1.clamp(0.0, max.1));
+        if let Some(edge) = crossing {
+            if self.pressure_edge != Some(edge) {
+                self.pressure = 0.0;
+                self.pressure_edge = Some(edge);
+            }
+            // Only travel outside the desktop presses the barrier. Counting
+            // the approach made a fast movement cross before the user pushed.
+            let (total, reached) = push_against_edge(
+                self.pressure,
+                self.pressure_at.elapsed(),
+                edge,
+                target.0 - self.position.0,
+                target.1 - self.position.1,
+                needed,
+            );
+            self.pressure = total;
+            self.pressure_at = std::time::Instant::now();
+            if reached {
+                self.edge = Some(edge);
+                self.pressure = 0.0;
+            }
+        } else if target.0 > 0.0 && target.0 < max.0 && target.1 > 0.0 && target.1 < max.1 {
+            self.pressure = 0.0;
+            self.pressure_edge = None;
+        }
+    }
+
+    fn take_exit(&mut self) -> Option<crate::PointerExit> {
+        let edge = self.edge.take()?;
+        let (coordinate, extent) = match edge {
+            PointerEdge::Left | PointerEdge::Right => (self.position.1, self.area.1),
+            PointerEdge::Top | PointerEdge::Bottom => (self.position.0, self.area.0),
+        };
+        Some(crate::PointerExit {
+            edge,
+            along: Some((coordinate / f64::from((extent - 1).max(1))).clamp(0.0, 1.0) as f32),
+        })
     }
 }
 
@@ -399,51 +457,7 @@ impl PenState {
         match event {
             PointerEvent::Motion { dx, dy, .. } => {
                 if dx.is_finite() && dy.is_finite() {
-                    let max = (f64::from(self.area.0 - 1), f64::from(self.area.1 - 1));
-                    let target = (self.position.0 + dx, self.position.1 + dy);
-                    // Pushing past an edge is how the user leaves this
-                    // screen; the shared pointer gets the same signal from
-                    // local capture, which cannot see this cursor.
-                    let crossing = if target.0 < 0.0 {
-                        Some(PointerEdge::Left)
-                    } else if target.0 > max.0 {
-                        Some(PointerEdge::Right)
-                    } else if target.1 < 0.0 {
-                        Some(PointerEdge::Top)
-                    } else if target.1 > max.1 {
-                        Some(PointerEdge::Bottom)
-                    } else {
-                        None
-                    };
-                    match crossing {
-                        Some(edge) => {
-                            let (total, reached) = push_against_edge(
-                                self.pressure,
-                                self.pressure_at.elapsed(),
-                                edge,
-                                dx,
-                                dy,
-                                crate::edge_pressure(),
-                            );
-                            self.pressure = total;
-                            self.pressure_at = std::time::Instant::now();
-                            if reached {
-                                self.edge = Some(edge);
-                                self.pressure = 0.0;
-                            }
-                        }
-                        // Away from every edge: whatever was pushed is over.
-                        None if target.0 > 0.0
-                            && target.0 < max.0
-                            && target.1 > 0.0
-                            && target.1 < max.1 =>
-                        {
-                            self.pressure = 0.0;
-                        }
-                        None => {}
-                    }
-                    self.position.0 = target.0.clamp(0.0, max.0);
-                    self.position.1 = target.1.clamp(0.0, max.1);
+                    self.advance_motion(dx, dy, crate::edge_pressure());
                     events.push(raw(EV_ABS, ABS_X, self.position.0 as i32));
                     events.push(raw(EV_ABS, ABS_Y, self.position.1 as i32));
                 }
@@ -799,11 +813,11 @@ impl Emulation for UinputEmulation {
         }
     }
 
-    fn take_pointer_edge(&mut self, handle: EmulationHandle) -> Option<PointerEdge> {
+    fn take_pointer_edge(&mut self, handle: EmulationHandle) -> Option<crate::PointerExit> {
         if let Some(tracker) = self.trackers.get_mut(&handle) {
-            return tracker.edge.take();
+            return tracker.take_exit();
         }
-        self.pointers.get_mut(&handle)?.pen.edge.take()
+        self.pointers.get_mut(&handle)?.pen.take_exit()
     }
 
     async fn consume(
@@ -968,6 +982,70 @@ mod tests {
             assert_eq!(release, vec![raw(EV_KEY, BTN_TOUCH, 0)]);
             pen.leave();
             pen.recenter();
+        }
+    }
+
+    #[test]
+    fn travelling_inside_the_screen_is_not_edge_pressure() {
+        let mut pen = PenState::new((1001, 1001));
+        pen.position = (500.0, 900.0);
+        pen.advance_motion(-510.0, -800.0, 80.0);
+        assert_eq!(pen.pressure, 10.0);
+        assert!(pen.take_exit().is_none());
+        pen.advance_motion(-69.0, 0.0, 80.0);
+        assert!(pen.take_exit().is_none());
+        pen.advance_motion(-1.0, 0.0, 80.0);
+        assert_eq!(
+            pen.take_exit(),
+            Some(crate::PointerExit {
+                edge: PointerEdge::Left,
+                along: Some(0.1)
+            })
+        );
+        assert!(pen.take_exit().is_none());
+    }
+
+    #[test]
+    fn changing_edges_does_not_transfer_pressure_around_a_corner() {
+        let mut pen = PenState::new((1001, 1001));
+        pen.position = (0.0, 0.0);
+        pen.advance_motion(-50.0, 0.0, 80.0);
+        pen.advance_motion(0.0, -40.0, 80.0);
+        assert_eq!(pen.pressure, 40.0);
+        assert!(pen.take_exit().is_none());
+    }
+
+    #[test]
+    fn leaving_the_edge_clears_pressure_immediately() {
+        let mut pen = PenState::new((100, 100));
+        pen.position = (99.0, 50.0);
+        pen.pressure = 60.0;
+        pen.translate(PointerEvent::Motion {
+            time: 0,
+            dx: -1.0,
+            dy: 0.0,
+        });
+        assert_eq!(pen.pressure, 0.0);
+        assert_eq!(pen.position, (98.0, 50.0));
+    }
+
+    #[test]
+    fn outward_pressure_does_not_decay_between_events() {
+        for gap_ms in [8, 150, 298, 500] {
+            let mut total = 0.0;
+            for step in 1..=10 {
+                let (next, reached) = push_against_edge(
+                    total,
+                    std::time::Duration::from_millis(gap_ms),
+                    PointerEdge::Right,
+                    8.0,
+                    0.0,
+                    80.0,
+                );
+                assert_eq!(next, f64::from(step) * 8.0, "gap {gap_ms} ms");
+                assert_eq!(reached, step == 10);
+                total = next;
+            }
         }
     }
 

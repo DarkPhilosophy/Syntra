@@ -643,11 +643,11 @@ mod linux {
         }
     }
 
-    /// This plugin's own description, the single source of truth about it.
+    /// This plugin's handshake: what it can do right now.
     ///
-    /// The daemon reads it either from the handshake or, before the plugin
-    /// has ever run, by invoking `--describe`. Nothing about the plugin is
-    /// duplicated in the daemon or in a file beside the binary.
+    /// The `adapter_id` is the plugin's manifest id, which the daemon requires.
+    /// Its description and provenance are displayed but grant nothing: what the
+    /// plugin may do is what its descriptor declares and the daemon checks.
     pub fn hello() -> Message {
         Message::Hello {
                 protocol_version: syntra_plugin_api::PROTOCOL_VERSION,
@@ -822,17 +822,6 @@ mod linux {
 
 #[cfg(target_os = "linux")]
 fn main() -> std::io::Result<()> {
-    // `--describe` prints this plugin's own declaration and exits, so the
-    // daemon can list it accurately before it has ever been needed. Without
-    // it the daemon would have to keep a second copy of the description and
-    // the two would drift.
-    if std::env::args().any(|argument| argument == "--describe") {
-        let line = linux::hello()
-            .encode_line()
-            .map_err(|error| std::io::Error::other(error.to_string()))?;
-        print!("{line}");
-        return Ok(());
-    }
     linux::run()
 }
 

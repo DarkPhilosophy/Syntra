@@ -1,0 +1,85 @@
+import { Theme } from "../theme.slint";
+import { AppButton, AppSwitch } from "controls.slint";
+import { ColorPicker } from "color-picker.slint";
+
+// One thing a plugin lets the user change. The plugin described it and holds
+// the value; this only draws the right control and reports the new value.
+// Shared: a plugin that draws its own settings window imports it too, so its
+// controls are Syntra's own.
+export struct PluginSettingEntry {
+    key: string,
+    label: string,
+    // toggle, choice, color or number: decides which control is drawn.
+    kind: string,
+    value: string,
+    // For a choice, the values and the labels, in the same order.
+    option-values: [string],
+    option-labels: [string],
+    // For a number, the inclusive range.
+    min: int,
+    max: int,
+    // For a colour, the value as a colour (the accent while it is empty).
+    colour: color,
+}
+
+export component PluginSettingRow inherits Rectangle {
+    in property <PluginSettingEntry> setting;
+    in property <bool> active;
+    callback changed(string, string);
+    callback colour-chosen(string, color);
+    height: row.preferred-height;
+    // A twelfth of the range, at least one: a fixed step of four took thirty
+    // six presses to cross the width range and each moved too little to see.
+    property <float> step: Math.max(1, Math.floor((root.setting.max - root.setting.min) / 12));
+    background: transparent;
+    opacity: root.active ? 1 : 0.5;
+    row := HorizontalLayout {
+        spacing: Theme.small-spacing;
+        if root.setting.kind == "toggle": Text {
+            text: root.setting.label; color: Theme.text; font-size: Theme.body-size;
+            horizontal-stretch: 1; vertical-alignment: center; wrap: word-wrap;
+        }
+        if root.setting.kind == "toggle": AppSwitch {
+            enabled: root.active;
+            checked: root.setting.value == "true";
+            a11y-label: root.setting.label;
+            toggled(value) => { root.changed(root.setting.key, value ? "true" : "false"); }
+        }
+        if root.setting.kind == "choice": VerticalLayout {
+            spacing: Theme.small-spacing;
+            Text { text: root.setting.label; color: Theme.text; font-size: Theme.body-size; wrap: word-wrap; }
+            HorizontalLayout {
+                spacing: Theme.small-spacing;
+                for label[index] in root.setting.option-labels: AppButton {
+                    text: label;
+                    enabled: root.active;
+                    primary: root.setting.option-values[index] == root.setting.value;
+                    clicked => { root.changed(root.setting.key, root.setting.option-values[index]); }
+                }
+            }
+        }
+        if root.setting.kind == "number": Text {
+            text: root.setting.label + ": " + root.setting.value;
+            color: Theme.text; font-size: Theme.body-size; horizontal-stretch: 1; vertical-alignment: center;
+        }
+        if root.setting.kind == "number": AppButton {
+            text: "−";
+            enabled: root.active && root.setting.value.to-float() > root.setting.min;
+            clicked => { root.changed(root.setting.key, "" + Math.max(root.setting.min, Math.floor(root.setting.value.to-float() - root.step))); }
+        }
+        if root.setting.kind == "number": AppButton {
+            text: "+";
+            enabled: root.active && root.setting.value.to-float() < root.setting.max;
+            clicked => { root.changed(root.setting.key, "" + Math.min(root.setting.max, Math.floor(root.setting.value.to-float() + root.step))); }
+        }
+        if root.setting.kind == "color": ColorPicker {
+            horizontal-stretch: 1;
+            label: root.setting.label;
+            value: root.setting.colour;
+            // The colour is turned into `#rrggbb` on the Rust side, where it
+            // is tested; here it only travels as the colour it is.
+            selected(value) => { root.colour-chosen(root.setting.key, value); }
+            reset => { root.changed(root.setting.key, ""); }
+        }
+    }
+}

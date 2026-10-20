@@ -92,7 +92,7 @@ Please report vulnerabilities privately as described in the
 ## 7. Third-party software and names
 
 Syntra builds on third-party software listed in the
-[third-party notices](THIRD_PARTY_NOTICES.md); each component remains under
+[third-party notices](../licenses/THIRD_PARTY_NOTICES.md); each component remains under
 its own licence and is provided by its authors under their own terms.
 Product and company names mentioned in this project are the property of
 their respective owners and are used for identification only. "Syntra" is

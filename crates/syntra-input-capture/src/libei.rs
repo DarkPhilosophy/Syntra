@@ -17,8 +17,8 @@ use reis::{
     tokio::EiConvertEventStream,
 };
 use std::{
-    cell::Cell,
-    collections::HashMap,
+    cell::{Cell, RefCell},
+    collections::{HashMap, VecDeque},
     env, fs, io,
     num::NonZeroU32,
     os::unix::net::UnixStream,
@@ -376,21 +376,94 @@ async fn connect_to_eis(
     Ok((context, conn, event_stream))
 }
 
+/// EIS and portal signals are separate transports. Keep early input bound to
+/// the EIS sequence matching Activated.activation_id, never to a later peer.
+#[derive(Default)]
+struct ActivationGate {
+    active: Option<(Option<u32>, Position)>,
+    last_activation: Option<u32>,
+    pending: VecDeque<(u32, Event)>,
+    ready: VecDeque<(Position, CaptureEvent)>,
+}
+
+impl ActivationGate {
+    fn activate(&mut self, id: Option<u32>, pos: Position, along: Option<f32>) {
+        self.active = Some((id, pos));
+        self.last_activation = id;
+        if let Some(along) = along {
+            self.ready.push_back((pos, CaptureEvent::Entry { along }));
+        }
+        self.ready.push_back((pos, CaptureEvent::Begin));
+        let before = self.pending.len();
+        let mut replayed = 0;
+        self.pending.retain(|(sequence, event)| {
+            if Some(*sequence) == id {
+                self.ready.push_back((pos, CaptureEvent::Input(*event)));
+                replayed += 1;
+            }
+            id.is_some_and(|id| (*sequence).wrapping_sub(id) as i32 > 0)
+        });
+        log::debug!(
+            "[route] activation {id:?}: replayed {replayed} early EIS events, discarded {} stale events",
+            before - replayed - self.pending.len()
+        );
+    }
+
+    fn deactivate(&mut self) {
+        self.active = None;
+        self.ready.clear();
+    }
+
+    fn input(&mut self, sequence: Option<u32>, event: Event) -> Result<(), CaptureError> {
+        if let Some((id, pos)) = self.active {
+            if id.is_none() || id == sequence {
+                self.ready.push_back((pos, CaptureEvent::Input(event)));
+                return Ok(());
+            }
+        }
+        let Some(sequence) = sequence else {
+            return Ok(());
+        };
+        if self
+            .last_activation
+            .is_some_and(|id| sequence.wrapping_sub(id) as i32 <= 0)
+        {
+            return Ok(());
+        }
+        // Bound a stalled portal without silently dropping button/key releases.
+        if self.pending.len() >= 1024 {
+            return Err(io::Error::other(
+                "portal activation did not arrive before the input queue filled",
+            )
+            .into());
+        }
+        self.pending.push_back((sequence, event));
+        Ok(())
+    }
+}
+
 async fn libei_event_handler(
     ei_event_stream: &mut EiConvertEventStream,
     context: &ei::Context,
     event_tx: Sender<(Position, CaptureEvent)>,
     release_session: Arc<Notify>,
-    current_pos: Rc<Cell<Option<Position>>>,
+    activation: Rc<RefCell<ActivationGate>>,
+    activated: Rc<Notify>,
 ) -> Result<(), CaptureError> {
+    let mut device_sequences = HashMap::new();
     loop {
-        let ei_event = ei_event_stream
-            .next()
-            .await
-            .ok_or(CaptureError::EndOfStream)??;
-        log::trace!("from ei: {ei_event:?}");
-        let client = current_pos.get();
-        handle_ei_event(ei_event, client, context, &event_tx, &release_session).await?;
+        loop {
+            let ready = activation.borrow_mut().ready.pop_front();
+            let Some(event) = ready else { break };
+            event_tx.send(event).await.expect("no channel");
+        }
+        tokio::select! {
+            event = ei_event_stream.next() => {
+                let event = event.ok_or(CaptureError::EndOfStream)??;
+                handle_ei_event(event, context, &activation, &mut device_sequences, &release_session).await?;
+            }
+            _ = activated.notified() => {}
+        }
     }
 }
 
@@ -576,8 +649,8 @@ async fn do_capture_session(
         events: ei_event_stream,
     } = portal_session;
     let (cancel_session, cancel_update) = cancel;
-    // current client
-    let current_pos = Rc::new(Cell::new(None));
+    let activation = Rc::new(RefCell::new(ActivationGate::default()));
+    let activation_ready = Rc::new(Notify::new());
 
     // set barriers
     let (barriers, pos_for_barrier_id) = update_barriers(
@@ -602,7 +675,8 @@ async fn do_capture_session(
     // async event task
     let cancel_ei_handler = CancellationToken::new();
     let event_chan = event_tx.clone();
-    let pos = current_pos.clone();
+    let ei_activation = activation.clone();
+    let ei_activation_ready = activation_ready.clone();
     let cancel_session_clone = cancel_session.clone();
     let release_session_clone = release_session.clone();
     let cancel_ei_handler_clone = cancel_ei_handler.clone();
@@ -613,7 +687,8 @@ async fn do_capture_session(
                 context,
                 event_chan,
                 release_session_clone,
-                pos,
+                ei_activation,
+                ei_activation_ready,
             ) => {
                 log::debug!("libei exited: {r:?} cancelling session task");
                 cancel_session_clone.cancel();
@@ -663,23 +738,12 @@ async fn do_capture_session(
                             continue;
                         },
                     };
-                    current_pos.replace(Some(pos));
                     release.set_capturing(true);
 
-                    // client entered => send event. Where along the edge it came
-                    // in goes first, as a fraction, so it is known by the time
-                    // `Begin` is turned into an `Enter`. Only when the compositor
-                    // reported a cursor position.
-                    if let Some(along) = activated
-                        .cursor_position()
-                        .and_then(|cursor| entry_fraction(&barriers, &pos_for_barrier_id, pos, cursor))
-                    {
-                        event_tx
-                            .send((pos, CaptureEvent::Entry { along }))
-                            .await
-                            .expect("no channel");
-                    }
-                    event_tx.send((pos, CaptureEvent::Begin)).await.expect("no channel");
+                    let along = activated.cursor_position()
+                        .and_then(|cursor| entry_fraction(&barriers, &pos_for_barrier_id, pos, cursor));
+                    activation.borrow_mut().activate(activated.activation_id(), pos, along);
+                    activation_ready.notify_one();
 
                     let mut compositor_released = false;
                     loop {
@@ -739,6 +803,7 @@ async fn do_capture_session(
                         }
                     }
 
+                    activation.borrow_mut().deactivate();
                     let release_result = if compositor_released {
                         Ok(())
                     } else {
@@ -770,7 +835,6 @@ async fn do_capture_session(
                             Ok(())
                         }
                     };
-                    current_pos.replace(None);
                     release.complete();
                     release_result?;
 
@@ -967,9 +1031,9 @@ fn distance_to_line(line: ((f32, f32), (f32, f32)), p: (f32, f32)) -> f32 {
 
 async fn handle_ei_event(
     ei_event: EiEvent,
-    current_client: Option<Position>,
     context: &ei::Context,
-    event_tx: &Sender<(Position, CaptureEvent)>,
+    activation: &RefCell<ActivationGate>,
+    device_sequences: &mut HashMap<reis::event::Device, u32>,
     release_session: &Notify,
 ) -> Result<(), CaptureError> {
     let all_capabilities = DeviceCapability::Pointer
@@ -988,7 +1052,8 @@ async fn handle_ei_event(
             release_session.notify_waiters();
         }
         /* EiEvent::DeviceAdded(_) | */
-        EiEvent::DeviceRemoved(_) => {
+        EiEvent::DeviceRemoved(ref removed) => {
+            device_sequences.remove(&removed.device);
             if *RESTART_SESSION_ON_DEVICE_CHANGE {
                 log::debug!("releasing session: {ei_event:?}");
                 release_session.notify_waiters();
@@ -997,19 +1062,35 @@ async fn handle_ei_event(
             }
         }
         EiEvent::DevicePaused(_) | EiEvent::DeviceResumed(_) => {}
-        EiEvent::DeviceStartEmulating(_) => log::debug!("START EMULATING"),
-        EiEvent::DeviceStopEmulating(_) => log::debug!("STOP EMULATING"),
+        EiEvent::DeviceStartEmulating(start) => {
+            device_sequences.insert(start.device, start.sequence);
+        }
+        EiEvent::DeviceStopEmulating(stop) => {
+            device_sequences.remove(&stop.device);
+        }
         EiEvent::Disconnected(d) => {
             return Err(CaptureError::Disconnected(format!("{:?}", d.reason)));
         }
         _ => {
-            if let Some(pos) = current_client {
-                for event in Event::from_ei_event(ei_event) {
-                    event_tx
-                        .send((pos, CaptureEvent::Input(event)))
-                        .await
-                        .expect("no channel");
-                }
+            let device = match &ei_event {
+                EiEvent::PointerMotion(event) => Some(&event.device),
+                EiEvent::PointerMotionAbsolute(event) => Some(&event.device),
+                EiEvent::TouchDown(event) => Some(&event.device),
+                EiEvent::TouchMotion(event) => Some(&event.device),
+                EiEvent::TouchUp(event) => Some(&event.device),
+                EiEvent::TouchCancel(event) => Some(&event.device),
+                EiEvent::Button(event) => Some(&event.device),
+                EiEvent::ScrollDelta(event) => Some(&event.device),
+                EiEvent::ScrollDiscrete(event) => Some(&event.device),
+                EiEvent::KeyboardKey(event) => Some(&event.device),
+                EiEvent::KeyboardModifiers(event) => Some(&event.device),
+                _ => None,
+            };
+            let sequence = device
+                .and_then(|device| device_sequences.get(device))
+                .copied();
+            for event in Event::from_ei_event(ei_event) {
+                activation.borrow_mut().input(sequence, event)?;
             }
         }
     }
@@ -1100,7 +1181,65 @@ impl Stream for LibeiInputCapture {
 
 #[cfg(test)]
 mod tests {
+    use super::ActivationGate;
     use super::{ICBarrier, ReleaseSignal, entry_fraction, landing_point, pos_to_barrier_for_test};
+    use syntra_input_event::{Event, PointerEvent};
+
+    #[test]
+    fn early_motion_waits_for_its_activation_and_follows_begin() {
+        let motion = Event::Pointer(PointerEvent::Motion {
+            time: 1,
+            dx: -80.0,
+            dy: 0.0,
+        });
+        let mut early = ActivationGate::default();
+        early.input(Some(7), motion).unwrap();
+        assert!(early.ready.is_empty());
+        early.activate(Some(7), Position::Left, Some(0.1));
+        let mut ordered = ActivationGate::default();
+        ordered.activate(Some(7), Position::Left, Some(0.1));
+        ordered.input(Some(7), motion).unwrap();
+        assert_eq!(early.ready, ordered.ready);
+        assert_eq!(
+            early.ready.pop_front(),
+            Some((Position::Left, crate::CaptureEvent::Entry { along: 0.1 }))
+        );
+        assert_eq!(
+            early.ready.pop_front(),
+            Some((Position::Left, crate::CaptureEvent::Begin))
+        );
+        assert_eq!(
+            early.ready.pop_front(),
+            Some((Position::Left, crate::CaptureEvent::Input(motion)))
+        );
+    }
+
+    #[test]
+    fn retired_input_never_reaches_a_new_activation_even_across_wraparound() {
+        let motion = Event::Pointer(PointerEvent::Motion {
+            time: 1,
+            dx: 12.0,
+            dy: 0.0,
+        });
+        let mut gate = ActivationGate::default();
+        gate.activate(Some(u32::MAX), Position::Left, None);
+        gate.deactivate();
+        gate.input(Some(u32::MAX), motion).unwrap();
+        gate.input(Some(0), motion).unwrap();
+        gate.activate(Some(0), Position::Right, None);
+        assert_eq!(
+            gate.ready.pop_front(),
+            Some((Position::Right, crate::CaptureEvent::Begin))
+        );
+        assert_eq!(
+            gate.ready.pop_front(),
+            Some((Position::Right, crate::CaptureEvent::Input(motion)))
+        );
+        assert!(gate.ready.is_empty());
+        gate.input(Some(u32::MAX), motion).unwrap();
+        assert!(gate.ready.is_empty());
+    }
+
     use crate::Position;
     use std::collections::HashMap;
     use std::num::NonZeroU32;

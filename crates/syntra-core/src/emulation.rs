@@ -78,6 +78,8 @@ pub(crate) enum EmulationEvent {
         addr: SocketAddr,
         /// The edge it had entered through, when known.
         side: Option<syntra_api::Position>,
+        /// Where along that edge it left, when the backend knows.
+        along: Option<f32>,
     },
     Connected {
         addr: SocketAddr,
@@ -123,6 +125,7 @@ pub(crate) enum EmulationEvent {
     PointerEdge {
         addr: SocketAddr,
         edge: syntra_input_emulation::PointerEdge,
+        along: Option<f32>,
     },
     /// peer sent us a Hello with its build commit hash. Used to
     /// populate `client_manager.peer_commit` from the listen side
@@ -174,7 +177,7 @@ enum EmulationRequest {
     Reenable,
     /// Switch to another emulation backend (`None`: pick automatically).
     SetBackend(Option<syntra_input_emulation::Backend>),
-    Release(SocketAddr),
+    Release(SocketAddr, Option<f32>),
     ChangePort(u16),
     CaptureReady(bool),
     SetInputSharing(bool),
@@ -227,6 +230,7 @@ impl Emulation {
             independent_pointers: false,
             input_sharing: true,
             active_inputs: HashSet::new(),
+            return_position_peers: HashSet::new(),
             entered_from: HashMap::new(),
             peer_sides: HashMap::new(),
             peer_beyond: HashMap::new(),
@@ -247,9 +251,9 @@ impl Emulation {
         }
     }
 
-    pub(crate) fn send_leave_event(&self, addr: SocketAddr) {
+    pub(crate) fn send_leave_event(&self, addr: SocketAddr, along: Option<f32>) {
         self.request_tx
-            .send(EmulationRequest::Release(addr))
+            .send(EmulationRequest::Release(addr, along))
             .expect("channel closed");
     }
 
@@ -379,6 +383,8 @@ struct ListenTask {
     independent_pointers: bool,
     input_sharing: bool,
     active_inputs: HashSet<SocketAddr>,
+    /// Capabilities are scoped to the authenticated incoming connection.
+    return_position_peers: HashSet<SocketAddr>,
     /// Side of this screen each active peer entered from.
     entered_from: HashMap<SocketAddr, Position>,
     /// Side of this screen each configured peer sits on, from local config.
@@ -474,6 +480,16 @@ const PEER_SILENCE_TIMEOUT: Duration = Duration::from_secs(3);
 const HANDOFF_COOLDOWN: Duration = Duration::from_secs(3);
 
 impl ListenTask {
+    async fn return_pointer(&mut self, addr: SocketAddr, along: Option<f32>) {
+        let event = match along.filter(|value| value.is_finite()) {
+            Some(along) if self.return_position_peers.contains(&addr) => {
+                ProtoEvent::LeaveAt { along }
+            }
+            _ => ProtoEvent::Leave(0),
+        };
+        self.listener.reply(addr, event).await;
+    }
+
     /// Whether a peer may drive input here. Local capture is only needed to
     /// hand the shared pointer back; an independent pointer returns control
     /// through its own edges, so a capture backend that is still starting or
@@ -481,11 +497,16 @@ impl ListenTask {
     /// Stops treating `addr` as controlling this screen, and tells the
     /// service when no peer controls it any more.
     fn end_control(&mut self, addr: SocketAddr) {
+        self.end_control_at(addr, None);
+    }
+
+    fn end_control_at(&mut self, addr: SocketAddr, along: Option<f32>) {
         let was_active = self.active_inputs.remove(&addr);
         if was_active {
             let _ = self.event_tx.send(EmulationEvent::Left {
                 addr,
                 side: self.entered_from.get(&addr).map(|side| to_ipc_pos(*side)),
+                along,
             });
         }
         if was_active && self.active_inputs.is_empty() {
@@ -733,6 +754,13 @@ impl ListenTask {
                         log::trace!("{event} <-<-<-<-<- {addr}");
                         last_response.insert(addr, Instant::now());
                         match event {
+                            ProtoEvent::InputCapabilities(bits) => {
+                                if bits & syntra_proto::CAP_RETURN_POSITION != 0 {
+                                    self.return_position_peers.insert(addr);
+                                } else {
+                                    self.return_position_peers.remove(&addr);
+                                }
+                            }
                             ProtoEvent::EnterVia { side, via } => {
                                 // Arrived through `via` after a handoff: our
                                 // own map says on which side that device sits.
@@ -892,6 +920,7 @@ impl ListenTask {
                         }
                     }
                     Some(ListenEvent::Accept { addr, fingerprint }) => {
+                        self.return_position_peers.remove(&addr);
                         last_response.insert(addr, Instant::now());
                         self.peer_fingerprints.insert(addr, fingerprint.clone());
                         self.event_tx.send(EmulationEvent::Connected { addr, fingerprint }).expect("channel closed");
@@ -905,7 +934,7 @@ impl ListenTask {
                     None => break
                 }}
                 event = self.emulation_proxy.event() => {
-                    if let EmulationEvent::PointerEdge { addr, edge } = event {
+                    if let EmulationEvent::PointerEdge { addr, edge, along } = event {
                         if self.start_handoff(addr, edge).await {
                             continue;
                         }
@@ -916,9 +945,9 @@ impl ListenTask {
                         {
                             log::info!("independent pointer of {addr} left through the {edge:?} edge");
                             log::info!("[route] OUT {addr} leaves through the {edge:?} edge (back to it)");
-                            self.end_control(addr);
+                            self.end_control_at(addr, along);
                             self.emulation_proxy.remove(addr);
-                            self.listener.reply(addr, ProtoEvent::Leave(0)).await;
+                            self.return_pointer(addr, along).await;
                         }
                         continue;
                     }
@@ -929,7 +958,7 @@ impl ListenTask {
                     EmulationRequest::Reenable => self.emulation_proxy.reenable(),
                     EmulationRequest::SetBackend(backend) => self.emulation_proxy.set_backend(backend),
                     // notify the other end that we hit a barrier (should release capture)
-                    EmulationRequest::Release(addr) => self.listener.reply(addr, ProtoEvent::Leave(0)).await,
+                    EmulationRequest::Release(addr, along) => self.return_pointer(addr, along).await,
                     EmulationRequest::ChangePort(port) => {
                         self.listener.request_port_change(port);
                         let result = self.listener.port_changed().await;
@@ -1011,6 +1040,7 @@ impl ListenTask {
                         self.end_control(addr);
                         self.entered_from.remove(&addr);
                         self.peer_fingerprints.remove(&addr);
+                        self.return_position_peers.remove(&addr);
                         if self.relay.is_some_and(|(source, _)| source == addr) {
                             self.relay = None;
                         }
@@ -1388,8 +1418,8 @@ impl EmulationTask {
                                 }
                             }
                             emulation.consume(event, handle).await?;
-                            if let Some(edge) = emulation.take_pointer_edge(handle) {
-                                let _ = self.event_tx.send(EmulationEvent::PointerEdge { addr, edge });
+                            if let Some(exit) = emulation.take_pointer_edge(handle) {
+                                let _ = self.event_tx.send(EmulationEvent::PointerEdge { addr, edge: exit.edge, along: exit.along });
                             }
                         }
                     },

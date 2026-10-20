@@ -380,6 +380,64 @@ mod tests {
             let _ = text;
         }
     }
+    /// The ids a catalog defines, one per top-level message line.
+    fn message_ids(source: &str) -> Vec<String> {
+        source
+            .lines()
+            .filter_map(|line| {
+                let (id, _) = line.split_once('=')?;
+                let id = id.trim_end();
+                let valid = id
+                    .chars()
+                    .next()
+                    .is_some_and(|first| first.is_ascii_alphabetic())
+                    && id
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+                // A continuation line is indented, so a message starts at column 0.
+                (valid && !line.starts_with(char::is_whitespace)).then(|| id.to_owned())
+            })
+            .collect()
+    }
+
+    /// A message id defined twice makes the bundle refuse the whole catalog
+    /// when it is loaded, which `FluentResource::try_new` alone does not catch.
+    #[test]
+    fn no_embedded_catalog_defines_a_message_twice() {
+        for (name, source) in embedded_resources() {
+            let mut seen = std::collections::BTreeSet::new();
+            for id in message_ids(source) {
+                assert!(seen.insert(id.clone()), "{name} defines `{id}` twice");
+            }
+        }
+    }
+
+    /// Every language offers every message, so none silently falls back to
+    /// another language's text.
+    #[test]
+    fn every_embedded_catalog_defines_the_same_messages() {
+        let catalogs: Vec<_> = embedded_resources()
+            .into_iter()
+            .map(|(name, source)| {
+                (
+                    name,
+                    message_ids(source)
+                        .into_iter()
+                        .collect::<std::collections::BTreeSet<_>>(),
+                )
+            })
+            .collect();
+        let (first_name, first) = &catalogs[0];
+        for (name, ids) in &catalogs[1..] {
+            let missing: Vec<_> = first.difference(ids).collect();
+            let extra: Vec<_> = ids.difference(first).collect();
+            assert!(
+                missing.is_empty() && extra.is_empty(),
+                "{name} differs from {first_name}: missing {missing:?}, extra {extra:?}"
+            );
+        }
+    }
+
     #[test]
     fn interpolates() {
         let l = Localizer::new("en-US").unwrap();

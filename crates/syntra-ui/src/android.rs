@@ -1,4 +1,14 @@
-//! Android application host: an in-process service and desktop-compatible IPC dashboard.
+//! Android application host: the daemon service and the dashboard in one process.
+//!
+//! The service runs on its own thread with its own runtime and still listens
+//! on the daemon's Unix control socket (placed in the app's private data
+//! directory through the environment); the dashboard connects to it with the
+//! same client code a desktop dashboard uses. There is no Android-specific
+//! transport between the two, which is what keeps one dashboard
+//! implementation for every platform. The process boundary the desktop has
+//! between them does not exist here, so the architecture rules about crate
+//! dependencies apply to desktop builds only; this host is the one place the
+//! UI crate links the core.
 
 #[cfg(target_os = "android")]
 struct MulticastLock(jni::objects::GlobalRef);
@@ -152,7 +162,12 @@ pub fn android_main(app: slint::android::AndroidApp) {
             // `log_config` is the one installed above, so runtime level
             // changes reach the logger the service writes to.
             let result = runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
-                let config = syntra_core::config::Config::new()?;
+                // The hosting process has no command line of its own; the
+                // service runs in-process and takes everything from the
+                // configuration directory announced through the environment.
+                let config = syntra_core::config::Config::load(
+                    syntra_core::config::ConfigOverrides::default(),
+                )?;
                 let mut service = syntra_core::service::Service::new(config, log_config).await?;
                 service.run().await?;
                 Ok::<(), Box<dyn std::error::Error>>(())

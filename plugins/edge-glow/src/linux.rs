@@ -1,7 +1,7 @@
 //! The plugin's Linux event loop.
 
 use std::{
-    io::{self, BufReader},
+    io::{self, BufReader, Write},
     rc::Rc,
     sync::mpsc,
     thread,
@@ -10,6 +10,7 @@ use std::{
 
 use syntra_plugin_api::{Edge, Message};
 use syntra_plugin_edge_glow::{
+    owned::Owned,
     paint::Paint,
     protocol,
     render::{Candidate, Draw, RenderError, choose},
@@ -48,16 +49,18 @@ fn report(text: &str) {
 }
 
 pub fn main() {
-    if std::env::args().any(|argument| argument == "--describe") {
-        let mut out = io::stdout().lock();
-        if protocol::send_hello(&mut out).is_err() {
-            std::process::exit(1);
-        }
-        return;
-    }
     if let Err(error) = run() {
         report(&format!("{error}"));
         std::process::exit(1);
+    }
+}
+
+/// Writes one message to the daemon. A closed pipe means the daemon is gone,
+/// which the reader notices on its own.
+fn send(message: &Message) {
+    if let Ok(line) = message.encode_line() {
+        let mut out = io::stdout().lock();
+        let _ = out.write_all(line.as_bytes()).and_then(|()| out.flush());
     }
 }
 
@@ -65,6 +68,16 @@ fn run() -> Result<(), String> {
     // The handshake goes first: the daemon gives a plugin only a short time to
     // speak, and the graphics below can take longer than that to start.
     protocol::send_hello(&mut io::stdout().lock()).map_err(|error| error.to_string())?;
+    // The plugin owns its settings: say what they are and what is in force.
+    let owned = Owned::load(Owned::default_path());
+    send(&owned.declaration());
+    let mut state = State::default();
+    state.handle(
+        Message::Settings {
+            values: owned.values(),
+        },
+        Instant::now(),
+    );
 
     // Windows are made on X11, through XWayland on a Wayland session: winit
     // cannot place or raise a Wayland toplevel, and GNOME has no layer-shell.
@@ -75,14 +88,17 @@ fn run() -> Result<(), String> {
     event_loop.set_control_flow(ControlFlow::Wait);
 
     let proxy = event_loop.create_proxy();
-    spawn_reader(proxy);
+    spawn_reader(proxy.clone());
 
     let mut app = App {
-        state: State::default(),
+        state,
+        owned,
         started: Instant::now(),
         windows: None,
         failed: None,
         next_frame: Instant::now(),
+        proxy,
+        settings_window: None,
     };
     event_loop
         .run_app(&mut app)
@@ -178,11 +194,71 @@ impl StripDraw for CpuWindow {
 
 struct App {
     state: State,
+    /// The plugin's own settings, kept in its own file.
+    owned: Owned,
     started: Instant,
     windows: Option<Windows>,
     failed: Option<String>,
     /// When the next animation frame is due. Draws before that are skipped.
     next_frame: Instant,
+    /// Wakes this loop from the settings window's reader thread.
+    proxy: EventLoopProxy<Wake>,
+    /// The open settings window, a process of its own.
+    settings_window: Option<std::process::Child>,
+}
+
+impl App {
+    /// Opens the settings window, or brings it back if it is open: a window
+    /// already showing is replaced, which also raises it.
+    fn open_settings(&mut self, theme: &[(String, String)]) {
+        if let Some(mut child) = self.settings_window.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        let theme: String = theme
+            .iter()
+            .filter(|(name, value)| !name.contains('\n') && !value.contains('\n'))
+            .map(|(name, value)| format!("{name}={value}\n"))
+            .collect();
+        let spawned = std::env::current_exe().and_then(|executable| {
+            std::process::Command::new(executable)
+                .arg("--settings")
+                .env("SYNTRA_PLUGIN_THEME", theme)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+        });
+        let mut child = match spawned {
+            Ok(child) => child,
+            Err(error) => {
+                report(&format!("cannot open the settings window: {error}"));
+                return;
+            }
+        };
+        report(&format!("settings window opened, pid {}", child.id()));
+        // Each change the window accepted is already saved; it is passed on
+        // here so the glow and Syntra show it at once. Never to the daemon's
+        // pipe directly: only this process speaks to the daemon.
+        if let Some(output) = child.stdout.take() {
+            let proxy = self.proxy.clone();
+            thread::spawn(move || {
+                let (tx, rx) = mpsc::channel();
+                let forward = thread::spawn(move || {
+                    for message in rx {
+                        if matches!(message, Message::ChangeSetting { .. })
+                            && proxy.send_event(Wake::Message(message)).is_err()
+                        {
+                            return;
+                        }
+                    }
+                });
+                protocol::read_messages(BufReader::new(output), &tx);
+                drop(tx);
+                let _ = forward.join();
+            });
+        }
+        self.settings_window = Some(child);
+    }
 }
 
 impl App {
@@ -360,6 +436,33 @@ impl ApplicationHandler<Wake> for App {
                     }
                     _ => {}
                 }
+                // Settings belong to the plugin: the daemon's stored values are
+                // only adopted on a first run, and a user's change is checked
+                // and kept here, then declared back so the interface shows it.
+                let message = match message {
+                    Message::Settings { values } => {
+                        if self.owned.adopt(&values) {
+                            send(&self.owned.declaration());
+                        }
+                        Message::Settings {
+                            values: self.owned.values(),
+                        }
+                    }
+                    Message::ChangeSetting { key, value } => {
+                        if !self.owned.change(&key, &value) {
+                            report(&format!("refused setting `{key}`"));
+                        }
+                        send(&self.owned.declaration());
+                        Message::Settings {
+                            values: self.owned.values(),
+                        }
+                    }
+                    Message::OpenSettings { theme } => {
+                        self.open_settings(&theme);
+                        return;
+                    }
+                    other => other,
+                };
                 self.state.handle(message, Instant::now());
                 if !self.renderer_satisfied() {
                     // The user asked for a different renderer than the one in

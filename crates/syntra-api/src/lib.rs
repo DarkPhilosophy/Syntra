@@ -583,6 +583,123 @@ pub enum PluginHealth {
     Failed,
 }
 
+/// Where a plugin is in its life, in one vocabulary for every client.
+///
+/// Unlike [`PluginHealth`] this is a closed ladder from "known" to
+/// "running", so an interface can say what is missing and what to do next.
+/// It is carried in an additive field: [`PluginHealth`] keeps its older
+/// values, so a client written before this existed still understands every
+/// status it receives.
+#[derive(Debug, Eq, PartialEq, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginState {
+    /// Found and readable, files present, not yet approved.
+    #[default]
+    Installed,
+    /// The user approved this content; it is not switched on.
+    Approved,
+    /// Approved (or bundled) and switched on, no process yet.
+    Enabled,
+    /// A process is up and has not completed its handshake.
+    Starting,
+    /// Handshake complete and the plugin is answering.
+    Ready,
+    /// Running a task. Only reported for a plugin that is on-demand.
+    Running,
+    /// Exited, crashed, refused to start or stopped answering. `error` says
+    /// why.
+    Failed,
+    /// Cannot run here: a manifest or protocol version this daemon does not
+    /// understand, an executable missing for this platform, or a
+    /// capability this build cannot provide. Never launched.
+    Unsupported,
+}
+
+/// A change a client asked for that the daemon has not applied yet.
+///
+/// The distinction matters: a switch the user flipped but the daemon has not
+/// yet accepted is *pending*, never shown as if it had happened.
+#[derive(Debug, Eq, PartialEq, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginPending {
+    /// Waiting for the daemon to accept an approval.
+    Approving,
+    /// Waiting for the daemon to accept a withdrawal of approval.
+    Revoking,
+    /// Waiting for the daemon to switch the plugin on.
+    Enabling,
+    /// Waiting for the daemon to switch the plugin off.
+    Disabling,
+    /// Waiting for an install or update to be copied.
+    Installing,
+    /// Waiting for an uninstall to finish.
+    Removing,
+}
+
+/// Whether the user has approved the exact content a plugin would run.
+///
+/// Approval is bound to a content digest, not to a name: a plugin whose
+/// files or arguments changed returns to [`PluginTrust::ChangedSinceApproval`]
+/// and needs a fresh decision. Plugins shipped with Syntra are
+/// [`PluginTrust::Bundled`], decided by where the daemon found them and never
+/// by anything the manifest says about itself.
+#[derive(Debug, Eq, PartialEq, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginTrust {
+    /// Found beside the daemon executable: part of the distribution, under
+    /// its distribution trust policy.
+    Bundled,
+    /// Discovered or installed, never approved. It stays stopped.
+    #[default]
+    Unapproved,
+    /// The user approved exactly the digest shown.
+    Approved,
+    /// It was approved once, but its content is different now. Stopped until
+    /// the new digest is approved.
+    ChangedSinceApproval,
+}
+
+/// Where the daemon found a plugin.
+#[derive(Debug, Eq, PartialEq, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginOrigin {
+    /// Next to the daemon executable.
+    Bundled,
+    /// Dropped by the user into the plugins directory. Never removed by
+    /// Syntra.
+    #[default]
+    DropIn,
+    /// Copied into Syntra's own package store by an install action. The only
+    /// kind Syntra may uninstall.
+    Installed,
+}
+
+/// What a plugin can do for the daemon, derived from the capabilities it
+/// declares and the user approved.
+#[derive(Debug, Eq, PartialEq, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginRole {
+    /// Offers copied files and publishes received files as a desktop paste.
+    FileClipboard,
+    /// Serves one transfer through a mounted read-only view.
+    MountedFileReceive,
+    /// Is told when a pointer crosses a screen edge.
+    Pointer,
+}
+
+/// One role and whether this plugin is the one the daemon uses for it.
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
+pub struct PluginRoleStatus {
+    /// The role.
+    pub role: PluginRole,
+    /// This plugin is the active provider of the role.
+    pub active: bool,
+    /// The user explicitly chose this plugin for the role.
+    pub preferred: bool,
+    /// Why the plugin cannot serve the role right now, when it cannot.
+    pub unavailable: Option<String>,
+}
+
 /// One thing a plugin lets the user change, described rather than coded: the
 /// interface draws the control from this and knows nothing of the plugin.
 #[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
@@ -688,6 +805,10 @@ pub struct PluginStatus {
     /// written before settings existed reads.
     #[serde(default)]
     pub settings: Vec<PluginSetting>,
+    /// The plugin keeps its own settings and draws them in its own window,
+    /// opened with [`FrontendRequest::OpenPluginSettings`].
+    #[serde(default)]
+    pub owns_settings: bool,
     /// Absolute path of the manifest this was read from.
     pub manifest_path: String,
     /// Build the plugin reported at handshake; empty until it has connected.
@@ -709,6 +830,101 @@ pub struct PluginStatus {
     pub running: bool,
     /// Why the plugin is unavailable, when it is.
     pub error: Option<String>,
+    /// Whether the user approved the content the daemon would run.
+    ///
+    /// Absent from a daemon older than plugin approval, which reads as
+    /// [`PluginTrust::Unapproved`].
+    #[serde(default)]
+    pub trust: PluginTrust,
+    /// Where the daemon found the plugin.
+    #[serde(default)]
+    pub origin: PluginOrigin,
+    /// Content digest of the package as it is now: executable, resources,
+    /// arguments and declared capabilities. Empty when it could not be
+    /// computed. This is what an approval is bound to.
+    #[serde(default)]
+    pub digest: String,
+    /// The digest the user approved, when one was approved.
+    #[serde(default)]
+    pub approved_digest: Option<String>,
+    /// Arguments the daemon passes to the executable, exactly as launched.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Capability the manifest declares, as roles.
+    #[serde(default)]
+    pub roles: Vec<PluginRoleStatus>,
+    /// The most recent diagnostic lines the plugin wrote to its error
+    /// stream, sanitised and bounded. Never the plugin's payload.
+    #[serde(default)]
+    pub diagnostics: Vec<String>,
+    /// Whether a client may uninstall this plugin: only an
+    /// [`PluginOrigin::Installed`] package.
+    #[serde(default)]
+    pub removable: bool,
+    /// Where the plugin is in its life, in the one vocabulary every client
+    /// shares. Absent from an older daemon, which reads as
+    /// [`PluginState::Installed`]; clients then fall back to `health`.
+    #[serde(default)]
+    pub state: PluginState,
+    /// A request the user made that the daemon has not applied yet.
+    #[serde(default)]
+    pub pending: Option<PluginPending>,
+    /// Set only on a *candidate*: a package the user asked to review that is
+    /// not installed. Carried here, not in a new event variant, so a client
+    /// written before plugin review keeps decoding every event the daemon
+    /// broadcasts. A candidate is listed with `enabled` false and is never
+    /// launched.
+    #[serde(default)]
+    pub review: Option<PluginReview>,
+    /// The reason the most recent lifecycle request for this plugin was
+    /// refused, until the next one succeeds. Also copied into `error` so a
+    /// client that predates this field still shows it.
+    #[serde(default)]
+    pub action_error: Option<String>,
+}
+
+/// What a plugin package contains, shown before the user installs or approves
+/// it. Produced by reading files only: no code of the plugin ran.
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
+pub struct PluginReview {
+    /// Path that was inspected, as the client gave it.
+    pub path: String,
+    /// The manifest was readable and valid; when it was not, `error` says why.
+    pub valid: bool,
+    /// Why the package cannot be used, when it cannot.
+    pub error: Option<String>,
+    /// The manifest names a version this daemon does not understand.
+    pub unsupported: bool,
+    /// Plugin identifier.
+    pub id: String,
+    /// Human-readable name.
+    pub name: String,
+    /// Version declared by the manifest.
+    pub version: String,
+    /// Person or organisation responsible.
+    pub author: String,
+    /// Where the source can be audited.
+    pub source: Option<String>,
+    /// Licence identifier.
+    pub license: Option<String>,
+    /// The file the daemon would run.
+    pub executable: String,
+    /// The arguments it would be run with.
+    pub args: Vec<String>,
+    /// MIME types the plugin declares.
+    pub mime_types: Vec<String>,
+    /// Roles the declared capabilities can fill.
+    pub roles: Vec<PluginRole>,
+    /// Pointer events requested.
+    pub pointer_events: bool,
+    /// A live mounted view requested.
+    pub requires_live_mount: bool,
+    /// Content digest an approval would be bound to.
+    pub digest: String,
+    /// Every file the digest covers, relative to the package.
+    pub files: Vec<String>,
+    /// A plugin with this id already exists; installing replaces it.
+    pub replaces_existing: bool,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
@@ -931,6 +1147,10 @@ pub enum FrontendEvent {
     LogSpec(String),
     /// Authoritative list of plugins and their current state.
     Plugins(Vec<PluginStatus>),
+    // Plugin review and lifecycle failures deliberately have no event variant
+    // of their own: the listener broadcasts to every attached client, and a
+    // client that does not know a variant treats the whole stream as broken.
+    // They ride on [`PluginStatus`] as additive optional fields instead.
     /// Identity of the daemon the client is attached to.
     DaemonInfo(DaemonInfo),
 }
@@ -1112,6 +1332,75 @@ pub enum FrontendRequest {
         key: String,
         /// Requested value, in the form of the setting's kind.
         value: String,
+    },
+    /// Ask a plugin that owns its settings to open its own settings window.
+    ///
+    /// The plugin draws it in its own process, with Syntra's controls;
+    /// `theme` lends it the interface's present colours as `(name, value)`.
+    OpenPluginSettings {
+        /// Plugin identifier.
+        id: String,
+        /// Theme values, such as `("accent", "#80c7ff")`.
+        #[serde(default)]
+        theme: Vec<(String, String)>,
+    },
+    /// Inspect a plugin package without running anything.
+    ///
+    /// `path` is a manifest file or a directory holding one. The daemon reads
+    /// and digests the package and records the outcome in the plugin's
+    /// [`PluginStatus::review`], delivered with the next
+    /// [`FrontendEvent::Plugins`]; no code is executed and nothing is
+    /// copied or enabled.
+    ReviewPlugin {
+        /// Manifest file or the directory containing `syntra-plugin.json`.
+        path: String,
+    },
+    /// Copy a reviewed package into Syntra's own package store, disabled and
+    /// unapproved. Replaces an earlier install of the same id, which then
+    /// needs a fresh approval for the new content.
+    InstallPlugin {
+        /// Manifest file or directory, as in [`FrontendRequest::ReviewPlugin`].
+        path: String,
+    },
+    /// Approve exactly the content shown to the user.
+    ///
+    /// `digest` must be the one the daemon reported for the plugin now;
+    /// if the content changed since it was displayed, the approval is
+    /// refused and the plugin stays stopped.
+    ApprovePlugin {
+        /// Plugin identifier.
+        id: String,
+        /// Content digest the user was shown.
+        digest: String,
+    },
+    /// Withdraw an approval. The plugin stops and stays stopped.
+    RevokePluginApproval {
+        /// Plugin identifier.
+        id: String,
+    },
+    /// Replace an installed plugin with the content at `path`, keeping its
+    /// settings. The new content is unapproved until the user approves its
+    /// digest.
+    UpdatePlugin {
+        /// Plugin identifier of the installed package to replace.
+        id: String,
+        /// Manifest file or directory holding the new content.
+        path: String,
+    },
+    /// Remove a package Syntra installed. A drop-in plugin, and a bundled
+    /// one, is never removed.
+    UninstallPlugin {
+        /// Plugin identifier.
+        id: String,
+    },
+    /// Choose which plugin provides a role when several can.
+    ///
+    /// `id` of `None` clears the preference and returns to the default.
+    SetPluginRolePreference {
+        /// The role being assigned.
+        role: PluginRole,
+        /// The preferred provider, or `None` for the default.
+        id: Option<String>,
     },
 }
 

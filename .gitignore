@@ -20,3 +20,7 @@ crates/syntra-ui/android/.gradle/
 # agent scratch directories
 .superpowers/
 docs/superpowers/
+
+# local build scratch and deploy backups
+/.backup/
+/.edge-*/

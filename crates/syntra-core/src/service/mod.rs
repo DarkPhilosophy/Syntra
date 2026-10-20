@@ -1,10 +1,6 @@
 #[cfg(target_os = "android")]
 use crate::android_clipboard as arboard;
 use crate::{
-    adapter_manager::{
-        AdapterId as ProcessAdapterId, AdapterPaths, AdapterProcessManager, ManagerCommand,
-        ManagerEvent,
-    },
     capture::{Capture, CaptureType, ICaptureEvent},
     client::ClientManager,
     clipboard::{Clipboard, ClipboardContent},
@@ -19,6 +15,9 @@ use crate::{
     listen::{ListenerCreationError, SyntraListener},
     manual_transfer::{ManualAction, ManualTransfers},
     peer_profile,
+    plugins::supervisor::{
+        AdapterId as ProcessAdapterId, AdapterProcessManager, ManagerCommand, ManagerEvent,
+    },
     transfer_manager::{TransferAction, TransferFrontendEvent, TransferOwner, TransferState},
 };
 use futures::StreamExt;
@@ -28,7 +27,6 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     io,
     net::{IpAddr, SocketAddr},
-    path::PathBuf,
     sync::{Arc, RwLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -57,10 +55,30 @@ pub enum ServiceError {
     #[error("failed to load certificate: `{0}`")]
     Certificate(#[from] crypto::Error),
     #[error(transparent)]
-    Adapter(#[from] crate::adapter_manager::ManagerError),
+    Adapter(#[from] crate::plugins::supervisor::ManagerError),
     #[error(transparent)]
     History(#[from] syntra_store::HistoryError),
 }
+
+/// Work a plugin request started on the blocking pool, delivered back to the
+/// service loop when it finishes.
+pub(crate) enum PluginJob {
+    /// A package was inspected for review.
+    Reviewed(syntra_api::PluginReview),
+    /// An install or update finished.
+    Installed {
+        /// The plugin the package declares, or the one being updated when the
+        /// package could not be read.
+        id: String,
+        /// What inspecting the package found, kept so an invalid one can be
+        /// shown with its reason.
+        review: syntra_api::PluginReview,
+        /// Whether the copy succeeded, with a reason when it did not.
+        result: Result<(), String>,
+    },
+}
+
+const PLUGIN_JOB_CAPACITY: usize = 16;
 
 pub struct Service {
     /// configuration
@@ -136,6 +154,14 @@ pub struct Service {
     manifest_offers: mpsc::Receiver<transfers::ManifestOffer>,
     /// Latest clipboard selection; older scans that finish late are dropped.
     manifest_generation: u64,
+    /// Results of plugin work done on the blocking pool (reviewing and
+    /// installing packages), so the loop never waits on file input and output.
+    plugin_jobs_tx: mpsc::Sender<PluginJob>,
+    plugin_jobs: mpsc::Receiver<PluginJob>,
+    /// The plugin serving each transfer received through a mounted view, by
+    /// transfer id. Chosen when the transfer starts and kept for it, so a
+    /// provider change never redirects a transfer already running.
+    transfer_providers: HashMap<String, String>,
     /// UI transfer ids that actually moved bytes and therefore exist in the UI
     announced_transfers: HashSet<syntra_api::ClipboardTransferId>,
     /// Last progress snapshot used for accurate terminal status.
@@ -171,20 +197,6 @@ struct Incoming {
 }
 
 const SOURCE_RESULT_CAPACITY: usize = 32;
-
-/// Executable names of the bundled plugins, looked up beside the daemon.
-///
-/// They are resolved relative to the running binary rather than `PATH` so a
-/// build tree, a package install and a portable directory all pick the
-/// plugins that match the daemon's version.
-#[cfg(windows)]
-const CLIPBOARD_PLUGIN_EXECUTABLE: &str = "syntra-plugin-clipboard.exe";
-#[cfg(not(windows))]
-const CLIPBOARD_PLUGIN_EXECUTABLE: &str = "syntra-plugin-clipboard";
-#[cfg(windows)]
-const FUSE_PLUGIN_EXECUTABLE: &str = "syntra-plugin-fuse.exe";
-#[cfg(not(windows))]
-const FUSE_PLUGIN_EXECUTABLE: &str = "syntra-plugin-fuse";
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum Peer {
@@ -283,30 +295,16 @@ impl Service {
         emulation.set_multi_hop(config.multi_hop());
         let legacy_clipboard = uses_desktop_clipboard(config.emulation_backend());
         let clipboard = Clipboard::new();
-        let executable_dir = std::env::current_exe()?
-            .parent()
-            .map(PathBuf::from)
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::NotFound,
-                    "service executable has no parent directory",
-                )
-            })?;
         // Plugins are optional by definition: they run out of process so a
-        // missing or broken one degrades a single capability. Refusing to
-        // start the whole service because a helper is absent would make
-        // input sharing depend on a clipboard integration.
-        let adapter_paths = AdapterPaths::new(
-            executable_dir.join(CLIPBOARD_PLUGIN_EXECUTABLE),
-            executable_dir.join(FUSE_PLUGIN_EXECUTABLE),
-        );
-        // Started regardless of which built-in helpers exist: they are Linux
-        // packaging, and without a supervisor no other plugin, such as the
-        // edge glow, could run on Windows or macOS at all.
-        let (manager, events) = AdapterProcessManager::start(adapter_paths);
+        // missing or broken one degrades a single capability. The supervisor
+        // starts with no plugin at all; what runs is decided afterwards from
+        // the registry, so an absent or unapproved provider never stands in
+        // the way of input sharing.
+        let (manager, events) = AdapterProcessManager::start();
         let (adapter_manager, adapter_events) = (Some(manager), Some(events));
         let (source_result_tx, source_results) = mpsc::channel(SOURCE_RESULT_CAPACITY);
         let (manifest_offer_tx, manifest_offers) = mpsc::channel(SOURCE_RESULT_CAPACITY);
+        let (plugin_jobs_tx, plugin_jobs) = mpsc::channel(PLUGIN_JOB_CAPACITY);
 
         // create dns resolver
         let resolver = DnsResolver::new()?;
@@ -384,6 +382,9 @@ impl Service {
             manifest_offer_tx,
             manifest_offers,
             manifest_generation: 0,
+            plugin_jobs_tx,
+            plugin_jobs,
+            transfer_providers: HashMap::new(),
             last_file_clipboard: None,
             announced_transfers: HashSet::new(),
             manual_transfers: ManualTransfers::new(),
@@ -398,6 +399,9 @@ impl Service {
                 let registry = crate::plugins::PluginRegistry::discover(
                     &std::env::current_exe().unwrap_or_default(),
                     config.as_ref().map(|directory| directory.join("plugins")),
+                    config
+                        .as_ref()
+                        .map(|directory| directory.join("plugin-store")),
                 );
                 // Choices live apart from the manifests: what a user dropped
                 // into `plugins` must never be overwritten by what the daemon
@@ -450,8 +454,9 @@ impl Service {
 
         // A plugin the user switched on in an earlier session must come back
         // with the daemon; otherwise it stays dead until toggled off and on.
-        for id in self.plugins.pointer_plugins() {
-            self.start_pointer_plugin(&id, false);
+        self.sync_file_clipboard_provider();
+        for (id, role) in self.plugins.resident_plugins() {
+            self.start_resident_plugin(&id, Some(role), false);
         }
 
         let mut profile_tick = tokio::time::interval(Duration::from_secs(1));
@@ -489,6 +494,11 @@ impl Service {
                 _ = self.frontend_event_pending.notified() => self.handle_frontend_pending().await,
                 event = self.emulation.event() => self.handle_emulation_event(event).await,
                 event = self.capture.event() => self.handle_capture_event(event).await,
+                job = self.plugin_jobs.recv() => {
+                    if let Some(job) = job {
+                        self.finish_plugin_job(job);
+                    }
+                },
                 event = recv_optional(&mut self.adapter_events), if self.adapter_events.is_some() => {
                     match event {
                         Some(event) => self.handle_adapter_event(event).await,

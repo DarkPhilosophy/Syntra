@@ -24,6 +24,7 @@ Do not conflate these boundaries. `syntra-api` is local daemon-to-client IPC; `s
 - [Client API](docs/api.md) — socket transport, requests, events and compatibility.
 - [Plugins](docs/plugins.md) — manifests, supervision and stdio protocol.
 - [Peer protocol](docs/protocol.md) — DTLS setup and machine-to-machine messages.
+- Coordinate-preserving input returns and legacy-peer fallback are specified in [peer protocol compatibility](docs/protocol.md#compatibility-and-hello).
 - [Logging](docs/logging.md) — subsystem filters and diagnostics.
 - [Configuration](docs/configuration.md) — TOML settings, identity and overrides.
 

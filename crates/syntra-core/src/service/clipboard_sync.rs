@@ -37,8 +37,12 @@ impl Service {
         }
         self.last_file_clipboard = Some(value.clone());
         log::info!("native file clipboard detected: mime={mime_type}");
-        if let Some(manager) = self.adapter_manager.as_ref() {
+        if let (Some(manager), Some(provider)) = (
+            self.adapter_manager.as_ref(),
+            self.file_clipboard_provider(),
+        ) {
             let _ = manager.try_send(ManagerCommand::ClipboardData {
+                id: provider,
                 transfer_id: "remote-desktop".to_string(),
                 mime_type,
                 value,

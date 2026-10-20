@@ -1,0 +1,17 @@
+#!/bin/sh
+# A minimal plugin that fills the file clipboard role.
+#
+# It does what every plugin must: announce itself with the id it was launched
+# under, then keep reading the daemon's frames from stdin until the daemon
+# closes it. A real provider would, between those two, read the desktop's copied
+# files and answer paste requests; this one only shows the shape of the
+# conversation so a package can be reviewed, approved and run end to end.
+#
+# The frame is one line of JSON, as the protocol requires. `adapter_id` must be
+# this plugin's `id`; a different one is refused.
+printf '%s\n' '{"type":"hello","data":{"protocol_version":1,"adapter_id":"example-file-provider","name":"Example file provider","capabilities":{"clipboard_read":true,"paste":true,"cancel":true,"requires_live_mount":false,"pointer_events":false,"mime_types":["text/uri-list","x-special/gnome-copied-files"]}}}'
+
+# Frames from the daemon are ignored; reading them keeps the pipe drained.
+while IFS= read -r _line; do
+    :
+done

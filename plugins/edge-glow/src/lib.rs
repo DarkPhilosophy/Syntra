@@ -5,6 +5,7 @@
 //! the graphics that draw into them are per platform; Linux has them today.
 
 pub mod glow;
+pub mod owned;
 pub mod paint;
 pub mod protocol;
 pub mod render;

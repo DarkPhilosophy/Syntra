@@ -1,0 +1,21 @@
+{
+  "$schema": "../../manifest.schema.json",
+  "manifest_version": 1,
+  "protocol_version": 1,
+  "id": "example-file-provider",
+  "name": "Example file provider",
+  "description": "A reference third-party plugin that fills the file clipboard role. It announces itself and then waits; a real provider would read the desktop selection and publish received files.",
+  "version": "1.0.0",
+  "author": "Example author",
+  "license": "GPL-3.0-or-later",
+  "executable": "bin/example-file-provider",
+  "args": ["--serve"],
+  "resources": ["bin"],
+  "capabilities": {
+    "clipboard_read": true,
+    "paste": true,
+    "cancel": true,
+    "requires_live_mount": false,
+    "mime_types": ["text/uri-list", "x-special/gnome-copied-files"]
+  }
+}

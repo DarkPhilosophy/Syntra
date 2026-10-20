@@ -207,9 +207,23 @@ pub fn parse_hex(value: &str) -> Option<Rgb> {
     ))
 }
 
+/// Writes 8-bit channels as `#rrggbb`, the form [`parse_hex`] reads.
+pub fn to_hex((red, green, blue): (u8, u8, u8)) -> String {
+    format!("#{red:02x}{green:02x}{blue:02x}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hex_colours_round_trip() {
+        assert_eq!(to_hex((0x33, 0xcc, 0xff)), "#33ccff");
+        assert_eq!(
+            parse_hex(&to_hex((1, 2, 3))),
+            Some((1.0 / 255.0, 2.0 / 255.0, 3.0 / 255.0))
+        );
+    }
 
     fn at(millis: u64) -> Duration {
         Duration::from_millis(millis)

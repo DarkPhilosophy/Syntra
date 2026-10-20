@@ -6,12 +6,16 @@
 //! desktop dashboard, the CLI, and third-party plugins — reach it only over
 //! the control socket described by [`syntra_api::paths`].
 
+mod args;
+
 use std::future::Future;
 use std::io;
 use std::process;
 
+use args::{Args, Command};
+use clap::Parser;
 use syntra_api::{IpcError, IpcListenerCreationError, paths};
-use syntra_core::config::{Command, Config, ConfigError};
+use syntra_core::config::{Config, ConfigError};
 use syntra_core::service::{Service, ServiceError};
 use syntra_core::{capture_test, emulation_test};
 use syntra_input_capture::InputCaptureError;
@@ -69,10 +73,11 @@ fn init_logging() -> syntra_log::LogConfig {
 }
 
 fn run(log_config: syntra_log::LogConfig) -> Result<(), DaemonError> {
-    let config = Config::new()?;
-    match config.command() {
-        Some(Command::TestEmulation(args)) => block_on(emulation_test::run(config, args)),
-        Some(Command::TestCapture(args)) => block_on(capture_test::run(config, args)),
+    let args = Args::parse();
+    let config = Config::load(args.overrides())?;
+    match args.command() {
+        Some(Command::TestEmulation(_)) => block_on(emulation_test::run(config)),
+        Some(Command::TestCapture(_)) => block_on(capture_test::run(config)),
         Some(Command::Cli(args)) => block_on(syntra_cli::run(args)),
         // Running the service is the default: an installed unit invokes the
         // binary with no arguments.
