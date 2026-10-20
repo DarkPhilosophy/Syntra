@@ -229,7 +229,7 @@ pub fn snap(moving: &Monitor, x: i64, y: i64, others: &[Monitor], threshold: i64
     let height = i64::from(moving.height);
     let mut best_x: Option<(i64, i64)> = None;
     let mut best_y: Option<(i64, i64)> = None;
-    let mut consider = |best: &mut Option<(i64, i64)>, wanted: i64, candidate: i64| {
+    let consider = |best: &mut Option<(i64, i64)>, wanted: i64, candidate: i64| {
         let distance = (candidate - wanted).abs();
         if distance <= threshold && best.is_none_or(|(_, d)| distance < d) {
             *best = Some((candidate, distance));
@@ -354,7 +354,10 @@ mod tests {
         let fixed = monitor("msi", 0, 0, 2560, 1600);
         let moving = monitor("hp", 0, 0, 1920, 1080);
         // Dropped 6 px short of touching and 4 px below the top: both snap.
-        assert_eq!(snap(&moving, -1926, 4, &[fixed.clone()], 10), (-1920, 0));
+        assert_eq!(
+            snap(&moving, -1926, 4, std::slice::from_ref(&fixed), 10),
+            (-1920, 0)
+        );
         // Far from everything: left where it was dropped.
         assert_eq!(snap(&moving, -2500, 300, &[fixed], 10), (-2500, 300));
     }
