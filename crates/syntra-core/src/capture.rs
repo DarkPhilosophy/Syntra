@@ -2608,6 +2608,42 @@ mod tests {
     }
 
     /// Choosing another backend restarts capture with it at once.
+    /// A clipboard image is streamed from its own task: the request returns
+    /// before a single chunk went out, so the loop keeps forwarding input,
+    /// and a newer clipboard for the same peer cancels the one in flight.
+    #[tokio::test(flavor = "current_thread")]
+    async fn clipboard_streaming_never_holds_up_the_capture_loop() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let (mut task, _requests, _events) = capture_task();
+                let image = vec![0u8; MAX_CLIPBOARD_CHUNK_SIZE * 2_000];
+                let request = |transfer_id| CaptureRequest::SendClipboard {
+                    handle: 3,
+                    transfer_id,
+                    data: image.clone(),
+                    image_dimensions: Some((1_000, 1_000)),
+                };
+                let returned = tokio::time::timeout(
+                    Duration::from_millis(50),
+                    task.handle_inactive_request(request(1)),
+                )
+                .await;
+                assert!(returned.is_ok(), "the request waited for the stream");
+                let first = task.clipboard_sends.get(&3).expect("stream started");
+                assert!(!first.is_finished(), "nothing ran inline");
+                let first_id = first.id();
+
+                task.handle_inactive_request(request(2)).await;
+                assert_eq!(task.clipboard_sends.len(), 1, "one stream per peer");
+                assert_ne!(
+                    task.clipboard_sends[&3].id(),
+                    first_id,
+                    "newer replaced older"
+                );
+            })
+            .await;
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn choosing_a_backend_restarts_capture_with_it() {
         let (mut task, _requests, _events) = capture_task();
