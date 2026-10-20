@@ -2607,37 +2607,89 @@ mod tests {
         assert_eq!(task.input_target(phone, false), Some(hp), "after hand-off");
     }
 
-    /// A clipboard image is streamed from its own task: the request returns
-    /// before a single chunk went out, so the loop keeps forwarding input,
-    /// and a newer clipboard for the same peer cancels the one in flight.
+    /// A clipboard image is streamed from its own task. While it is on the
+    /// wire the loop still answers requests (sent inline it blocked input for
+    /// the whole image), and a newer clipboard stops the older stream.
     #[tokio::test(flavor = "current_thread")]
     async fn clipboard_streaming_never_holds_up_the_capture_loop() {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let (mut task, _requests, _events) = capture_task();
-                let image = vec![0u8; MAX_CLIPBOARD_CHUNK_SIZE * 2_000];
-                let request = |transfer_id| CaptureRequest::SendClipboard {
-                    handle: 3,
+                let peer = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+                let local = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+                let addr = peer.local_addr().unwrap();
+                local.connect(addr).await.unwrap();
+                let handle = task
+                    .conn
+                    .attach_test_peer(std::sync::Arc::new(local), addr)
+                    .await;
+                let request = |transfer_id, chunks: usize| CaptureRequest::SendClipboard {
+                    handle,
                     transfer_id,
-                    data: image.clone(),
-                    image_dimensions: Some((1_000, 1_000)),
+                    data: vec![0; MAX_CLIPBOARD_CHUNK_SIZE * chunks],
+                    // Plain clipboard bytes: an image must match its size,
+                    // and both go through the same paced stream.
+                    image_dimensions: None,
                 };
-                let returned = tokio::time::timeout(
-                    Duration::from_millis(50),
-                    task.handle_inactive_request(request(1)),
-                )
-                .await;
-                assert!(returned.is_ok(), "the request waited for the stream");
-                let first = task.clipboard_sends.get(&3).expect("stream started");
-                assert!(!first.is_finished(), "nothing ran inline");
-                let first_id = first.id();
+                let mut buf = [0u8; syntra_proto::MAX_DATAGRAM_SIZE];
 
-                task.handle_inactive_request(request(2)).await;
-                assert_eq!(task.clipboard_sends.len(), 1, "one stream per peer");
-                assert_ne!(
-                    task.clipboard_sends[&3].id(),
-                    first_id,
-                    "newer replaced older"
+                // 2 000 paced chunks take at least two seconds to send.
+                let started = Instant::now();
+                task.handle_inactive_request(request(1, 2_000)).await;
+                let mut first_chunks = 0;
+                let mut other = Vec::new();
+                while first_chunks < 10 {
+                    let n = tokio::time::timeout(Duration::from_secs(5), peer.recv(&mut buf))
+                        .await
+                        .unwrap_or_else(|_| {
+                            panic!("no image chunk arrived; other datagrams: {other:?}")
+                        })
+                        .unwrap();
+                    match ProtoEvent::decode(&buf[..n]) {
+                        Ok(ProtoEvent::ClipboardChunk { transfer_id: 1, .. }) => first_chunks += 1,
+                        decoded => {
+                            other.push(format!("{n} bytes: {:?}", decoded.map(|e| e.to_string())))
+                        }
+                    }
+                }
+                tokio::time::timeout(
+                    Duration::from_millis(50),
+                    task.handle_inactive_request(CaptureRequest::SetInputSharing(false)),
+                )
+                .await
+                .expect("the loop waited for the image");
+                assert!(
+                    started.elapsed() < Duration::from_secs(1),
+                    "the probe must land while the image is still on the wire"
+                );
+
+                task.handle_inactive_request(request(2, 3)).await;
+                let (mut second_started, mut second_chunks, mut stale) = (false, 0, 0);
+                let deadline = Instant::now() + Duration::from_millis(300);
+                while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+                    let Ok(Ok(n)) = tokio::time::timeout(left, peer.recv(&mut buf)).await else {
+                        break;
+                    };
+                    match ProtoEvent::decode(&buf[..n]) {
+                        Ok(ProtoEvent::ClipboardStart { transfer_id: 2, .. }) => {
+                            second_started = true;
+                        }
+                        Ok(ProtoEvent::ClipboardChunk { transfer_id: 2, .. }) => {
+                            second_chunks += 1;
+                        }
+                        Ok(ProtoEvent::ClipboardChunk { transfer_id: 1, .. }) if second_started => {
+                            stale += 1;
+                        }
+                        _ => {}
+                    }
+                }
+                assert!(
+                    second_started && second_chunks == 3,
+                    "the newer clipboard went out"
+                );
+                assert_eq!(
+                    stale, 0,
+                    "the older stream kept sending after being replaced"
                 );
             })
             .await;

@@ -199,6 +199,23 @@ impl SyntraConnection {
     ) -> Result<(), SyntraConnectionError> {
         self.sender.send(event, handle).await
     }
+
+    /// Registers a client already connected over `conn`, for tests that
+    /// need real datagrams without a DTLS handshake.
+    #[cfg(test)]
+    pub(crate) async fn attach_test_peer(
+        &self,
+        conn: Arc<dyn Conn + Send + Sync>,
+        addr: SocketAddr,
+    ) -> ClientHandle {
+        let handle = self.sender.shared.client_manager.add_client();
+        self.sender
+            .shared
+            .client_manager
+            .set_active_addr(handle, Some(addr));
+        self.sender.shared.conns.lock().await.insert(addr, conn);
+        handle
+    }
 }
 
 impl SyntraSender {
